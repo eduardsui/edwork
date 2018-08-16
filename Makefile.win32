@@ -1,0 +1,18 @@
+CC = gcc
+RM = rm
+CFLAGS = -O3 -D_FILE_OFFSET_BITS=64 -DUSE_STAT_PATCH
+LIBS = -lws2_32 -lwinmm -ldokanfuse1
+BUILDFLAGS= -o edfs_dokan
+
+SRC = sha256.c xxhash.c base64.c parson.c edd25519.c avl.c chacha.c log.c sha3.c edwork.c edfs_core.c edfs_fuse.c
+OBJS = $(SRC: .c=.o)
+
+edfs: ${OBJS}
+	${CC} ${BUILDFLAGS} ${CFLAGS} ${OBJS} ${LIBS}
+
+%.o:
+	${CC} ${CFLAGS} -c $<
+
+.PHONY: clean
+clean:
+	@echo all cleaned up!
