@@ -1369,7 +1369,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             while (chunk_exists(path, forward_chunk))
                 forward_chunk ++;
             if (forward_chunk <= last_file_chunk) {
-                request_data(edfs_context, ino, forward_chunk, 0);
+                request_data(edfs_context, ino, forward_chunk, 1);
                 forward_chunk ++;
                 continue;
             }
@@ -1389,12 +1389,6 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                 filebuf->last_read_chunk = chunk;
                 filebuf->last_read_size = read_size;
             }
-            /*if ((i) && (read_size > 0)) {
-                if (!chunk_exists(path, chunk + 1))
-                    request_data(edfs_context, ino, chunk + 1, 0);
-                if (!chunk_exists(path, chunk + 2))
-                    request_data(edfs_context, ino, chunk + 2, 0);
-            }*/
             return read_size;
         }
         i++;
