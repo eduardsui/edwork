@@ -55,4 +55,4 @@ make -f Makefile.console.win32
 
 Work in progress
 ------------
-Not that this is work in progress, protocol and API may change. For now, is not suitable for production use.
+This is work in progress, protocol and API may change. For now, is not suitable for production use.

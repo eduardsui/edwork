@@ -49,6 +49,7 @@
 
 
 #define USE_COMPRESSION 1
+#define EDFS_DATA_BROADCAST_ENCRYPTED 1
 
 #define KEY_HS256       1
 #define KEY_EDD25519    2
@@ -76,7 +77,7 @@
 #define EDWORK_REBROADCAST_INTERVAL 1
 #define EDWORK_NODE_WRITE_INTERVAL  600
 #define EDWORK_NODES                2500
-#define EDWORK_DATA_NODES           2
+#define EDWORK_DATA_NODES           10
 #define EDWORK_REBROADCAST          200
 #define EDWORK_PORT                 4848
 #define EDWORK_PACKET_SIZE          BLOCK_SIZE + 0x200

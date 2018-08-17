@@ -693,10 +693,6 @@ thread_ptr_t thread_create( int (*thread_proc)( void* ), void* user_data, char c
         if( 0 != pthread_create( &thread, NULL, ( void* (*)( void * ) ) thread_proc, user_data ) )
             return NULL;
 
-        #if !defined( __APPLE__ ) // max doesn't support pthread_setname_np. alternatives?
-            if( name ) pthread_setname_np( thread, name );
-        #endif
-
         return (thread_ptr_t) thread;
     
     #else 
