@@ -15,6 +15,7 @@ typedef void (*edwork_dispatch_callback)(struct edwork_data *edwork, uint64_t se
 void edwork_init();
 
 uint64_t edwork_random();
+int edwork_random_bytes(unsigned char *destination, int len);
 
 struct edwork_data *edwork_create(int port, const char *log_dir);
 void edwork_confirm_seq(struct edwork_data *data, uint64_t sequence, int acks);

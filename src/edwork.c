@@ -170,18 +170,17 @@ ssize_t safe_recvfrom(struct edwork_data *data, void *buf, size_t len, int flags
     return err;
 }
 
-uint64_t edwork_random() {
-    uint64_t seed;
+int edwork_random_bytes(unsigned char *destination, int len) {
 #ifdef _WIN32
     HCRYPTPROV prov;
 
     if (!CryptAcquireContext(&prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))  {
-        return 1;
+        return 0;
     }
 
-    if (!CryptGenRandom(prov, sizeof(seed), (unsigned char *)&seed))  {
+    if (!CryptGenRandom(prov, len, destination))  {
         CryptReleaseContext(prov, 0);
-        return 1;
+        return 0;
     }
 
     CryptReleaseContext(prov, 0);
@@ -189,13 +188,18 @@ uint64_t edwork_random() {
     FILE *f = fopen("/dev/urandom", "rb");
 
     if (f == NULL) {
-        return 1;
+        return 0;
     }
 
-    fread((unsigned char *)&seed, 1, sizeof(seed), f);
+    fread(destination, 1, len, f);
     fclose(f);
 #endif
+    return 1;
+}
 
+uint64_t edwork_random() {
+    uint64_t seed;
+    edwork_random_bytes((unsigned char *)&seed, sizeof(uint64_t));
     return seed;
 }
 

@@ -134,6 +134,7 @@ void edfs_set_rebroadcast(struct edfs *edfs_context, int rebroadcast_val);
 void edfs_set_readonly(struct edfs *edfs_context, int readonly_val);
 void edfs_set_initial_friend(struct edfs *edfs_context, const char *peer);
 const char *edfs_signature_path(struct edfs *edfs_context);
+int edwork_readonly(struct edfs *edfs_context);
 
 int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource, int resource_len, unsigned char *proof_str, int max_proof_len, unsigned char *proof_of_work);
 int edfs_proof_of_work_verify(int bits, const unsigned char *proof_str, int proof_len, const unsigned char *subject, int subject_len, const unsigned char *prefix, int prefix_len);

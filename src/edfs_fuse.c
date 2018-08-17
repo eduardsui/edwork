@@ -231,14 +231,16 @@ int edfs_fuse_chown(const char *name, uid_t user, gid_t group) {
 
 #ifdef _WIN32
 static int edfs_fuse_statfs(const char *path, struct statvfs *stbuf) {
+    int read_only = edwork_readonly(edfs_context);
+
     stbuf->f_bsize = 4096;
     stbuf->f_frsize = 4096;
     stbuf->f_blocks = 0x10000000;
-    stbuf->f_bfree = stbuf->f_blocks / 2;
-    stbuf->f_bavail = stbuf->f_bfree;
+    stbuf->f_bfree = read_only ? 0 : (stbuf->f_blocks / 2);
+    stbuf->f_bavail = read_only ? 0 : stbuf->f_bfree;
     stbuf->f_files = 0x10000000;
-    stbuf->f_ffree = stbuf->f_files / 2;
-    stbuf->f_favail = stbuf->f_ffree;
+    stbuf->f_ffree = read_only ? 0 : (stbuf->f_files / 2);
+    stbuf->f_favail = read_only ? 0 : stbuf->f_ffree;
     stbuf->f_namemax = 4096;
 	return 0;
 }

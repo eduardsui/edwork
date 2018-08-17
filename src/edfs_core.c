@@ -31,6 +31,7 @@
 #include "tinydir.h"
 #include "chacha.h"
 #include "sha3.h"
+#include "curve25519.h"
 #include "edfs_core.h"
 
 
@@ -170,6 +171,11 @@ struct edwork_io {
     void *next;
 };
 
+struct edfs_x25519_key {
+    unsigned char secret[32];
+    unsigned char pk[32];
+};
+
 struct edfs {
     int read_only_fs;
     int ping_received;
@@ -207,6 +213,8 @@ struct edfs {
     int key_type;
     int signature_size;
     size_t sig_len;
+
+    struct edfs_x25519_key key;
 };
 
 int sign(struct edfs *edfs_context, const char *str, int len, unsigned char *hash, int *info_key_type);
@@ -231,8 +239,7 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
 
     char in[16];
     char out[32];
-    *(uint64_t *)(in) = edwork_random();
-    *(uint64_t *)(in + 8) = edwork_random();
+    edwork_random_bytes((unsigned char *)in, 16);
 
     int len = base64_encode((const BYTE *)&in, (BYTE *)out, 16, 0);
     out[len] = 0;
@@ -409,7 +416,7 @@ void notify_io(struct edfs *edfs_context, const char type[4], const unsigned cha
             unsigned char out[64];
 
             sha3_Init256(&ctx);
-            sha3_Update(&ctx, buffer, buffer_size);
+            sha3_Update(&ctx, ioblock->buffer + offset, buffer_size);
             if (edwork)
                 sha3_Update(&ctx, edwork_who_i_am(edwork), 32);
             int encode_len = base64_encode((const unsigned char *)sha3_Finalize(&ctx), out, 32, 0);
@@ -1281,16 +1288,29 @@ int edfs_reply_chunk(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, 
     return err;
 }
 
-void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk) {
+void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int encrypted) {
     unsigned char additional_data[16];
     *(uint64_t *)additional_data = htonll(ino);
     *(uint64_t *)(additional_data + 8)= htonll(chunk);
 
+    if (encrypted)
+        notify_io(edfs_context, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL);
+    else
     // 25% encrypted packages to avoid some problems with firewalls
     if (edwork_random() % 4)
         notify_io(edfs_context, "want", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL);
     else
         notify_io(edfs_context, "wan3", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL);
+}
+
+void edfs_make_key(struct edfs *edfs_context) {
+    edwork_random_bytes(edfs_context->key.secret, 32);
+
+    edfs_context->key.secret[0] &= 248;
+    edfs_context->key.secret[31] &= 127;
+    edfs_context->key.secret[31] |= 64;
+
+    curve25519(edfs_context->key.pk, edfs_context->key.secret, NULL);
 }
 
 int edfs_file_exists(const char *name) {
@@ -1321,7 +1341,6 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                 log_error("read timed out");
                 break;
             }
-
             // end of file, no more quries
             // this is made to avoid an unnecessary edwork query
             if ((filebuf) && (filebuf->file_size > 0)) {
@@ -1332,7 +1351,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             if ((filebuf) && (filebuf->last_read_size) && (chunk >= filebuf->last_read_chunk) && (filebuf->last_read_size != BLOCK_SIZE))
                 return read_size;
 
-            request_data(edfs_context, ino, chunk);
+            request_data(edfs_context, ino, chunk, 1);
             log_trace("requesting chunk %s:%" PRIu64, path, chunk);
             int wait_count = 20;
             while ((!chunk_exists(path, chunk)) && (wait_count-- >= 0)) {
@@ -1350,9 +1369,9 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             }
             /*if ((i) && (read_size > 0)) {
                 if (!chunk_exists(path, chunk + 1))
-                    request_data(edfs_context, ino, chunk + 1);
+                    request_data(edfs_context, ino, chunk + 1, 0);
                 if (!chunk_exists(path, chunk + 2))
-                    request_data(edfs_context, ino, chunk + 2);
+                    request_data(edfs_context, ino, chunk + 2, 0);
             }*/
             return read_size;
         }
@@ -2243,7 +2262,7 @@ int edwork_delete(struct edfs *edfs_context, const unsigned char *payload, int s
     return remove_node(edfs_context, parent, inode, 1, generation);
 }
 
-int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int size, unsigned char *out, const unsigned char *dest_i_am, const unsigned char *src_i_am) {
+int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int size, unsigned char *out, const unsigned char *dest_i_am, const unsigned char *src_i_am, const unsigned char *shared_secret) {
     struct chacha_ctx ctx;
     unsigned char hash[32];
     static unsigned char sigkey[MAX_KEY_SIZE];
@@ -2263,6 +2282,8 @@ int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int s
         sha256_update(&hashctx, (const BYTE *)&sigkey, sig_len);
     if (dest_i_am)
         sha256_update(&hashctx, (const BYTE *)dest_i_am, 32);
+    if (shared_secret)
+        sha256_update(&hashctx, (const BYTE *)shared_secret, 32);
     sha256_final(&hashctx, hash);
 
 
@@ -2273,9 +2294,9 @@ int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int s
     return size;
 }
 
-int edwork_decrypt(struct edfs *edfs_context, const unsigned char *buffer, int size, unsigned char *out, const unsigned char *dest_i_am, const unsigned char *src_i_am) {
+int edwork_decrypt(struct edfs *edfs_context, const unsigned char *buffer, int size, unsigned char *out, const unsigned char *dest_i_am, const unsigned char *src_i_am, const unsigned char *shared_secret) {
     // dest and  src reversed
-    return edwork_encrypt(edfs_context, buffer, size, out, src_i_am, dest_i_am);
+    return edwork_encrypt(edfs_context, buffer, size, out, src_i_am, dest_i_am, shared_secret);
 }
 
 int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *payload, unsigned int payload_size, int payload_offset, uint64_t timestamp, int work_level, const char *work_prefix, const unsigned char *who_am_i) {
@@ -2371,7 +2392,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         edwork_confirm_seq(edwork, ntohll(*(uint64_t *)payload), 1);
         return;
     }
-    if ((!memcmp(type, "want", 4)) || (!memcmp(type, "wan3", 4)))  {
+    if ((!memcmp(type, "want", 4)) || (!memcmp(type, "wan3", 4)) || (!memcmp(type, "wan4", 4)))  {
         log_info("WANT received (non-signed)");
         int magnitude = edwork_magnitude(edwork);
         int randomly_ignore = 0;
@@ -2389,15 +2410,18 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         else
             randomly_ignore = ((edwork_random() % 20) == 1);
 
+        int is_encrypted = !memcmp(type, "wan4", 4);
+
         if ((!payload) || (payload_size < 64)) {
             log_warn("WANT packet to small");
             return;
         }
+
         void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         uint64_t ino = ntohll(*(uint64_t *)payload);
         uint64_t chunk = ntohll(*(uint64_t *)(payload + 8));
 
-        if (!edwork_check_proof_of_work(edwork, payload, payload_size, 16, timestamp, EDWORK_WANT_WORK_LEVEL, EDWORK_WANT_WORK_PREFIX, who_am_i)) {
+        if (!edwork_check_proof_of_work(edwork, payload, payload_size, is_encrypted ? 48 : 16, timestamp, EDWORK_WANT_WORK_LEVEL, EDWORK_WANT_WORK_PREFIX, who_am_i)) {
             log_warn("no valid proof of work");
             return;
         }
@@ -2431,9 +2455,28 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 *(uint64_t *)(additional_data + 16) = htonll(microseconds());
                 *(uint64_t *)(additional_data + 24) = htonll(size);
 
+                if (is_encrypted) {
+                    if (payload_size < 96) {
+                        log_warn("WAN4 packet to small");
+                        return;
+                    }
+                    unsigned char shared_secret[32];
+                    
+                    curve25519(shared_secret, edfs_context->key.secret, payload + 16) ;
+
+                    unsigned char buf2[BLOCK_SIZE * 2];
+                    memcpy(buf2, edfs_context->key.pk, 32);
+
+                    int size2 = edwork_encrypt(edfs_context, buffer, size + 32, buf2 + 32, who_am_i, edwork_who_i_am(edwork), shared_secret);
+                    if (edwork_send_to_peer(edwork, "dat4", buf2, size2 + 32, clientaddr, clientaddrlen) <= 0)
+                        log_error("error sending DAT4");
+                    else
+                        log_info("DAT4 sent");
+
+                } else
                 if (!memcmp(type, "wan3", 4)) {
                     unsigned char buf2[BLOCK_SIZE * 2];
-                    int size2 = edwork_encrypt(edfs_context, buffer, size + 32, buf2, who_am_i, edwork_who_i_am(edwork));
+                    int size2 = edwork_encrypt(edfs_context, buffer, size + 32, buf2, who_am_i, edwork_who_i_am(edwork), NULL);
                     if (edwork_send_to_peer(edwork, "dat3", buf2, size2, clientaddr, clientaddrlen) <= 0)
                         log_error("error sending DAT3");
                     else
@@ -2536,10 +2579,27 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     if (!memcmp(type, "dat3", 4)) {
         log_info("DAT3 received");
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
-        int size = edwork_decrypt(edfs_context, payload, payload_size, buffer, who_am_i, edwork_who_i_am(edwork));
+        int size = edwork_decrypt(edfs_context, payload, payload_size, buffer, who_am_i, edwork_who_i_am(edwork), NULL);
         int err = edwork_process_data(edfs_context, buffer, size, 0);
         if (err <= 0)
             log_warn("DAT3: will not write data block");
+        return;
+    }
+    if (!memcmp(type, "dat4", 4)) {
+        log_info("DAT4 received");
+        if (payload_size < 32) {
+            log_error("DAT4 packet to small");
+            return;
+        }
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
+
+        unsigned char shared_secret[32];
+        curve25519(shared_secret, edfs_context->key.secret, payload);
+
+        int size = edwork_decrypt(edfs_context, payload + 32, payload_size - 32, buffer, who_am_i, edwork_who_i_am(edwork), shared_secret);
+        int err = edwork_process_data(edfs_context, buffer, size, 0);
+        if (err <= 0)
+            log_warn("DAT4: will not write data block");
         return;
     }
     if (!memcmp(type, "del\x00", 4)) {
@@ -2979,6 +3039,8 @@ struct edfs *edfs_create_context(const char *use_working_directory) {
         edfs_context->nodes_file = edfs_add_to_path(use_working_directory, "nodes");
         edfs_context->default_nodes = edfs_add_to_path(use_working_directory, "default_nodes.json");
         edfs_context->resync = 1;
+
+        edfs_make_key(edfs_context);
     }
     return edfs_context;
 }
@@ -3016,6 +3078,12 @@ const char *edfs_signature_path(struct edfs *edfs_context) {
     if (!edfs_context)
         return NULL;
     return edfs_context->signature;
+}
+
+int edwork_readonly(struct edfs *edfs_context) {
+    if (!edfs_context)
+        return 1;
+    return edfs_context->read_only_fs;
 }
 
 void edfs_set_initial_friend(struct edfs *edfs_context, const char *peer) {
