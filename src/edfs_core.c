@@ -1330,6 +1330,7 @@ int chunk_exists(const char *path, uint64_t chunk) {
 int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const char *name, unsigned char *buf, int size, edfs_ino_t ino, uint64_t chunk, struct filewritebuf *filebuf) {
     int i = 0;
     uint64_t start = microseconds();
+    uint64_t last_key_timestamp = start;
     do {
         if (edfs_context->mutex_initialized)
             thread_mutex_lock(&edfs_context->io_lock);
@@ -1340,6 +1341,11 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                 log_error("read timed out");
                 break;
+            }
+            if ((microseconds() - last_key_timestamp >= 1000000)) {
+                // new key every second
+                edfs_make_key(edfs_context);
+                last_key_timestamp = microseconds();
             }
             // end of file, no more quries
             // this is made to avoid an unnecessary edwork query
