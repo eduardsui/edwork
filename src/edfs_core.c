@@ -1338,6 +1338,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     uint64_t last_key_timestamp = start;
     uint64_t forward_chunk = chunk + 1;
     uint64_t last_file_chunk = filebuf->file_size / BLOCK_SIZE;
+    int forward_chunks = 0;
     do {
         if (edfs_context->mutex_initialized)
             thread_mutex_lock(&edfs_context->io_lock);
@@ -1366,14 +1367,15 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             request_data(edfs_context, ino, chunk, 1);
             log_trace("requesting chunk %s:%" PRIu64, path, chunk);
 #ifndef EDFS_NO_FORWARD_WAIT
-            while (chunk_exists(path, forward_chunk))
-                forward_chunk ++;
-            if (forward_chunk <= last_file_chunk) {
-                request_data(edfs_context, ino, forward_chunk, 1);
-                forward_chunk ++;
-                continue;
+            if (forward_chunks < 10) {
+                while (chunk_exists(path, forward_chunk))
+                    forward_chunk ++;
+                if (forward_chunk <= last_file_chunk) {
+                    request_data(edfs_context, ino, forward_chunk ++, 1);
+                    forward_chunks ++;
+                    continue;
+                }
             }
-
 #endif
             int wait_count = 20;
             while ((!chunk_exists(path, chunk)) && (wait_count-- >= 0)) {
