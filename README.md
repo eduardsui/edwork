@@ -18,11 +18,10 @@ Every file has an unique 64-bit id, computed as:
 file_id = xxhash(sha256(parent_id || filename))
 ```
 
-There is some collision probability on deployments with lots of file. This could be mediated by using larger file ids. 64bit id's were used for compatibility with fuse's `ino_t` type.
+There is some collision probability on deployments with lots of files. This could be mediated by using larger file ids. 64bit id's were used for compatibility with fuse's `ino_t` type.
 
-After the file id is computed, the file content is split into 57k chunks (in order to fit in a UDP datagram). Each chunk is optionally compressed (compression is enabled by default). Note that when encryption will be available, compression will be disabled by default. Compression and encryption don't mix well. If you compress then encrypt, the door will be opened to at least some theoretical attacks. If you encrypt the compress, the compression will be useless, due to the indistinguishable from random property of most encryption algorithms.
-
-Every user will have the full inode list, but not every fily chunk. The inode list is sent when receiving a `ROOT` request.
+After the file id is computed, the file content is split into 57k chunks (in order to fit in a UDP datagram). Each chunk is optionally compressed (compression is enabled by default). 
+Every user will have the full inode list, but not every file chunk. The inode list is sent when receiving a `ROOT` request.
 
 File chunks are sent "on-needed" by broadcasting a ``WANT`` request. In order to avoid flooding the edwork nodes, a cost function (proof of work) function was added. It is closely related with hashcash original specification, but instead of sha-1, it uses sha3-256. For every chunk (57k or less) a node must compute a hash begining with 12 zero bits. A `ROOT` request needs a 14 zero bit  proof of work.
 
