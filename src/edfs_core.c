@@ -2416,7 +2416,7 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
         return 0;
     }
 
-    if (abs(timestamp/1000000 - proof_timestamp) > 10) {
+    if (abs(timestamp/1000000 - proof_timestamp) > 60) {
         log_error("proof of work validation failed: timestamp validation failed");
         return 0;
     }
