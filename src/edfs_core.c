@@ -273,6 +273,9 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
 
     // seems faster to just increment count instead of randomizing it
     while (1) {
+        sha3_Init256(&ctx);
+
+#ifdef EDFS_HASHCASH_ASCII_STRING
         uint64_t counter_be = htonll(counter);
         const BYTE *counter_ptr = (const BYTE *)&counter_be;
         int offset = 0;
@@ -283,15 +286,22 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
         } while (offset < 7);
 
         len = base64_encode(counter_ptr + offset, (BYTE *)ptr, 8 - offset, 0);
-
-        sha3_Init256(&ctx);
         sha3_Update(&ctx, proof_str, proof_len + len);
+#else
+        len = 8;
+        sha3_Update(&ctx, proof_str, proof_len);
+        sha3_Update(&ctx, (unsigned char *)&counter, 8);
+#endif
+
         hash = (const unsigned char *)sha3_Finalize(&ctx);
 
         if (!memcmp(hash, ref_hash, bytes)) {
             if ((!mbits) || ((hash[bytes] >> mbits) == (ref_hash[bytes] >> mbits))) {
                 if (proof_of_work)
                     memcpy(proof_of_work, hash, 32);
+#ifndef EDFS_HASHCASH_ASCII_STRING
+                memcpy(proof_str + proof_len, &counter, 8);
+#endif
                 proof_str[proof_len + len] = 0;
                 return proof_len + len;
             }
