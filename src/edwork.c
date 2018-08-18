@@ -92,7 +92,8 @@ struct edwork_data {
     thread_mutex_t sock_lock;
 };
 
-const char *edwork_private_addr_ipv4(struct sockaddr_in *clientaddr) {
+const char *edwork_addr_ipv4(void *clientaddr_ptr) {
+    struct sockaddr_in *clientaddr = (struct sockaddr_in *)clientaddr_ptr;
     static char str_addr[sizeof("255.255.255.255:65535")];
     if (!clientaddr)
         return "";
@@ -558,7 +559,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                 } else
                 if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
                     if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) <= 0) {
-                        log_trace("error in sendto (client #%i: %s)", i, edwork_private_addr_ipv4(&data->clients[i].clientaddr));
+                        log_trace("error in sendto (client #%i: %s)", i, edwork_addr_ipv4(&data->clients[i].clientaddr));
                         // data->clients[i].last_seen = threshold - 1;
                     }
                 }
@@ -766,7 +767,7 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
 
     const unsigned char *who_am_i = buffer;
     if (!memcmp(who_am_i, data->i_am, 32)) {
-        log_trace("dropping message, it is mine (%s)", edwork_private_addr_ipv4((struct sockaddr_in *)clientaddr));
+        log_trace("dropping message, it is mine (%s)", edwork_addr_ipv4((struct sockaddr_in *)clientaddr));
         edwork_remove_addr(data, clientaddr, clientaddrlen);
         return 0;
     }

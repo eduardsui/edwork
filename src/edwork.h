@@ -35,6 +35,7 @@ int edwork_set_info(void *clientinfo, uint64_t last_ino, uint64_t last_chunk, ui
 unsigned int edwork_magnitude(struct edwork_data *data);
 const unsigned char *edwork_who_i_am(struct edwork_data *data);
 int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_work, int proof_of_work_size);
+const char *edwork_addr_ipv4(void *clientaddr_ptr);
 void edwork_destroy(struct edwork_data *data);
 
 void edwork_done();

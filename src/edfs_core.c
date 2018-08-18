@@ -2390,22 +2390,22 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     uint64_t now = microseconds();
     // 30 seconds before
     if (timestamp > microseconds() + 30000000) {
-        log_warn("ignoring message with timestamp in the future received");
+        log_warn("ignoring message with timestamp in the future received (%s)", edwork_addr_ipv4(clientaddr));
         return;
     }
     // 5 minutes back
     if (timestamp < microseconds() - 300000000) {
-        log_warn("ignoring too old message");
+        log_warn("ignoring too old message (%s)", edwork_addr_ipv4(clientaddr));
         return;
     }
     if (!memcmp(type, "ping", 4)) {
-        log_info("PING received (non-signed)");
+        log_info("PING received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         edfs_context->ping_received = time(NULL);
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         return;
     }
     if (!memcmp(type, "addr", 4)) {
-        log_info("ADDR list received (non-signed)");
+        log_info("ADDR list received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         if (time(NULL) - edfs_context->list_timestamp > 10) {
             log_warn("dropping non-requested ADDR");
             return;
@@ -2420,7 +2420,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "ack\x00", 4)) {
-        log_info("ACK received (non-signed)");
+        log_info("ACK received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         if ((!payload) || (payload_size != 8)) {
             log_error("invalid payload");
             return;
@@ -2429,7 +2429,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "nack", 4)) {
-        log_info("NACK received (non-signed)");
+        log_info("NACK received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         if ((!payload) || (payload_size != 8)) {
             log_error("invalid payload");
             return;
@@ -2438,7 +2438,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if ((!memcmp(type, "want", 4)) || (!memcmp(type, "wan3", 4)) || (!memcmp(type, "wan4", 4)))  {
-        log_info("WANT received (non-signed)");
+        log_info("WANT received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         int magnitude = edwork_magnitude(edwork);
         int randomly_ignore = 0;
         if (magnitude >= 1000)
@@ -2538,7 +2538,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     } 
     if (!memcmp(type, "list", 4)) {
-        log_info("ADDR request received (non-signed)");
+        log_info("ADDR request received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         uint32_t offset = 0;
         if ((payload) && (payload_size >= sizeof(uint32_t))) {
             offset = ntohl(*(uint32_t *)payload);
@@ -2563,7 +2563,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "desc", 4)) {
-        log_info("DESC received");
+        log_info("DESC received (%s)", edwork_addr_ipv4(clientaddr));
         // json payload
         uint64_t ino;
         int err = edwork_process_json(edfs_context, payload, payload_size, &ino);
@@ -2590,7 +2590,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "data", 4)) {
-        log_info("DATA received");
+        log_info("DATA received (%s)", edwork_addr_ipv4(clientaddr));
         int err;
         if (EDFS_DATA_BROADCAST_ENCRYPTED) {
             int size = edwork_decrypt(edfs_context, payload, payload_size, buffer, who_am_i, NULL, NULL);
@@ -2624,7 +2624,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "dat2", 4)) {
-        log_info("DAT2 received");
+        log_info("DAT2 received (%s)", edwork_addr_ipv4(clientaddr));
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         int err = edwork_process_data(edfs_context, payload, payload_size, 0);
         if (err <= 0)
@@ -2632,7 +2632,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "dat3", 4)) {
-        log_info("DAT3 received");
+        log_info("DAT3 received (%s)", edwork_addr_ipv4(clientaddr));
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         int size = edwork_decrypt(edfs_context, payload, payload_size, buffer, who_am_i, edwork_who_i_am(edwork), NULL);
         int err = edwork_process_data(edfs_context, buffer, size, 0);
@@ -2641,7 +2641,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "dat4", 4)) {
-        log_info("DAT4 received");
+        log_info("DAT4 received (%s)", edwork_addr_ipv4(clientaddr));
         if (payload_size < 32) {
             log_error("DAT4 packet to small");
             return;
@@ -2658,7 +2658,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "del\x00", 4)) {
-        log_info("DEL received");
+        log_info("DEL received (%s)", edwork_addr_ipv4(clientaddr));
         uint64_t ino;
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         if (edwork_delete(edfs_context, payload, payload_size, &ino)) {
@@ -2677,7 +2677,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "root", 4)) {
-        log_info("ROOT request received");
+        log_info("ROOT request received (%s)", edwork_addr_ipv4(clientaddr));
         if (payload_size < 8) {
             edwork_send_to_peer(edwork, "nack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen);
             log_warn("invalid ROOT request");
