@@ -175,6 +175,15 @@ static int edfs_console_upload(const char *path, const char *fname) {
     return 0;
 }
 
+const char EDFS_BANNER[] =  " _______   ________  ___       __   ________  ________  ___  __       \n"
+                            "|\\  ___ \\ |\\   ___ \\|\\  \\     |\\  \\|\\   __  \\|\\   __  \\|\\  \\|\\  \\     \n"
+                            "\\ \\   __/|\\ \\  \\_|\\ \\ \\  \\    \\ \\  \\ \\  \\|\\  \\ \\  \\|\\  \\ \\  \\/  /|_   \n"
+                            " \\ \\  \\_|/_\\ \\  \\ \\\\ \\ \\  \\  __\\ \\  \\ \\  \\\\\\  \\ \\   _  _\\ \\   ___  \\  \n"
+                            "  \\ \\  \\_|\\ \\ \\  \\_\\\\ \\ \\  \\|\\__\\_\\  \\ \\  \\\\\\  \\ \\  \\\\  \\\\ \\  \\\\ \\  \\ \n"
+                            "   \\ \\_______\\ \\_______\\ \\____________\\ \\_______\\ \\__\\\\ _\\\\ \\__\\\\ \\__\\\n"
+                            "    \\|_______|\\|_______|\\|____________|\\|_______|\\|__|\\|__|\\|__| \\|__|\n";
+
+
 int main(int argc, char *argv[]) {
 #ifdef _WIN32
     // enable colors
@@ -187,6 +196,8 @@ int main(int argc, char *argv[]) {
     int err = -1;
     int port = EDWORK_PORT;
     int i;
+
+    fprintf(stdout, "%s\n", EDFS_BANNER);
 
     edfs_context = edfs_create_context(NULL);
     edfs_init(edfs_context);
@@ -269,7 +280,7 @@ int main(int argc, char *argv[]) {
 
     log_info("starting edfs on port %i", port);
 
-    fprintf(stdout, "Welcome to EdFS 0.1BETA console\nSupported commands are: ls, cd, get, put, rmdir, rm, open, exit\n");
+    fprintf(stdout, "Welcome to edwork 0.1BETA console\nSupported commands are: ls, cd, get, put, rmdir, rm, open, exit\n");
     char buffer[0x100];
     edfs_edwork_init(edfs_context, port);
     char working_dir[4096];
