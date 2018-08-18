@@ -34,7 +34,6 @@
 #include "curve25519.h"
 #include "edfs_core.h"
 
-
 #define DEBUG
 
 #ifdef DEBUG
@@ -1346,7 +1345,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     int i = 0;
     uint64_t start = microseconds();
     uint64_t last_key_timestamp = start;
-    uint64_t forward_chunk = chunk + 1;
+    uint64_t forward_chunk = chunk + 10;
     uint64_t last_file_chunk = filebuf->file_size / BLOCK_SIZE;
     do {
         if (edfs_context->mutex_initialized)
@@ -1392,7 +1391,6 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
 #endif
             }
         } else {
-            // just in case, request next 2 chunks
             if ((filebuf) && (read_size > 0)) {
                 filebuf->last_read_chunk = chunk;
                 filebuf->last_read_size = read_size;

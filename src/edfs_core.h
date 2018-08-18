@@ -47,6 +47,7 @@
     #define edfs_stat struct stat
 #endif
 
+#define EDFS_HASHCASH_ASCII_STRING
 
 #define USE_COMPRESSION 1
 #define EDFS_DATA_BROADCAST_ENCRYPTED 1
