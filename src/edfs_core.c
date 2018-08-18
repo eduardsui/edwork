@@ -1365,7 +1365,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
 
             request_data(edfs_context, ino, chunk, 1);
             log_trace("requesting chunk %s:%" PRIu64, path, chunk);
-#ifdef EDFS_NO_FORWARD_WAIT
+#ifndef EDFS_NO_FORWARD_WAIT
             while (chunk_exists(path, forward_chunk))
                 forward_chunk ++;
             if (forward_chunk <= last_file_chunk) {
