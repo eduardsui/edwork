@@ -1370,7 +1370,6 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                 forward_chunk ++;
             if (forward_chunk <= last_file_chunk) {
                 request_data(edfs_context, ino, forward_chunk ++, 1);
-                forward_chunks ++;
                 continue;
             }
 #endif
