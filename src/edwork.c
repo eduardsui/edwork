@@ -561,7 +561,6 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                         log_trace("error in sendto (client #%i: %s)", i, edwork_private_addr_ipv4(&data->clients[i].clientaddr));
                         // data->clients[i].last_seen = threshold - 1;
                     }
-                    usleep(500);
                 }
 
                 i ++;
@@ -588,7 +587,6 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                         log_trace("error in sendto (client #%i)", i);
                         // data->clients[i].last_seen = threshold - 1;
                     }
-                    usleep(200);
                 }
 
                 i ++;

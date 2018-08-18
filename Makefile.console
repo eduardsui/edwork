@@ -1,6 +1,6 @@
 CC = gcc
 RM = rm
-CFLAGS = -pthread -O3 -D_FILE_OFFSET_BITS=64
+CFLAGS = -pthread -O3 -D_FILE_OFFSET_BITS=64 -DEDFS_DEFAULT_HOST=\"discovery.gyrogears.com:4848\"
 LIBS = 
 BUILDFLAGS= -o edfs_mount
 

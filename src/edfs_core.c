@@ -362,9 +362,15 @@ int edfs_proof_of_work_verify(int bits, const unsigned char *proof_str, int proo
                     log_debug("subject verify failed");
                     return 0;
                 }
-                break;
             }
         }
+#ifdef EDFS_HASHCASH_ASCII_STRING
+        else
+        if (!proof_str[i]) {
+            log_debug("binary proof of work encountered");
+            return 0;
+        }
+#endif
     }
 
     if (parameter < 4) {
