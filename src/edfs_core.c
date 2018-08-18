@@ -1377,6 +1377,8 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     uint64_t last_key_timestamp = start;
     uint64_t forward_chunk = chunk + 10;
     uint64_t last_file_chunk = filebuf->file_size / BLOCK_SIZE;
+    if (!filebuf->file_size)
+        return 0;
     if (filebuf->file_size % BLOCK_SIZE == 0)
         last_file_chunk--;
     do {
