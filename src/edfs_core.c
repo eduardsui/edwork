@@ -188,7 +188,6 @@ struct edfs {
     char *host_and_port;
     unsigned int list_offset;
     time_t list_timestamp;
-    struct edwork_data *data_edwork;
 
     char *working_directory;
     char *cache_directory;
@@ -2789,7 +2788,8 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
         return 0;
     }
 
-    if (abs(timestamp/1000000 - proof_timestamp) > 60) {
+    int timestamp_epoch = timestamp/1000000;
+    if (abs(timestamp_epoch - proof_timestamp) > 60) {
         log_error("proof of work validation failed: timestamp validation failed");
         return 0;
     }
