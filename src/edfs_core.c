@@ -516,6 +516,12 @@ char *adjustpath2(struct edfs *edfs_context, char *fullpath, const char *name, u
     return fullpath;
 }
 
+char *adjustpath3(struct edfs *edfs_context, char *fullpath, const char *name, uint64_t chunk) {
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%s/hash.%" PRIu64, edfs_context->working_directory, name, chunk);
+    return fullpath;
+}
+
 uint64_t computeinode2(uint64_t parent_inode, const char *name, int name_len) {
     unsigned char hash[32];
     uint64_t inode;
@@ -2079,6 +2085,54 @@ int edfs_write_block(struct edfs *edfs_context, uint64_t inode, int64_t chunk, c
     return written;
 }
 
+int edfs_write_hash_block(struct edfs *edfs_context, uint64_t inode, int64_t chunk, const unsigned char *data, size_t size, time_t timestamp) {
+    char fullpath[MAX_PATH_LEN];
+    char chunkpath[MAX_PATH_LEN];
+    char b64name[MAX_B64_HASH_LEN];
+    adjustpath3(edfs_context, fullpath, computename(inode, b64name), chunk);
+
+    struct stat attrib;
+    if ((timestamp) && (!stat(fullpath, &attrib))) {
+        // at least 3 seconds after creation
+        if (attrib.st_ctime - attrib.st_mtime >= 3) {
+            if ((attrib.st_mtime > timestamp) && (attrib.st_size >= size)) {
+                log_info("hash block %s is newer than received", fullpath);
+                return -1;
+            }
+
+            if ((attrib.st_mtime == timestamp) && (attrib.st_size == size)) {
+                log_info("hash block %s seems the same (%i bytes)", fullpath, size);
+                return -1;
+            }
+        }
+    }
+
+    FILE *f = fopen(fullpath, "w+b");
+    if (!f) {
+        log_error("error opening hash file %s", fullpath);
+        return -1;
+    }
+
+    unsigned char signature[64];
+    if (size >= 64) {
+        if (fread(signature, 1, 64, f) == 64) {
+            if (!memcmp(signature, data, 64)) {
+                log_debug("hash block is exactly the same, not rewriting");
+                fclose(f);
+                return -1;
+            }
+        }
+        fseek(f, 0, SEEK_SET);
+    }
+    int written = fwrite(data, 1, size, f);
+    if (written < 0)
+        log_error("error writing %i bytes to file %s (errno: %i)", fullpath, errno);
+
+    fclose(f);
+
+    return written;
+}
+
 int edfs_write_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *buf, size_t size, int64_t off, int64_t *initial_filesize, int set_size) {
     char b64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
@@ -2565,6 +2619,50 @@ int edwork_process_data(struct edfs *edfs_context, const unsigned char *payload,
         if (edfs_context->mutex_initialized)
             thread_mutex_lock(&edfs_context->io_lock);
         int written_bytes = edfs_write_block(edfs_context, inode, chunk, payload + 32 + signature_size, datasize, timestamp / 1000000);
+        if (edfs_context->mutex_initialized)
+            thread_mutex_unlock(&edfs_context->io_lock);
+        if (written_bytes == datasize) {
+            written = 1;
+        } else {
+            if (written_bytes == -1)
+                written = -1;
+            log_warn("error in write: %i bytes written instead of %i", (int)written_bytes, datasize);
+        }
+    } else {
+        log_warn("wrong data block size: should be %i, advertised %i", (int)size - delta_size, (int)datasize);
+    }
+    return written;
+}
+
+int edwork_process_hash(struct edfs *edfs_context, const unsigned char *payload, int size) {
+    if (size <= 96) {
+        log_warn("dropping DATI, packet too small");
+        return -1;
+    }
+
+    int signature_size = 0;
+    int delta_size = 32;
+
+
+    int written = 0;
+
+    uint64_t inode = ntohll(*(uint64_t *)(payload + signature_size));
+    uint64_t chunk = ntohll(*(uint64_t *)(payload + signature_size + 8));
+    uint64_t timestamp = ntohll(*(uint64_t *)(payload + signature_size + 16));
+    uint64_t datasize = ntohll(*(uint64_t *)(payload + signature_size + 24));
+
+    if ((datasize > 0) && (datasize <= size - delta_size) && (datasize <= BLOCK_SIZE * 2)) {
+        if (!verify(edfs_context, (const char *)payload + delta_size + signature_size + 64, datasize - 64, payload + delta_size + signature_size, 64)) {
+            log_warn("dati packet content signature verification failed, dropping");
+            return -1;
+        }
+
+        // includes a signature
+        if (signature_size)
+            datasize += 64;
+        if (edfs_context->mutex_initialized)
+            thread_mutex_lock(&edfs_context->io_lock);
+        int written_bytes = edfs_write_hash_block(edfs_context, inode, chunk, payload + 32 + signature_size, datasize, timestamp / 1000000);
         if (edfs_context->mutex_initialized)
             thread_mutex_unlock(&edfs_context->io_lock);
         if (written_bytes == datasize) {
@@ -3121,6 +3219,23 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             else
                 log_info("DESC sent");
         }
+        return;
+    }
+    if (!memcmp(type, "dati", 4)) {
+        log_info("DATI received (%s)", edwork_addr_ipv4(clientaddr));
+        if (payload_size < 32) {
+            log_error("DATI packet to small");
+            return;
+        }
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
+
+        unsigned char shared_secret[32];
+        curve25519(shared_secret, edfs_context->key.secret, payload);
+
+        int size = edwork_decrypt(edfs_context, payload + 32, payload_size - 32, buffer, who_am_i, edwork_who_i_am(edwork), shared_secret);
+        int err = edwork_process_hash(edfs_context, buffer, size);
+        if (err <= 0)
+            log_warn("DATI: will not write data block");
         return;
     }
     log_error("unsupported message type received: %s", type);
