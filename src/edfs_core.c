@@ -270,7 +270,7 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
     #endif
     int proof_len = snprintf((char *)proof_str, max_proof_len, "edwork:1:%i:%s:%.*s::%s:", bits, now_buf, resource_len, (const char *)resource, out);
 #else
-    int proof_len = snprintf((char *)proof_str, max_proof_len, "edwork:1:%i:%i:%.*s::%s:", bits, timestamp, resource_len, (const char *)resource, out);
+    int proof_len = snprintf((char *)proof_str, max_proof_len, "edwork:1:%i:%i:%.*s::%s:", bits, (int)timestamp, resource_len, (const char *)resource, out);
 #endif
 
     if (proof_len >= max_proof_len - 10)

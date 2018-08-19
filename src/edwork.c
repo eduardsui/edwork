@@ -778,6 +778,7 @@ int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
         data->clients_count --;
     }
     EDWORK_THREAD_UNLOCK(data);
+    return 1;
 }
 
 int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback callback, unsigned char *buffer, int n, void *clientaddr, int clientaddrlen, void *userdata) {
