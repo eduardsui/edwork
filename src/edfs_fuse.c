@@ -403,7 +403,11 @@ int main(int argc, char *argv[]) {
         if (se != NULL) {
             fuse_set_signal_handlers(fuse_get_session(se));
             edfs_edwork_init(edfs_context, port);
+#ifdef EDFS_MULTITHREADED
+            err = fuse_loop_mt(se);
+#else
             err = fuse_loop(se);
+#endif
             edfs_edwork_done(edfs_context);
             edfs_destroy_context(edfs_context);
             edfs_context = NULL;

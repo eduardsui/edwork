@@ -199,6 +199,9 @@ struct edfs {
     thread_ptr_t network_thread;
     thread_mutex_t lock;
     thread_mutex_t io_lock;
+#ifdef EDFS_MULTITHREADED
+    thread_mutex_t thread_lock;
+#endif
     int network_done;
     int mutex_initialized;
 
@@ -216,6 +219,15 @@ struct edfs {
 
     struct edfs_x25519_key key;
 };
+
+#ifdef EDFS_MULTITHREADED
+    #define EDFS_THREAD_LOCK(edfs_context)      if (edfs_context->mutex_initialized) thread_mutex_lock(&edfs_context->thread_lock);
+    #define EDFS_THREAD_UNLOCK(edfs_context)    if (edfs_context->mutex_initialized) thread_mutex_unlock(&edfs_context->thread_lock);
+#else
+    #define EDFS_THREAD_LOCK(edfs_context)
+    #define EDFS_THREAD_UNLOCK(edfs_context)
+#endif
+
 
 int sign(struct edfs *edfs_context, const char *str, int len, unsigned char *hash, int *info_key_type);
 int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewritebuf *fi);
@@ -467,8 +479,7 @@ void notify_io(struct edfs *edfs_context, const char type[4], const unsigned cha
             default:
                 edwork_broadcast(edwork, type, ioblock->buffer, ioblock->size, ack ? EDWORK_NODES : 0, EDWORK_NODES, ino);
                 break;
-        }
-            
+        }            
         free(ioblock);
         return;
     }
@@ -716,8 +727,11 @@ int read_signature(const char *sig, unsigned char *sigdata, int verify, int *key
 int sign(struct edfs *edfs_context, const char *str, int len, unsigned char *hash, int *info_key_type) {
     if (info_key_type)
         *info_key_type = 0;
-    if (!edfs_context->key_loaded)
+    if (!edfs_context->key_loaded) {
+        EDFS_THREAD_LOCK(edfs_context);
         edfs_context->sig_len = read_signature(edfs_context->signature, edfs_context->sigkey, 0, &edfs_context->key_type, edfs_context->pubkey);
+        EDFS_THREAD_UNLOCK(edfs_context);
+    }
     if (!edfs_context->sig_len)
         return 0;
     switch (edfs_context->key_type) {
@@ -742,8 +756,11 @@ int sign(struct edfs *edfs_context, const char *str, int len, unsigned char *has
 int verify(struct edfs *edfs_context, const char *str, int len, const unsigned char *hash, int hash_size) {
     unsigned char hash2[32];
       
-    if (!edfs_context->pub_loaded)
+    if (!edfs_context->pub_loaded) {
+        EDFS_THREAD_LOCK(edfs_context);
         edfs_context->pub_len = read_signature(edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
+        EDFS_THREAD_UNLOCK(edfs_context);
+    }
 
     if (!edfs_context->pub_len) {
         log_error("verify error (no signature found)");
@@ -1404,7 +1421,9 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             }
             if ((microseconds() - last_key_timestamp >= 1000000)) {
                 // new key every second
+                EDFS_THREAD_LOCK(edfs_context);
                 edfs_make_key(edfs_context);
+                EDFS_THREAD_UNLOCK(edfs_context);
                 last_key_timestamp = microseconds();
             }
             // end of file, no more quries
@@ -2365,9 +2384,11 @@ int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int s
     unsigned char hash[32];
 
     if (!edfs_context->pub_loaded) {
+        EDFS_THREAD_LOCK(edfs_context);
         edfs_context->pub_len = read_signature(edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
         if (edfs_context->pub_len > 0)
             edfs_context->pub_loaded = 1;
+        EDFS_THREAD_UNLOCK(edfs_context);
     }
 
     SHA256_CTX hashctx;
@@ -3048,7 +3069,9 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
 
         thread_mutex_init(&edfs_context->io_lock);
         thread_mutex_lock(&edfs_context->io_lock);
-
+#ifdef EDFS_MULTITHREADED
+        thread_mutex_init(&edfs_context->thread_lock);
+#endif
         edfs_context->mutex_initialized = 1;
         edfs_context->network_thread = thread_create(edwork_thread, (void *)edfs_context, "edwork", 8192 * 1024);
 
@@ -3073,9 +3096,13 @@ void edfs_edwork_done(struct edfs *edfs_context) {
         thread_destroy(edfs_context->network_thread);
         log_info("edwork done");
     }
+    edfs_context->mutex_initialized = 0;
     thread_mutex_term(&edfs_context->io_lock);
     thread_mutex_term(&edfs_context->lock);
-    edfs_context->mutex_initialized = 0;
+
+#ifdef EDFS_MULTITHREADED
+    thread_mutex_term(&edfs_context->thread_lock);
+#endif
 }
 
 static void recursive_mkdir(const char *dir) {

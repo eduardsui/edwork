@@ -1,6 +1,6 @@
 CC = gcc
 RM = rm
-CFLAGS = -O3 -D_FILE_OFFSET_BITS=64 -DUSE_STAT_PATCH -DEDFS_DEFAULT_HOST=\"discovery.gyrogears.com:4848\" 
+CFLAGS = -O3 -D_FILE_OFFSET_BITS=64 -DUSE_STAT_PATCH -DEDFS_DEFAULT_HOST=\"discovery.gyrogears.com:4848\" -DEDFS_MULTITHREADED
 LIBS = -lws2_32 -lwinmm -ldokanfuse1
 BUILDFLAGS= -o edfs_dokan
 

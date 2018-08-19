@@ -90,7 +90,18 @@ struct edwork_data {
     time_t magnitude_stamp;
 
     thread_mutex_t sock_lock;
+#ifdef EDFS_MULTITHREADED
+    thread_mutex_t thread_lock;
+#endif
 };
+
+#ifdef EDFS_MULTITHREADED
+    #define EDWORK_THREAD_LOCK(data)    thread_mutex_lock(&data->thread_lock);
+    #define EDWORK_THREAD_UNLOCK(data)  thread_mutex_unlock(&data->thread_lock);
+#else
+    #define EDWORK_THREAD_LOCK(data)
+    #define EDWORK_THREAD_UNLOCK(data)
+#endif
 
 const char *edwork_addr_ipv4(void *clientaddr_ptr) {
     struct sockaddr_in *clientaddr = (struct sockaddr_in *)clientaddr_ptr;
@@ -300,7 +311,9 @@ struct edwork_data *edwork_create(int port, const char *log_dir) {
     data->magnitude_stamp = 0;
 
     thread_mutex_init(&data->sock_lock);
-
+#ifdef EDFS_MULTITHREADED
+    thread_mutex_init(&data->thread_lock);
+#endif
     edwork_add_node(data, "255.255.255.255", port);
 
     return data;
@@ -462,6 +475,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     if ((!sin) || (client_len <= 0) || (sin->sin_addr.s_addr == 0) || (sin->sin_port == 0))
         return 0;
 
+    EDWORK_THREAD_LOCK(data);
     struct client_data *peer = NULL;
     uintptr_t data_index = (uintptr_t)avl_search(&data->tree, sin);
     if (data_index > 0)
@@ -470,6 +484,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     if (peer) {
         if (update_seen)
             peer->last_seen = time(NULL);
+        EDWORK_THREAD_UNLOCK(data);
         if (return_old_peer)
             return peer;
         return 0;
@@ -497,6 +512,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         avl_insert(&data->tree, addr_key, (void *)(uintptr_t)data->clients_count);
     }
 
+    EDWORK_THREAD_UNLOCK(data);
     return &data->clients[data->clients_count - 1];
 }
 
@@ -535,6 +551,8 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
         log_warn("no nodes to broadcast to");
         return 0;
     }
+
+    EDWORK_THREAD_LOCK(data);
 
     unsigned char *packet = NULL;
     const unsigned char *ptr = buf;
@@ -601,6 +619,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
             } while (sent_to < max_nodes);
         }
     }
+    EDWORK_THREAD_UNLOCK(data);
     free(packet);
     return 0;
 }
@@ -746,15 +765,19 @@ int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsi
 }
 
 int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
+    EDWORK_THREAD_LOCK(data);
     uintptr_t index = (uintptr_t)avl_search(&data->tree, sin);
-    if ((!index) || (index == 1))
+    if ((!index) || (index == 1)) {
+        EDWORK_THREAD_UNLOCK(data);
         return 0;
+    }
     
     if (data->clients_count > 1) {
         avl_remove(&data->tree, sin);
         memmove(&data->clients[index - 1], &data->clients[index], sizeof(struct client_data) * (data->clients_count - index));
         data->clients_count --;
     }
+    EDWORK_THREAD_UNLOCK(data);
 }
 
 int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback callback, unsigned char *buffer, int n, void *clientaddr, int clientaddrlen, void *userdata) {
@@ -862,6 +885,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     int records = 0;
     unsigned int i;
     // active in last 72 hours
+    EDWORK_THREAD_LOCK(data);
     for (i = offset; i < data->clients_count; i++) {
         if (*buf_size < 7)
             break;
@@ -876,6 +900,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
             records ++;
         }
     }
+    EDWORK_THREAD_UNLOCK(data);
     *buf_size = records * 7;
     return records;
 }
@@ -919,6 +944,8 @@ unsigned int edwork_magnitude(struct edwork_data *data) {
     time_t threshold = time(NULL) - 1200;
     if ((data->magnitude_stamp > threshold) && (data->magnitude > 0))
         return data->magnitude;
+
+    EDWORK_THREAD_LOCK(data);
     for (i = 0; i < data->clients_count; i++) {
         if (data->clients[i].last_seen > threshold) {
             magnitude ++;
@@ -928,6 +955,8 @@ unsigned int edwork_magnitude(struct edwork_data *data) {
     }
     data->magnitude_stamp = time(NULL);
     data->magnitude = magnitude;
+    EDWORK_THREAD_UNLOCK(data);
+
     return magnitude;
 }
 
@@ -938,6 +967,9 @@ void edwork_destroy(struct edwork_data* data) {
     avl_destroy(&data->spent, avl_spent_key_data_destructor);
     avl_destroy(&data->tree, avl_key_data_destructor);
     thread_mutex_term(&data->sock_lock);
+#ifdef EDFS_MULTITHREADED
+    thread_mutex_init(&data->thread_lock);
+#endif
 
     free(data->log_dir);
     free(data->clients);
