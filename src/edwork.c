@@ -772,10 +772,22 @@ int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
         return 0;
     }
     
-    if (data->clients_count > 1) {
+    if ((data->clients_count > 1) && (index <= data->clients_count)) {
         avl_remove(&data->tree, sin);
         memmove(&data->clients[index - 1], &data->clients[index], sizeof(struct client_data) * (data->clients_count - index));
+        int i;
         data->clients_count --;
+
+        for (i = index - 1; i < data->clients_count; i++) {
+            avl_remove(&data->tree, sin);
+
+            struct sockaddr_in *addr_key = (struct sockaddr_in *)malloc(sizeof(struct sockaddr_in));
+            if (addr_key) {
+                memcpy(addr_key, &data->clients[index].clientaddr, sizeof(struct sockaddr_in));
+                avl_insert(&data->tree, addr_key, (void *)(uintptr_t)i + 1);
+            }
+
+        }
     }
     EDWORK_THREAD_UNLOCK(data);
     return 1;
