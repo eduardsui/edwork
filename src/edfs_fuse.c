@@ -290,7 +290,10 @@ int main(int argc, char *argv[]) {
     HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD fdwSaveOldMode;
     GetConsoleMode(hStdout, &fdwSaveOldMode);
-    SetConsoleMode(hStdout, fdwSaveOldMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    if (SetConsoleMode(hStdout, fdwSaveOldMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+        log_set_colors(1);
+#else
+    log_set_colors(1);
 #endif
 
     edfs_fuse_init(&edfs_fuse);
@@ -411,15 +414,9 @@ int main(int argc, char *argv[]) {
             edfs_edwork_done(edfs_context);
             edfs_destroy_context(edfs_context);
             edfs_context = NULL;
-            fuse_destroy(se);
-#ifdef _WIN32
-            // dokan fuse implementation crashes if fuse_new fails
             fuse_unmount(mountpoint, ch);
-#endif
+            fuse_destroy(se);
         }
-#ifndef _WIN32
-        fuse_unmount(mountpoint, ch);
-#endif
     }
     fuse_opt_free_args(&args);
 

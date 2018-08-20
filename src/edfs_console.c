@@ -190,7 +190,10 @@ int main(int argc, char *argv[]) {
     HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD fdwSaveOldMode;
     GetConsoleMode(hStdout, &fdwSaveOldMode);
-    SetConsoleMode(hStdout, fdwSaveOldMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    if (SetConsoleMode(hStdout, fdwSaveOldMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+        log_set_colors(1);
+#else
+    log_set_colors(1);
 #endif
 
     int err = -1;

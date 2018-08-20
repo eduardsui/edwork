@@ -28,15 +28,18 @@
 
 #include "log.h"
 
+#define LOG_USE_COLOR
+
 static struct {
   void *udata;
   log_LockFn lock;
   FILE *fp;
   int level;
   int quiet;
+#ifdef LOG_USE_COLOR
+  int colors;
+#endif
 } L;
-
-#define LOG_USE_COLOR
 
 static const char *level_names[] = {
   "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"
@@ -87,6 +90,11 @@ void log_set_quiet(int enable) {
   L.quiet = enable ? 1 : 0;
 }
 
+void log_set_colors(int enable) {
+#ifdef LOG_USE_COLOR
+  L.colors = enable ? 1 : 0;
+#endif
+}
 
 void log_log(int level, const char *file, int line, const char *fmt, ...) {
   if (level < L.level) {
@@ -106,12 +114,11 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
     char buf[16];
     buf[strftime(buf, sizeof(buf), "%H:%M:%S", lt)] = '\0';
 #ifdef LOG_USE_COLOR
-    fprintf(
-      stderr, "%s %s%-5s\x1b[0m \x1b[90m%s:%d:\x1b[0m ",
-      buf, level_colors[level], level_names[level], file, line);
-#else
-    fprintf(stderr, "%s %-5s %s:%d: ", buf, level_names[level], file, line);
+    if (L.colors)
+        fprintf(stderr, "%s %s%-5s\x1b[0m \x1b[90m%s:%d:\x1b[0m ", buf, level_colors[level], level_names[level], file, line);
+    else
 #endif
+    fprintf(stderr, "%s %-5s %s:%d: ", buf, level_names[level], file, line);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);

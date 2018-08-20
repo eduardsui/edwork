@@ -34,6 +34,8 @@
 #include "curve25519.h"
 #include "edfs_core.h"
 
+#define BLOCK_SIZE_MAX      BLOCK_SIZE + 0x3000
+
 #define DEBUG
 
 #ifdef DEBUG
@@ -446,7 +448,7 @@ void notify_io(struct edfs *edfs_context, const char type[4], const unsigned cha
             buffer_size += offset;
         }
         if (loose_encrypt) {
-            unsigned char buf2[BLOCK_SIZE * 2];
+            unsigned char buf2[BLOCK_SIZE_MAX];
             int size2 = edwork_encrypt(edfs_context, ioblock->buffer, buffer_size, buf2, NULL, edwork_who_i_am(edfs_context->edwork), NULL);
             memcpy(ioblock->buffer, buf2, size2);
             buffer_size = size2;
@@ -845,8 +847,8 @@ int fread_signature(unsigned char *data, int len, FILE *f, unsigned char *signat
 }
 
 int fread_compressed(unsigned char *data, int len, FILE *f, unsigned char *signature) {
-    unsigned char compressed_buffer[BLOCK_SIZE * 2];
-    int bytes_read = fread_signature(compressed_buffer, BLOCK_SIZE * 2, f, signature);
+    unsigned char compressed_buffer[BLOCK_SIZE_MAX];
+    int bytes_read = fread_signature(compressed_buffer, BLOCK_SIZE_MAX, f, signature);
     if (bytes_read > 0) {
         mz_ulong max_len = len;
         if (uncompress(data, &max_len, compressed_buffer, bytes_read) == Z_OK)
@@ -1282,7 +1284,11 @@ int update_file_json(struct edfs *edfs_context, uint64_t inode, edfs_stat *attr,
     }
     char name[MAX_PATH_LEN];
     name[0] = 0;
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, &parent, &size, &timestamp, NULL, NULL, name, MAX_PATH_LEN, &created, &modified, &generation, hash);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
     if ((!type) || (name[0] == 0))
         return 0;
 
@@ -1391,7 +1397,11 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
     time_t modified = 0;
     time_t created = 0;
 
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, ino, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return -ENOENT;
 
@@ -1412,8 +1422,13 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
     return 0;
 }
 
-edfs_ino_t edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode) {
-    return read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode) {
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
+    int type  = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
+    return type;
 }
 
 edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char *name, edfs_stat *stbuf) {
@@ -1423,8 +1438,11 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
     time_t created = 0;
 
     uint64_t inode = computeinode(parent, name);
-
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return 0;
 
@@ -1490,6 +1508,7 @@ void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int
     *(uint64_t *)additional_data = htonll(ino);
     *(uint64_t *)(additional_data + 8)= htonll(chunk);
 
+    EDFS_THREAD_LOCK(edfs_context);
     if (encrypted)
         notify_io(edfs_context, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0);
     else
@@ -1498,6 +1517,7 @@ void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int
         notify_io(edfs_context, "want", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0);
     else
         notify_io(edfs_context, "wan3", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0);
+    EDFS_THREAD_UNLOCK(edfs_context);
 }
 
 void edfs_make_key(struct edfs *edfs_context) {
@@ -1723,7 +1743,11 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
     time_t created = 0;
 
     char b64name[MAX_B64_HASH_LEN];
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, ino, &parent, NULL, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
     if (type & S_IFDIR) {
         struct dirbuf dirbuf_container;
         computename(ino, b64name);
@@ -1755,7 +1779,11 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
                 index ++;
                 if ((start_at < index) && (!file.is_dir)) {
                     if (verify_file(edfs_context, fullpath, file.name)) {
+                        if (edfs_context->mutex_initialized)
+                            thread_mutex_lock(&edfs_context->io_lock);
                         read_file_json(edfs_context, unpacked_ino(file.name), NULL, NULL, NULL, add_directory, b, NULL, 0, NULL, NULL, NULL, NULL);
+                        if (edfs_context->mutex_initialized)
+                            thread_mutex_unlock(&edfs_context->io_lock);
                         if (b->size >= off + size)
                             break;
                     }
@@ -1783,7 +1811,11 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
     static unsigned char null_hash[32];
     unsigned char hash[32];
     unsigned char computed_hash[32];
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return -EACCES;
     if (type & S_IFDIR)
@@ -1815,7 +1847,9 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                 }
                 for (i = 0; i < max_chunks; i++) {
                     *(uint64_t *)(additional_data + 8)= htonll(i);
+                    EDFS_THREAD_LOCK(edfs_context);
                     notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0);
+                    EDFS_THREAD_UNLOCK(edfs_context);
                 }
                 if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                     log_error("hash read timed out");
@@ -1826,7 +1860,11 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
 #else
                 usleep(5000);
 #endif
+                if (edfs_context->mutex_initialized)
+                    thread_mutex_lock(&edfs_context->io_lock);
                 read_file_json(edfs_context, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+                if (edfs_context->mutex_initialized)
+                    thread_mutex_unlock(&edfs_context->io_lock);
             } while (!valid_hash);
 
             if (valid_hash) {
@@ -1915,7 +1953,11 @@ int edfs_set_size(struct edfs *edfs_context, uint64_t inode, int64_t new_size) {
 int64_t get_size_json(struct edfs *edfs_context, uint64_t inode) {
     int64_t size;
 
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return 0;
 
@@ -1950,6 +1992,8 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
 int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int64_t chunk, const char *buf, size_t size, int64_t offset, int64_t *filesize) {
     int written = 0;
     int block_written;
+    int written_bytes;
+
     if (offset > 0) {
         int max_size = BLOCK_SIZE - offset;
         if (size > max_size)
@@ -1968,7 +2012,7 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
     snprintf(name, MAX_PATH_LEN, "%" PRIu64, (uint64_t)chunk);
     unsigned char old_data[BLOCK_SIZE];
     unsigned char additional_data[96];
-    unsigned char compressed_buffer[BLOCK_SIZE * 2];
+    unsigned char compressed_buffer[BLOCK_SIZE_MAX];
     mz_ulong max_len = sizeof(compressed_buffer);
 
     int read_data = edfs_read_file(edfs_context, path, name, old_data, BLOCK_SIZE, NULL, 0, 1, USE_COMPRESSION, NULL, 0);
@@ -2018,10 +2062,19 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
         }
         return -EIO;
     } else
-    if (offset)
-        return -EBUSY;
+    if ((offset) && (offset < BLOCK_SIZE)) {
+        memset(old_data, 0, offset);
+        int available = BLOCK_SIZE - offset;
+        if (size > available)
+            size = available;
+        memcpy(old_data + offset, buf, size);
 
-    int written_bytes = edfs_write_file(edfs_context, path, name, (const unsigned char *)buf, (int)size, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL);
+        written_bytes = edfs_write_file(edfs_context, path, name, (const unsigned char *)old_data, (int)offset + size, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL);
+    } else
+    if (offset) {
+        return -EBUSY;
+    } else
+        written_bytes = edfs_write_file(edfs_context, path, name, (const unsigned char *)buf, (int)size, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL);
     if (written_bytes > 0) {
         *filesize += written_bytes;
         if (written_bytes == BLOCK_SIZE) {
@@ -2173,6 +2226,9 @@ int edfs_write_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *buf,
 
 int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewritebuf *fbuf) {
     if ((fbuf) && (fbuf->size)) {
+        if (edfs_context->mutex_initialized)
+            thread_mutex_lock(&edfs_context->io_lock);
+
         int size = fbuf->size;
         const char *p = (const char *)fbuf->p;
         int err = 0;
@@ -2198,6 +2254,10 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
         fbuf->p = NULL;
         fbuf->size = 0;
         fbuf->offset = 0;
+
+        if (edfs_context->mutex_initialized)
+            thread_mutex_unlock(&edfs_context->io_lock);
+
         if (err < 0)
             return err;
 
@@ -2368,7 +2428,11 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
 
 int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode) {
     uint64_t generation;
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return -ENOENT;
     if (type & S_IFDIR) {
@@ -2389,7 +2453,11 @@ int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t i
         return -EROFS;
 
     uint64_t generation;
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return -ENOENT;
     if (type & S_IFDIR)
@@ -2505,7 +2573,11 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
             int64_t current_size = 0;
             uint64_t current_timestamp = 0;
             uint64_t current_generation = 0;
+            if (edfs_context->mutex_initialized)
+                thread_mutex_lock(&edfs_context->io_lock);
             int current_type = read_file_json(edfs_context, inode, &current_parent, &current_size, &current_timestamp, NULL, NULL, NULL, 0, &current_created, &current_modified, &current_generation, NULL);
+            if (edfs_context->mutex_initialized)
+                thread_mutex_unlock(&edfs_context->io_lock);
             int do_write = 1;
             if (current_type) {
                 // check all the parameters, not just modified, in case of a setattr(mtime)
@@ -2590,10 +2662,10 @@ int edwork_process_data(struct edfs *edfs_context, const unsigned char *payload,
     uint64_t timestamp = ntohll(*(uint64_t *)(payload + signature_size + 16));
     uint64_t datasize = ntohll(*(uint64_t *)(payload + signature_size + 24));
 
-    if ((datasize > 0) && (datasize <= size - delta_size) && (datasize <= BLOCK_SIZE * 2)) {
+    if ((datasize > 0) && (datasize <= size - delta_size) && (datasize <= BLOCK_SIZE_MAX)) {
         if (!do_verify) {
 #ifdef USE_COMPRESSION
-            unsigned char compressed_buffer[BLOCK_SIZE * 2];
+            unsigned char compressed_buffer[BLOCK_SIZE_MAX];
             mz_ulong max_len = sizeof(compressed_buffer);
             if (uncompress(compressed_buffer, &max_len, payload + delta_size + signature_size + 64, datasize - 64) != Z_OK) {
                 log_warn("error uncompressing data packet");
@@ -2650,7 +2722,7 @@ int edwork_process_hash(struct edfs *edfs_context, const unsigned char *payload,
     uint64_t timestamp = ntohll(*(uint64_t *)(payload + signature_size + 16));
     uint64_t datasize = ntohll(*(uint64_t *)(payload + signature_size + 24));
 
-    if ((datasize > 0) && (datasize <= size - delta_size) && (datasize <= BLOCK_SIZE * 2)) {
+    if ((datasize > 0) && (datasize <= size - delta_size) && (datasize <= BLOCK_SIZE_MAX)) {
         if (!verify(edfs_context, (const char *)payload + delta_size + signature_size + 64, datasize - 64, payload + delta_size + signature_size, 64)) {
             log_warn("dati packet content signature verification failed, dropping");
             return -1;
@@ -2711,7 +2783,12 @@ int edwork_delete(struct edfs *edfs_context, const unsigned char *payload, int s
     uint64_t timestamp;
     uint64_t generation;
 
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, &parent, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->io_lock);
+
     if (!type) {
         log_info("nothing to delete (file does not exists)");
         return 0;
@@ -2803,7 +2880,7 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
 }
 
 void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, void *userdata) {
-    unsigned char buffer[BLOCK_SIZE * 2];
+    unsigned char buffer[BLOCK_SIZE_MAX];
     struct edfs *edfs_context = (struct edfs *)userdata;
     if ((!edwork) || (!type) || (!edfs_context))
         return;
@@ -2930,7 +3007,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     
                     curve25519(shared_secret, edfs_context->key.secret, payload + 16) ;
 
-                    unsigned char buf2[BLOCK_SIZE * 2];
+                    unsigned char buf2[BLOCK_SIZE_MAX];
                     memcpy(buf2, edfs_context->key.pk, 32);
 
                     int size2 = edwork_encrypt(edfs_context, buffer, size + 32, buf2 + 32, who_am_i, edwork_who_i_am(edwork), shared_secret);
@@ -2941,7 +3018,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
 
                 } else
                 if (!memcmp(type, "wan3", 4)) {
-                    unsigned char buf2[BLOCK_SIZE * 2];
+                    unsigned char buf2[BLOCK_SIZE_MAX];
                     int size2 = edwork_encrypt(edfs_context, buffer, size + 32, buf2, who_am_i, edwork_who_i_am(edwork), NULL);
                     if (edwork_send_to_peer(edwork, "dat3", buf2, size2, clientaddr, clientaddrlen) <= 0)
                         log_error("error sending DAT3");
@@ -3182,7 +3259,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 unsigned char shared_secret[32];                    
                 curve25519(shared_secret, edfs_context->key.secret, payload + 16) ;
 
-                unsigned char buf2[BLOCK_SIZE * 2];
+                unsigned char buf2[BLOCK_SIZE_MAX];
                 memcpy(buf2, edfs_context->key.pk, 32);
 
                 int size2 = edwork_encrypt(edfs_context, buffer, size + 32, buf2 + 32, who_am_i, edwork_who_i_am(edwork), shared_secret);
