@@ -1284,11 +1284,7 @@ int update_file_json(struct edfs *edfs_context, uint64_t inode, edfs_stat *attr,
     }
     char name[MAX_PATH_LEN];
     name[0] = 0;
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, &parent, &size, &timestamp, NULL, NULL, name, MAX_PATH_LEN, &created, &modified, &generation, hash);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
     if ((!type) || (name[0] == 0))
         return 0;
 
@@ -1397,11 +1393,7 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
     time_t modified = 0;
     time_t created = 0;
 
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, ino, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return -ENOENT;
 
@@ -1423,12 +1415,7 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
 }
 
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode) {
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
-    int type  = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
-    return type;
+    return read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
 }
 
 edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char *name, edfs_stat *stbuf) {
@@ -1438,11 +1425,7 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
     time_t created = 0;
 
     uint64_t inode = computeinode(parent, name);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return 0;
 
@@ -1743,11 +1726,7 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
     time_t created = 0;
 
     char b64name[MAX_B64_HASH_LEN];
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, ino, &parent, NULL, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
     if (type & S_IFDIR) {
         struct dirbuf dirbuf_container;
         computename(ino, b64name);
@@ -1779,11 +1758,7 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
                 index ++;
                 if ((start_at < index) && (!file.is_dir)) {
                     if (verify_file(edfs_context, fullpath, file.name)) {
-                        if (edfs_context->mutex_initialized)
-                            thread_mutex_lock(&edfs_context->io_lock);
                         read_file_json(edfs_context, unpacked_ino(file.name), NULL, NULL, NULL, add_directory, b, NULL, 0, NULL, NULL, NULL, NULL);
-                        if (edfs_context->mutex_initialized)
-                            thread_mutex_unlock(&edfs_context->io_lock);
                         if (b->size >= off + size)
                             break;
                     }
@@ -1811,11 +1786,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
     static unsigned char null_hash[32];
     unsigned char hash[32];
     unsigned char computed_hash[32];
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return -EACCES;
     if (type & S_IFDIR)
@@ -1860,11 +1831,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
 #else
                 usleep(5000);
 #endif
-                if (edfs_context->mutex_initialized)
-                    thread_mutex_lock(&edfs_context->io_lock);
                 read_file_json(edfs_context, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
-                if (edfs_context->mutex_initialized)
-                    thread_mutex_unlock(&edfs_context->io_lock);
             } while (!valid_hash);
 
             if (valid_hash) {
@@ -1953,11 +1920,7 @@ int edfs_set_size(struct edfs *edfs_context, uint64_t inode, int64_t new_size) {
 int64_t get_size_json(struct edfs *edfs_context, uint64_t inode) {
     int64_t size;
 
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return 0;
 
@@ -2428,11 +2391,7 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
 
 int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode) {
     uint64_t generation;
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return -ENOENT;
     if (type & S_IFDIR) {
@@ -2453,11 +2412,7 @@ int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t i
         return -EROFS;
 
     uint64_t generation;
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
     if (!type)
         return -ENOENT;
     if (type & S_IFDIR)
@@ -2573,11 +2528,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
             int64_t current_size = 0;
             uint64_t current_timestamp = 0;
             uint64_t current_generation = 0;
-            if (edfs_context->mutex_initialized)
-                thread_mutex_lock(&edfs_context->io_lock);
             int current_type = read_file_json(edfs_context, inode, &current_parent, &current_size, &current_timestamp, NULL, NULL, NULL, 0, &current_created, &current_modified, &current_generation, NULL);
-            if (edfs_context->mutex_initialized)
-                thread_mutex_unlock(&edfs_context->io_lock);
             int do_write = 1;
             if (current_type) {
                 // check all the parameters, not just modified, in case of a setattr(mtime)
@@ -2783,11 +2734,7 @@ int edwork_delete(struct edfs *edfs_context, const unsigned char *payload, int s
     uint64_t timestamp;
     uint64_t generation;
 
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&edfs_context->io_lock);
     int type = read_file_json(edfs_context, inode, &parent, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&edfs_context->io_lock);
 
     if (!type) {
         log_info("nothing to delete (file does not exists)");
