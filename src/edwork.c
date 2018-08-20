@@ -577,8 +577,12 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                 } else
                 if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
                     if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) <= 0) {
-                        log_trace("error in sendto (client #%i: %s)", i, edwork_addr_ipv4(&data->clients[i].clientaddr));
-                        // data->clients[i].last_seen = threshold - 1;
+#ifdef _WIN32
+                        log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+#else
+                        log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+#endif
+                        data->clients[i].last_seen = threshold - 1;
                     }
                 }
 
@@ -603,8 +607,12 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                     if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) > 0) {
                         sent_to ++;
                     } else {
-                        log_trace("error in sendto (client #%i)", i);
-                        // data->clients[i].last_seen = threshold - 1;
+#ifdef _WIN32
+                        log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+#else
+                        log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+#endif
+                        data->clients[i].last_seen = threshold - 1;
                     }
                 }
 
