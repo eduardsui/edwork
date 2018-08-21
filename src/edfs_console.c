@@ -35,8 +35,9 @@ unsigned int add_directory(const char *name, edfs_ino_t ino, int type, int64_t s
 
 
 static int edfs_console_ls(const char *path) {
-    uint64_t inode = pathtoinode(path, NULL, NULL);
-    int type = edfs_lookup_inode(edfs_context, inode);
+    const char *nameptr = NULL;
+    uint64_t inode = pathtoinode(path, NULL, &nameptr);
+    int type = edfs_lookup_inode(edfs_context, inode, nameptr);
     if (!type) {
         fprintf(stderr, "edfs console: %s: No such file or directory\n", path);
         return -ENOENT;
@@ -60,7 +61,7 @@ static int edfs_console_ls(const char *path) {
 }
 
 static int edfs_console_download(const char *path, const char *name, edfs_ino_t inode) {
-    int type = edfs_lookup_inode(edfs_context, inode);
+    int type = edfs_lookup_inode(edfs_context, inode, name);
     if (!type) {
         fprintf(stderr, "edfs console: %s: no such file\n", path);
         return -ENOENT;
@@ -144,7 +145,7 @@ static int edfs_console_upload(const char *path, const char *fname) {
 
     uint64_t parent;
     uint64_t inode = pathtoinode(full_path, &parent, &name);
-    int type = edfs_lookup_inode(edfs_context, inode);
+    int type = edfs_lookup_inode(edfs_context, inode, name);
     if (type) {
         fclose(f);
         fprintf(stderr, "edfs console: %s: file already exists\n", full_path);

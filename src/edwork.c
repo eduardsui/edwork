@@ -670,8 +670,8 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
         return 0;
     }
     unsigned int rebroadcast_count = 0;
-    unsigned char jumbo_buf[0xA000];
-    unsigned int jumbo_size = 0;
+    // unsigned char jumbo_buf[0xA000];
+    // unsigned int jumbo_size = 0;
     while (dir.has_next) {
         tinydir_file file;
         tinydir_readfile(&dir, &file);
@@ -708,6 +708,8 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
                         memcpy(buf + 8, data->i_am, 32);
                         // re-timestamp
                         *(uint64_t *)(buf + 52) = htonll(microseconds());
+
+                        hmac_sha256(data->key_id, 32, buf, 92, buf + 128, size - 128, buf + 92);
                         
                         // jumbo_size = edwork_jumbo(data, jumbo_buf, sizeof(jumbo_buf), jumbo_size, buf + 8, size - 8);
                         edwork_private_broadcast(data, NULL, buf + 8, size - 8, 0, 0, 1, NULL, 0, 0, 0);
@@ -730,8 +732,8 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
         tinydir_next(&dir);
     }
     tinydir_close(&dir);
-    if (jumbo_size)
-        edwork_private_broadcast(data, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0);
+    // if (jumbo_size)
+    //     edwork_private_broadcast(data, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0);
     return rebroadcast_count;
 }
 
@@ -855,7 +857,7 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
     unsigned char hmac[32];
     hmac_sha256(data->key_id, 32, buffer, 92, payload, size, hmac);
     if (memcmp(hmac, buffer + 92, 32)) {
-        log_warn("HMAC verify failed");
+        log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
         return 0;
     }
 
