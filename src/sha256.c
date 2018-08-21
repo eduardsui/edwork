@@ -150,7 +150,7 @@ void sha256(const BYTE in[], size_t len, BYTE hash[]) {
     sha256_final(&ctx, hash);
 }
 
-void hmac_sha256(const BYTE key_gc[], size_t key_len, const BYTE data[], size_t data_len, BYTE hash[]) {
+void hmac_sha256(const BYTE key_gc[], size_t key_len, const BYTE data[], size_t data_len, const BYTE data2[], size_t data2_len, BYTE hash[]) {
     SHA256_CTX sha;
     BYTE key[64];
     BYTE ikey[64];
@@ -173,6 +173,8 @@ void hmac_sha256(const BYTE key_gc[], size_t key_len, const BYTE data[], size_t 
     sha256_init(&sha);
     sha256_update(&sha, ikey, 64);
     sha256_update(&sha, data, data_len);
+    if ((data2) && (data2_len))
+        sha256_update(&sha, data2, data2_len);
     sha256_final(&sha, temp_hash);
 
     sha256_init(&sha);

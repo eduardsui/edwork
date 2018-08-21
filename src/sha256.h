@@ -31,6 +31,6 @@ void sha256_update(SHA256_CTX *ctx, const BYTE data[], size_t len);
 void sha256_final(SHA256_CTX *ctx, BYTE hash[]);
 
 void sha256(const BYTE in[], size_t len, BYTE hash[]);
-void hmac_sha256(const BYTE key_gc[], size_t key_len, const BYTE data[], size_t data_len, BYTE hash[]);
+void hmac_sha256(const BYTE key_gc[], size_t key_len, const BYTE data[], size_t data_len, const BYTE data2[], size_t data2_len, BYTE hash[]);
 
 #endif   // SHA256_H

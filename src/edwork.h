@@ -17,7 +17,7 @@ void edwork_init();
 uint64_t edwork_random();
 int edwork_random_bytes(unsigned char *destination, int len);
 
-struct edwork_data *edwork_create(int port, const char *log_dir);
+struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned char *key);
 void edwork_confirm_seq(struct edwork_data *data, uint64_t sequence, int acks);
 void edwork_add_node(struct edwork_data *data, const char *node, int port);
 int edworks_data_pending(struct edwork_data* data, int timeout_ms);

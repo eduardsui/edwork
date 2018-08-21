@@ -748,7 +748,7 @@ int sign(struct edfs *edfs_context, const char *str, int len, unsigned char *has
         case KEY_HS256:
             if (info_key_type)
                 *info_key_type = edfs_context->key_type;
-            hmac_sha256((const BYTE *)edfs_context->sigkey, edfs_context->sig_len, (const BYTE *)str, len, (BYTE *)hash);
+            hmac_sha256((const BYTE *)edfs_context->sigkey, edfs_context->sig_len, (const BYTE *)str, len, NULL, 0, (BYTE *)hash);
             edfs_context->signature_size = 32;
             edfs_context->key_loaded = 1;
             break;
@@ -787,7 +787,7 @@ int verify(struct edfs *edfs_context, const char *str, int len, const unsigned c
                 return 0;
             }
             edfs_context->pub_loaded = 1;
-            hmac_sha256((const BYTE *)edfs_context->pubkey, edfs_context->pub_len, (const BYTE *)str, len, (BYTE *)hash2);
+            hmac_sha256((const BYTE *)edfs_context->pubkey, edfs_context->pub_len, (const BYTE *)str, len, NULL, 0, (BYTE *)hash2);
             if (!memcmp(hash2, hash, 32))
                 return 1;
             log_warn("verify failed");
@@ -1414,8 +1414,14 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
     return 0;
 }
 
-int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode) {
-    return read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name) {
+    char namebuf[4096];
+    int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, ensure_name ? namebuf : NULL, ensure_name ? sizeof(namebuf) : 0, NULL, NULL, NULL, NULL);
+    if ((ensure_name) && (strncmp(namebuf, ensure_name, sizeof(namebuf)))) {
+        log_error("%s collides with %s", ensure_name, namebuf);
+        return 0;
+    }
+    return type;
 }
 
 edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char *name, edfs_stat *stbuf) {
@@ -1843,7 +1849,9 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                 log_trace("hash is valid");
             } else {
                 log_warn("invalid file hash");
-                return -EIO;
+                // if no valid hash available, allow read-only access
+                if ((flags & 3) != O_RDONLY)
+                    return -EIO;
             }
         }
 
@@ -3413,7 +3421,13 @@ int edwork_thread(void *userdata) {
     if (edfs_context->port <= 0)
         edfs_context->port = EDWORK_PORT;
 
-    struct edwork_data *edwork = edwork_create(edfs_context->port, edfs_context->cache_directory);
+    if (!edfs_context->pub_loaded) {
+        EDFS_THREAD_LOCK(edfs_context);
+        edfs_context->pub_len = read_signature(edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
+        EDFS_THREAD_UNLOCK(edfs_context);
+    }
+
+    struct edwork_data *edwork = edwork_create(edfs_context->port, edfs_context->cache_directory, edfs_context->pubkey);
     if (!edwork) {
         log_fatal("error creating network node");
         edfs_context->network_done = 1;

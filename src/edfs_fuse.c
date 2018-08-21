@@ -79,8 +79,9 @@ static int edfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler
 }
 
 static int edfs_fuse_open(const char *path, struct fuse_file_info *fi) {
-    edfs_ino_t inode = pathtoinode(path, NULL, NULL);
-    int type = edfs_lookup_inode(edfs_context, inode);
+    const char *nameptr = NULL;
+    edfs_ino_t inode = pathtoinode(path, NULL, &nameptr);
+    int type = edfs_lookup_inode(edfs_context, inode, nameptr);
     if (!type)
         return -ENOENT;
     if (type & S_IFDIR)
@@ -174,8 +175,9 @@ static int edfs_fuse_mknod(const char *path, mode_t mode, dev_t dev) {
 }
 
 static int edfs_fuse_opendir(const char *path, struct fuse_file_info *fi) {
-    uint64_t inode = pathtoinode(path, NULL, NULL);
-    int type = edfs_lookup_inode(edfs_context, inode);
+    const char *nameptr = NULL;
+    uint64_t inode = pathtoinode(path, NULL, &nameptr);
+    int type = edfs_lookup_inode(edfs_context, inode, nameptr);
     if (!type)
         return -ENOENT;
 

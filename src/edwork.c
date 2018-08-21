@@ -76,6 +76,7 @@ struct edwork_data {
     int socket;
 
     unsigned char i_am[32];
+    unsigned char key_id[32];
     char *log_dir;
     uint64_t sequence;
 
@@ -216,7 +217,7 @@ uint64_t edwork_random() {
 }
 
 
-struct edwork_data *edwork_create(int port, const char *log_dir) {
+struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned char *key) {
     int optval;
     struct sockaddr_in serveraddr;
 
@@ -310,6 +311,9 @@ struct edwork_data *edwork_create(int port, const char *log_dir) {
     data->magnitude = 0;
     data->magnitude_stamp = 0;
 
+    if (key)
+        sha256(key, 32, data->key_id);
+
     thread_mutex_init(&data->sock_lock);
 #ifdef EDFS_MULTITHREADED
     thread_mutex_init(&data->thread_lock);
@@ -346,8 +350,7 @@ int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_wor
 
 unsigned char *make_packet(struct edwork_data *data, const char type[4], const unsigned char *data_buffer, int *len, int confirmed_acks, uint64_t force_timestamp, uint64_t ino) {
     unsigned char *buf = (unsigned char *)malloc(128 + *len);
-    static const char reserved_buf[24] = { 0 };
-    static const char respond_to[48] = { 0 };
+    // static const char reserved_buf[40] = { 0 };
     if (!buf)
         return NULL;
 
@@ -361,10 +364,13 @@ unsigned char *make_packet(struct edwork_data *data, const char type[4], const u
         timestamp = microseconds();
     timestamp = htonll(timestamp);
     memcpy(buf + 44, &timestamp, sizeof(timestamp));
-    memcpy(buf + 52, reserved_buf, sizeof(reserved_buf));
-    memcpy(buf + 76, respond_to, sizeof(respond_to));
+    // reserved bytes for future use
+    edwork_random_bytes(buf + 52, 40);
+    // memcpy(buf + 52, reserved_buf, sizeof(reserved_buf));
+    hmac_sha256(data->key_id, 32, buf, 92, data_buffer, *len, buf + 92); 
+
     memcpy(buf + 124, &size, sizeof(uint32_t));
-    if (data)
+    if (data_buffer)
         memcpy(buf + 128, data_buffer, *len);
 
     *len += 128;
@@ -792,7 +798,7 @@ int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
             struct sockaddr_in *addr_key = (struct sockaddr_in *)malloc(sizeof(struct sockaddr_in));
             if (addr_key) {
                 memcpy(addr_key, &data->clients[index].clientaddr, sizeof(struct sockaddr_in));
-                avl_insert(&data->tree, addr_key, (void *)(uintptr_t)i + 1);
+                avl_insert(&data->tree, addr_key, (void *)(uintptr_t)(i + 1));
             }
 
         }
@@ -818,6 +824,7 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
 
     if ((who_am_i[0] != 0x01) && (who_am_i[1] != 0x00)) {
         log_warn("dropping message, unsupported version");
+        edwork_remove_addr(data, clientaddr, clientaddrlen);
         return 0;
     }
 
@@ -844,6 +851,14 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
         log_error("a message of invalid size was received %i/%i", n, size);
         return 0;
     }
+
+    unsigned char hmac[32];
+    hmac_sha256(data->key_id, 32, buffer, 92, payload, size, hmac);
+    if (memcmp(hmac, buffer + 92, 32)) {
+        log_warn("HMAC verify failed");
+        return 0;
+    }
+
     if ((callback) && (!memcmp(type, "jmbo", 4))) {
         log_info("JMBO received");
         unsigned char *ptr = buffer + 128;
