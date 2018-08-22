@@ -1546,7 +1546,7 @@ void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int
             thread_mutex_lock(&edfs_context->ino_cache_lock);
         struct edfs_ino_cache *avl_cache = (struct edfs_ino_cache *)avl_search(&edfs_context->ino_cache, (void *)(uintptr_t)ino);
         // at least 2 nodes
-        if ((avl_cache) && (avl_cache->len > 1)) {
+        if ((avl_cache) && (avl_cache->len >= 1)) {
             memcpy(&addrbuffer, &avl_cache->clientaddr[edwork_random() % avl_cache->len], avl_cache->clientaddr_size);
             use_clientaddr = &addrbuffer;
             clientaddr_size = avl_cache->clientaddr_size;
@@ -2776,8 +2776,8 @@ int edwork_process_data(struct edfs *edfs_context, const unsigned char *payload,
         int written_bytes = edfs_write_block(edfs_context, inode, chunk, payload + 32 + signature_size, datasize, timestamp / 1000000);
         if (edfs_context->mutex_initialized)
             thread_mutex_unlock(&edfs_context->io_lock);
+        edwork_cache_addr(edfs_context, inode, clientaddr, clientaddrlen);
         if (written_bytes == datasize) {
-            edwork_cache_addr(edfs_context, inode, clientaddr, clientaddrlen);
             written = 1;
         } else {
             if (written_bytes == -1)
@@ -2821,8 +2821,8 @@ int edwork_process_hash(struct edfs *edfs_context, const unsigned char *payload,
         int written_bytes = edfs_write_hash_block(edfs_context, inode, chunk, payload + 32 + signature_size, datasize, timestamp / 1000000);
         if (edfs_context->mutex_initialized)
             thread_mutex_unlock(&edfs_context->io_lock);
+        edwork_cache_addr(edfs_context, inode, clientaddr, clientaddrlen);
         if (written_bytes == datasize) {
-            edwork_cache_addr(edfs_context, inode, clientaddr, clientaddrlen);
             written = 1;
         } else {
             if (written_bytes == -1)
