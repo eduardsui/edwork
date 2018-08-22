@@ -709,7 +709,7 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
                         // re-timestamp
                         *(uint64_t *)(buf + 52) = htonll(microseconds());
 
-                        hmac_sha256(data->key_id, 32, buf, 92, buf + 128, size - 128, buf + 92);
+                        hmac_sha256(data->key_id, 32, buf + 8, 92, buf + 136, size - 136, buf + 100);
                         
                         // jumbo_size = edwork_jumbo(data, jumbo_buf, sizeof(jumbo_buf), jumbo_size, buf + 8, size - 8);
                         edwork_private_broadcast(data, NULL, buf + 8, size - 8, 0, 0, 1, NULL, 0, 0, 0);
@@ -825,7 +825,7 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
     }
 
     if ((who_am_i[0] != 0x01) && (who_am_i[1] != 0x00)) {
-        log_warn("dropping message, unsupported version");
+        log_warn("dropping message, unsupported version (%s)", edwork_addr_ipv4((struct sockaddr_in *)clientaddr));
         edwork_remove_addr(data, clientaddr, clientaddrlen);
         return 0;
     }
