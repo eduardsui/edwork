@@ -104,7 +104,7 @@ struct edwork_data {
     #define EDWORK_THREAD_UNLOCK(data)
 #endif
 
-const char *edwork_addr_ipv4(void *clientaddr_ptr) {
+const char *edwork_addr_ipv4(const void *clientaddr_ptr) {
     struct sockaddr_in *clientaddr = (struct sockaddr_in *)clientaddr_ptr;
     static char str_addr[sizeof("255.255.255.255:65535")];
     if (!clientaddr)
@@ -549,7 +549,7 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port) {
         log_info("added node %s:%i", node, port);
 }
 
-int edwork_private_broadcast(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, int buf_is_packet, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino) {
+int edwork_private_broadcast(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, int buf_is_packet, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino, const void *clientaddr, int clientaddr_len, int sleep_us) {
     if (!data)
         return -1;
 
@@ -574,6 +574,20 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
     time_t threshold = time(NULL) - 1200;
     if ((ptr) && (len > 0)) {
         unsigned int i;
+        if ((clientaddr) && (clientaddr_len > 0)) {
+            if (safe_sendto(data, (const char *)ptr, len, 0, (const struct sockaddr *)clientaddr, clientaddr_len) <= 0) {
+#ifdef _WIN32
+                log_trace("error %i in sendto (%s)", (int)WSAGetLastError(), edwork_addr_ipv4(clientaddr));
+#else
+                log_trace("error %i in sendto (%s)", (int)errno, edwork_addr_ipv4(clientaddr));
+#endif
+                // fallback sending to other clients
+            } else {
+                EDWORK_THREAD_UNLOCK(data);
+                free(packet);
+                return 0;
+            }
+        }
         if ((data->clients_count < max_nodes) || (max_nodes <= 0)) {
             i = rand % data->clients_count;
             unsigned int send_to = 0;
@@ -600,6 +614,8 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                     wrapped_to_first = 1;
                 }
                 send_to ++;
+                if (sleep_us > 0)
+                    usleep(sleep_us);
             }
         } else {
             int sent_to = 0;
@@ -630,6 +646,8 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                         break;
                     wrapped_to_first = 1;
                 }
+                if (sleep_us > 0)
+                    usleep(sleep_us);
             } while (sent_to < max_nodes);
         }
     }
@@ -639,16 +657,20 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
 }
 
 int edwork_broadcast(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino) {
-    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino);
+    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, NULL, 0, 500);
+}
+
+int edwork_broadcast_client(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, const void *clientaddr, int clientaddr_len) {
+    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, clientaddr, clientaddr_len, 0);
 }
 
 int edwork_broadcast_except(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino) {
-    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino);
+    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 0);
 }
 
 unsigned int edwork_jumbo(struct edwork_data *data, unsigned char *jumbo_buf, unsigned int max_jumbo_size, unsigned int jumbo_size, unsigned char *buf, int buf_size) {
     if ((jumbo_size + buf_size + 2 >= max_jumbo_size) && (jumbo_size)) {
-        edwork_private_broadcast(data, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0);
+        edwork_private_broadcast(data, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0, NULL, 0, 0);
         jumbo_size = 0;
     }
     unsigned short size_short = htons((unsigned short)buf_size);
@@ -712,7 +734,7 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
                         hmac_sha256(data->key_id, 32, buf + 8, 92, buf + 136, size - 136, buf + 100);
                         
                         // jumbo_size = edwork_jumbo(data, jumbo_buf, sizeof(jumbo_buf), jumbo_size, buf + 8, size - 8);
-                        edwork_private_broadcast(data, NULL, buf + 8, size - 8, 0, 0, 1, NULL, 0, 0, 0);
+                        edwork_private_broadcast(data, NULL, buf + 8, size - 8, 0, 0, 1, NULL, 0, 0, 0, NULL, 0, 0);
                         rebroadcast_count ++;
                     }
                 } else
@@ -733,7 +755,7 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
     }
     tinydir_close(&dir);
     // if (jumbo_size)
-    //     edwork_private_broadcast(data, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0);
+    //     edwork_private_broadcast(data, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0, NULL, 0, 0);
     return rebroadcast_count;
 }
 

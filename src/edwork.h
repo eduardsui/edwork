@@ -25,6 +25,7 @@ int edwork_dispatch(struct edwork_data* data, edwork_dispatch_callback callback,
 int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback callback, unsigned char *buffer, int n, void *clientaddr, int clientaddrlen, void *userdata);
 int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen);
 int edwork_broadcast(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino);
+int edwork_broadcast_client(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, const void *clientaddr, int clientaddr_len);
 int edwork_broadcast_except(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino);
 unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count, unsigned int offset);
 int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_size, unsigned int offset, time_t threshold);
@@ -35,7 +36,7 @@ int edwork_set_info(void *clientinfo, uint64_t last_ino, uint64_t last_chunk, ui
 unsigned int edwork_magnitude(struct edwork_data *data);
 const unsigned char *edwork_who_i_am(struct edwork_data *data);
 int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_work, int proof_of_work_size);
-const char *edwork_addr_ipv4(void *clientaddr_ptr);
+const char *edwork_addr_ipv4(const void *clientaddr_ptr);
 void edwork_destroy(struct edwork_data *data);
 
 void edwork_done();
