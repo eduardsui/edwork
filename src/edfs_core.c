@@ -449,7 +449,7 @@ int edfs_proof_of_work_verify(int bits, const unsigned char *proof_str, int proo
     return timestamp;
 }
 
-void notify_io(struct edfs *edfs_context, const char type[4], const unsigned char *buffer, int buffer_size, const unsigned char *append_data, int append_len, unsigned char ack, int do_sign, uint64_t ino, struct edwork_data *edwork, int proof_of_work, int loose_encrypt, void *use_clientaddr, int clientaddr_len) {
+void notify_io(struct edfs *edfs_context, const char type[4], const unsigned char *buffer, int buffer_size, const unsigned char *append_data, int append_len, unsigned char ack, int do_sign, uint64_t ino, struct edwork_data *edwork, int proof_of_work, int loose_encrypt, void *use_clientaddr, int clientaddr_len, unsigned char *proof_of_work_cache, int *proof_of_work_size_cache) {
     struct edwork_io *ioblock = (struct edwork_io *)malloc(sizeof(struct edwork_io));
     if (!ioblock) {
         log_error("error allocating ioblock");
@@ -485,16 +485,26 @@ void notify_io(struct edfs *edfs_context, const char type[4], const unsigned cha
             buffer_size = size2;
         }
         if (proof_of_work > 0) {
-            sha3_context ctx;
-            unsigned char out[64];
+            if ((proof_of_work_cache) && (proof_of_work_size_cache) && (*proof_of_work_size_cache > 0)) {
+                memcpy(ioblock->buffer + buffer_size, proof_of_work_cache, *proof_of_work_size_cache);
+                buffer_size += *proof_of_work_size_cache;
+            } else {
+                sha3_context ctx;
+                unsigned char out[64];
 
-            sha3_Init256(&ctx);
-            sha3_Update(&ctx, ioblock->buffer + offset, buffer_size);
-            if (edwork)
-                sha3_Update(&ctx, edwork_who_i_am(edwork), 32);
-            int encode_len = base64_encode((const unsigned char *)sha3_Finalize(&ctx), out, 32, 0);
+                sha3_Init256(&ctx);
+                sha3_Update(&ctx, ioblock->buffer + offset, buffer_size);
+                if (edwork)
+                    sha3_Update(&ctx, edwork_who_i_am(edwork), 32);
+                int encode_len = base64_encode((const unsigned char *)sha3_Finalize(&ctx), out, 32, 0);
 
-            buffer_size += edfs_proof_of_work(proof_of_work, time(NULL), out, encode_len, ioblock->buffer + buffer_size, EDWORK_PACKET_SIZE - buffer_size, NULL);
+                int proof_of_work_size = edfs_proof_of_work(proof_of_work, time(NULL), out, encode_len, ioblock->buffer + buffer_size, EDWORK_PACKET_SIZE - buffer_size, NULL);
+                if ((proof_of_work_cache) && (proof_of_work_size_cache)) {
+                    memcpy(proof_of_work_cache, ioblock->buffer + buffer_size, proof_of_work_size);
+                    *proof_of_work_size_cache = proof_of_work_size;
+                }
+                buffer_size += proof_of_work_size;
+            }
         }
         ioblock->size = buffer_size;
     } else {
@@ -1098,7 +1108,7 @@ void write_json(struct edfs *edfs_context, const char *base_path, const char *na
 
     // do not broadcast root object
     if (parent != 0)
-        notify_io(edfs_context, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, edfs_context->edwork, 0, 0, NULL, 0);
+        notify_io(edfs_context, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, edfs_context->edwork, 0, 0, NULL, 0, NULL, NULL);
 
     json_free_serialized_string(serialized_string);
     json_value_free(root_value);
@@ -1151,7 +1161,7 @@ int write_json2(struct edfs *edfs_context, const char *base_path, uint64_t inode
         if (root_object) {
             uint64_t parent = unpacked_ino(json_object_get_string(root_object, "parent"));
             if (parent != 0)
-                notify_io(edfs_context, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, edfs_context->edwork, 0, 0, NULL, 0);
+                notify_io(edfs_context, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, edfs_context->edwork, 0, 0, NULL, 0, NULL, NULL);
         }
     } else
         log_warn("error writing file %s", b64name);
@@ -1523,7 +1533,7 @@ int edfs_reply_hash(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, u
     return err;
 }
 
-void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int encrypted, int use_cached_addr) {
+void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int encrypted, int use_cached_addr, unsigned char *proof_cache, int *proof_size) {
     unsigned char additional_data[16];
     *(uint64_t *)additional_data = htonll(ino);
     *(uint64_t *)(additional_data + 8)= htonll(chunk);
@@ -1547,13 +1557,13 @@ void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int
 
     EDFS_THREAD_LOCK(edfs_context);
     if (encrypted)
-        notify_io(edfs_context, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size);
+        notify_io(edfs_context, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     else
     // 25% encrypted packages to avoid some problems with firewalls
     if (edwork_random() % 4)
-        notify_io(edfs_context, "want", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size);
+        notify_io(edfs_context, "want", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     else
-        notify_io(edfs_context, "wan3", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size);
+        notify_io(edfs_context, "wan3", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     EDFS_THREAD_UNLOCK(edfs_context);
 }
 
@@ -1609,10 +1619,14 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     int i = 0;
     uint64_t start = microseconds();
     uint64_t last_key_timestamp = start;
+    uint64_t last_proof_timestamp = start;
     uint64_t forward_chunk = chunk + 10;
     uint64_t last_file_chunk = filebuf->file_size / BLOCK_SIZE;
     uint32_t sig_hash = 0;
     int forward_chunks_requested = 0;
+    unsigned char proof_cache[1024];
+    int proof_size = 0;
+
     if (!filebuf->file_size)
         return 0;
     if (filebuf->file_size % BLOCK_SIZE == 0)
@@ -1651,6 +1665,9 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             }
             if (microseconds() - start >= 1000000)
                 use_addr_cache = 0;
+            // reset proof of work every 2 seconds
+            if (microseconds() - last_proof_timestamp >= 2000000)
+                proof_size = 0;
             // end of file, no more quries
             // this is made to avoid an unnecessary edwork query
             if ((filebuf) && (filebuf->file_size > 0)) {
@@ -1658,7 +1675,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                     return read_size;
             }
 
-            request_data(edfs_context, ino, chunk, 1, use_addr_cache);
+            request_data(edfs_context, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size);
             log_trace("requesting chunk %s:%" PRIu64, path, chunk);
 #ifndef EDFS_NO_FORWARD_WAIT
             if (forward_chunks_requested < 5) {
@@ -1666,7 +1683,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                     forward_chunk ++;
                 if (forward_chunk <= last_file_chunk) {
                     forward_chunks_requested ++;
-                    request_data(edfs_context, ino, forward_chunk ++, 1, 1);
+                    request_data(edfs_context, ino, forward_chunk ++, 1, 1, NULL, NULL);
                     continue;
                 }
             }
@@ -1874,13 +1891,13 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                     }
                 }
                 if (send_want) {
-                    notify_io(edfs_context, "wand", additional_data, 8, NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0);
+                    notify_io(edfs_context, "wand", additional_data, 8, NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                     send_want = 0;
                 }
                 for (i = 0; i < max_chunks; i++) {
                     *(uint64_t *)(additional_data + 8)= htonll(i);
                     EDFS_THREAD_LOCK(edfs_context);
-                    notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0);
+                    notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                     EDFS_THREAD_UNLOCK(edfs_context);
                 }
                 if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
@@ -2079,9 +2096,9 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
             if (to_write == BLOCK_SIZE) {
                 if (USE_COMPRESSION) {
                     *(uint64_t *)(additional_data + 24) = htonll(max_len);
-                    notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0);
+                    notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
                 } else
-                    notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)ptr, to_write, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0);
+                    notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)ptr, to_write, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
             }
             edfs_update_hash(edfs_context, path, chunk, additional_data + 32, 64);
             return size;
@@ -2106,9 +2123,9 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
         if (written_bytes == BLOCK_SIZE) {
             if (USE_COMPRESSION) {
                 *(uint64_t *)(additional_data + 24) = htonll(max_len);
-                notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0);
+                notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
             } else
-                notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)buf, size, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0);
+                notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)buf, size, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
         }
         edfs_update_hash(edfs_context, path, chunk, additional_data + 32, 64);
     }
@@ -2454,7 +2471,7 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
     *(uint64_t *)(hash + 16) = htonll(generation);
 
     generation = htonll(generation);
-    notify_io(edfs_context, "del\x00", hash, 32, NULL, 0, 1, 1, inode, NULL, 0, 0, NULL, 0);
+    notify_io(edfs_context, "del\x00", hash, 32, NULL, 0, 1, 1, inode, NULL, 0, 0, NULL, 0, NULL, NULL);
     return 1;
 }
 
@@ -2976,7 +2993,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         edwork_add_node_list(edwork, payload, payload_size);
         if (payload_size >= BLOCK_SIZE - 0x100) {
             uint32_t offset = htonl(edfs_context->list_offset);
-            notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0);
+            notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             edfs_context->list_offset ++;
             edfs_context->list_timestamp = time(NULL);
         }
@@ -3446,7 +3463,7 @@ void edwork_load_nodes(struct edfs *edfs_context) {
         fclose(in);
     }
     uint32_t offset = htonl(edfs_context->list_offset);
-    notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0);
+    notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     edfs_context->list_offset ++;
     edfs_context->list_timestamp = time(NULL);
 }
@@ -3580,7 +3597,7 @@ int edwork_thread(void *userdata) {
     while (!edfs_context->network_done) {
         if (((edfs_context->resync) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) || (time(NULL) - resync_timestamp > EDWORK_RESYNC_INTERVAL)) {
             uint64_t ack = htonll(1);
-            notify_io(edfs_context, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0);
+            notify_io(edfs_context, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             edfs_context->resync = 0;
             resync_timestamp = time(NULL);
         }
@@ -3596,7 +3613,7 @@ int edwork_thread(void *userdata) {
         if (time(NULL) - edfs_context->list_timestamp > EDWORK_LIST_INTERVAL) {
             edfs_context->list_offset = 0;
             uint32_t offset = htonl(edfs_context->list_offset);
-            notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0);
+            notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             edfs_context->list_offset ++;
             edfs_context->list_timestamp = time(NULL);
         }
