@@ -285,6 +285,7 @@ int main(int argc, char *argv[]) {
     int port = EDWORK_PORT;
     int i;
     static struct fuse_operations edfs_fuse;
+    int initial_friend_set = 0;
 
 #ifdef _WIN32
     static char drive_letter[2];
@@ -337,6 +338,7 @@ int main(int argc, char *argv[]) {
                         exit(-1);
                     }
                     i++;
+                    initial_friend_set = 1;
                     edfs_set_initial_friend(edfs_context, argv[i]);
                 } else
                 if (!strcmp(arg, "resync")) {
@@ -375,7 +377,8 @@ int main(int argc, char *argv[]) {
     }
 
 #ifdef EDFS_DEFAULT_HOST
-    edfs_set_initial_friend(edfs_context, EDFS_DEFAULT_HOST);
+    if (!initial_friend_set)
+        edfs_set_initial_friend(edfs_context, EDFS_DEFAULT_HOST);
 #endif
     if (!edfs_file_exists(edfs_signature_path(edfs_context))) {
         log_info("using default signature");
