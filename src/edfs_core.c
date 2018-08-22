@@ -1662,12 +1662,11 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                 edfs_make_key(edfs_context);
                 EDFS_THREAD_UNLOCK(edfs_context);
                 last_key_timestamp = microseconds();
+                // new proof every second
+                proof_size = 0;
             }
             if (microseconds() - start >= 1000000)
                 use_addr_cache = 0;
-            // reset proof of work every 2 seconds
-            if (microseconds() - last_proof_timestamp >= 2000000)
-                proof_size = 0;
             // end of file, no more quries
             // this is made to avoid an unnecessary edwork query
             if ((filebuf) && (filebuf->file_size > 0)) {
@@ -3036,6 +3035,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         if (magnitude >= 20)
             randomly_ignore = ((edwork_random() % 20) == 1);
 
+        if (randomly_ignore) {
+            log_info("randomly ignoring request");
+            return;
+        }
+
         int is_encrypted = !memcmp(type, "wan4", 4);
 
         if ((!payload) || (payload_size < 64)) {
@@ -3069,11 +3073,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             int i = chunk;
             int size = edfs_reply_chunk(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
             if (size > 0) {
-                if (randomly_ignore) {
-                    log_info("randomly ignoring request");
-                    return;
-                }
-
                 // unsigned char additional_data[32];
                 unsigned char *additional_data = buffer;
                 *(uint64_t *)additional_data = htonll(ino);
@@ -3295,6 +3294,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         if (magnitude >= 20)
             randomly_ignore = ((edwork_random() % 20) == 1);
 
+        if (randomly_ignore) {
+            log_info("randomly ignoring request");
+            return;
+        }
+
         if ((!payload) || (payload_size < 96)) {
             log_warn("HASH packet to small");
             return;
@@ -3326,11 +3330,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             int i = chunk;
             int size = edfs_reply_hash(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
             if (size > 0) {
-                if (randomly_ignore) {
-                    log_info("randomly ignoring request");
-                    return;
-                }
-
                 // unsigned char additional_data[32];
                 unsigned char *additional_data = buffer;
                 *(uint64_t *)additional_data = htonll(ino);
