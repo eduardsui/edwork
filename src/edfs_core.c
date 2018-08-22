@@ -1458,7 +1458,7 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name) {
     char namebuf[4096];
     int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, ensure_name ? namebuf : NULL, ensure_name ? sizeof(namebuf) : 0, NULL, NULL, NULL, NULL);
-    if ((ensure_name) && (strncmp(namebuf, ensure_name, sizeof(namebuf)))) {
+    if ((type) && (ensure_name) && (strncmp(namebuf, ensure_name, sizeof(namebuf)))) {
         log_error("%s collides with %s", ensure_name, namebuf);
         return 0;
     }
