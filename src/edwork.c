@@ -571,7 +571,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
     }
     uint64_t rand = edwork_random() % data->clients_count;
     int wrapped_to_first = 0;
-    time_t threshold = time(NULL) - 1200;
+    time_t threshold = time(NULL) - 120;
     if ((ptr) && (len > 0)) {
         unsigned int i;
         if ((clientaddr) && (clientaddr_len > 0)) {

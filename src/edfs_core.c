@@ -2268,14 +2268,13 @@ int edfs_write_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *buf,
 
 int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewritebuf *fbuf) {
     if ((fbuf) && (fbuf->size)) {
-        if (edfs_context->mutex_initialized)
-            thread_mutex_lock(&edfs_context->io_lock);
-
         int size = fbuf->size;
         const char *p = (const char *)fbuf->p;
         int err = 0;
         int64_t offset = fbuf->offset - fbuf->size;
         int64_t initial_filesize = get_size_json(edfs_context, ino);
+        if (edfs_context->mutex_initialized)
+            thread_mutex_lock(&edfs_context->io_lock);
         int64_t filesize = initial_filesize;
         fbuf->file_size = filesize;
         while (size > 0) {
@@ -2288,6 +2287,9 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
             offset += err;
             fbuf->written_data = 1;
         }
+        if (edfs_context->mutex_initialized)
+            thread_mutex_unlock(&edfs_context->io_lock);
+
         if (offset > initial_filesize) {
              edfs_set_size(edfs_context, ino, filesize);
              fbuf->file_size = filesize;
@@ -2296,9 +2298,6 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
         fbuf->p = NULL;
         fbuf->size = 0;
         fbuf->offset = 0;
-
-        if (edfs_context->mutex_initialized)
-            thread_mutex_unlock(&edfs_context->io_lock);
 
         if (err < 0)
             return err;
@@ -3182,7 +3181,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             err = edwork_process_data(edfs_context, payload, payload_size, 1, NULL, 0);
         if (err > 0) {
             edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
-#ifdef EDWORK_ACK_DATA
+#ifndef EDWORK_NO_ACK_DATA
             *(uint64_t *)buffer = htonll(sequence);
             if (edwork_send_to_peer(edwork, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen) <= 0) {
                 log_error("error sending ACK");
