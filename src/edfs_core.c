@@ -2490,6 +2490,19 @@ int recursive_rmdir(const char *path) {
     return r;
 }
 
+void rehash_parent(struct edfs *edfs_context, edfs_ino_t parent) {
+    char parentb64name[MAX_B64_HASH_LEN];
+    char fullpath[MAX_PATH_LEN];
+
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%s", edfs_context->working_directory, computename(parent, parentb64name));
+
+    unsigned char new_hash[32];
+    pathhash(edfs_context, fullpath, new_hash);
+    const char *update_data[] = {"iostamp", (const char *)new_hash, NULL, NULL};
+    edfs_update_json(edfs_context, parent, update_data);
+}
+
 int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, int recursive, uint64_t generation) {
     char fullpath[MAX_PATH_LEN];
     char noderef[MAX_PATH_LEN];
@@ -2514,6 +2527,8 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
         noderef[0] = 0;
         snprintf(noderef, MAX_PATH_LEN, "%s/%s", computename(parent, parentb64name), b64name);
         unlink(adjustpath(edfs_context, fullpath, noderef));
+
+        rehash_parent(edfs_context, parent);
     }
 
     // generate some noise for signing
