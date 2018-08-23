@@ -278,7 +278,12 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse) {
 }
 
 int main(int argc, char *argv[]) {
+#ifdef _WIN32
+    char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", NULL};
+    struct fuse_args args = FUSE_ARGS_INIT(5, dokan_argv);
+#else
     struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
+#endif
     struct fuse_chan *ch;
     char *mountpoint = NULL;
     int err = -1;

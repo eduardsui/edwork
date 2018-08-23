@@ -166,6 +166,7 @@ struct filewritebuf {
     int written_data;
 
     int check_hash;
+    int in_read;
 };
 
 struct edwork_io {
@@ -2005,8 +2006,10 @@ int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t of
     char b64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
 
-    if (filebuf)
+    if (filebuf) {
+        filebuf->in_read = 1;
         edfs_flush_chunk(edfs_context, ino, filebuf);
+    }
 
     adjustpath(edfs_context, fullpath, computename(ino, b64name));
 
@@ -2021,6 +2024,8 @@ int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t of
             if ((bytes_read != 0) || (read_bytes == 0))
                 break;
             log_error("read chunk in %s, errno %i", fullpath, (int)-read_bytes);
+            if (filebuf)
+                filebuf->in_read = 0;
             return read_bytes;
         }
         bytes_read += read_bytes;
@@ -2029,6 +2034,8 @@ int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t of
         offset = 0;
         chunk++;
     }
+    if (filebuf)
+        filebuf->in_read = 0;
     return bytes_read;
 }
 
@@ -2382,6 +2389,15 @@ int edfs_write(struct edfs *edfs_context, edfs_ino_t ino, const char *buf, size_
 
 int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
     if (fbuf) {
+        while (fbuf->in_read) {
+            log_trace("waiting for read operation");
+#ifdef _WIN32
+            Sleep(5);
+#else
+            usleep(5000);
+#endif
+        }
+
         edfs_flush_chunk(edfs_context, fbuf->ino, fbuf);
         if (fbuf->written_data) {
             unsigned char hash[32];
