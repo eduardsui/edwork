@@ -2714,7 +2714,6 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     do_write = 0;
                     written = 0;
                     log_warn("refused to update descriptor: received version is older (%" PRIu64 " > %" PRIu64 ")", current_generation, generation);
-                    written = -1;
                 } else
                 if (current_parent > parent) {
                     do_write = 0;
@@ -3257,16 +3256,16 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         // json payload
         uint64_t ino;
         int err = edwork_process_json(edfs_context, payload, payload_size, &ino);
+        *(uint64_t *)buffer = htonll(ino);
         if (err > 0) {
-            *(uint64_t *)buffer = htonll(sequence);
             if (edwork_send_to_peer(edwork, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen) <= 0) {
                 log_error("error sending ACK");
                 return;
             }
             log_info("DESC acknoledged");
-            // rebroadcast without acks 3 seconds
+            // rebroadcast with acks 3 seconds
             if (timestamp > now - 3000000UL)
-                edwork_broadcast_except(edwork, "desc", payload, payload_size, 2, EDWORK_NODES, clientaddr, clientaddrlen, timestamp, ino);
+                edwork_broadcast_except(edwork, "desc", payload, payload_size, EDWORK_DATA_NODES, EDWORK_NODES, clientaddr, clientaddrlen, timestamp, 0);
         } else {
             if (!err) {
                 if (edwork_send_to_peer(edwork, "nack", buffer, sizeof(uint64_t), clientaddr, clientaddrlen) <= 0) {
