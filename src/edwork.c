@@ -63,6 +63,9 @@ uint64_t switchorder(uint64_t input);
 
 #define EDWORK_MAX_SPENT_DB             0x10000
 
+// max 128 bytes
+#define EDWOR_MAX_LAN_BROADCAST_SIZE    128
+
 struct client_data {
     struct sockaddr_in clientaddr;
     int clientlen;
@@ -588,24 +591,29 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                 return 0;
             }
         }
+        int lan_broadcast = 1;
+        // exclude data and large packages from broadcast
+        if ((len > EDWOR_MAX_LAN_BROADCAST_SIZE) || ((type[0] == 'd') && (type[1] == 'a') && (type[2] == 't')))
+            lan_broadcast = 0;
         if ((data->clients_count < max_nodes) || (max_nodes <= 0)) {
             i = rand % data->clients_count;
             unsigned int send_to = 0;
             while (send_to < data->clients_count) {
-                if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
-                    log_debug("not broadcasting to same client");
-                } else
-                if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
-                    if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) <= 0) {
+                if ((i) || (lan_broadcast)) {
+                    if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
+                        log_debug("not broadcasting to same client");
+                    } else
+                    if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
+                        if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) <= 0) {
 #ifdef _WIN32
-                        log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+                            log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #else
-                        log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+                            log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #endif
-                        data->clients[i].last_seen = threshold - 1;
+                            data->clients[i].last_seen = threshold - 1;
+                        }
                     }
                 }
-
                 i ++;
                 if (i >= data->clients_count) {
                     i = 0;
@@ -621,20 +629,22 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
             int sent_to = 0;
             i = (unsigned int)rand;
             do {
-                if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
-                    sent_to ++;
-                    log_debug("not broadcasting to same client");
-                } else
-                if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
-                    if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) > 0) {
+                if ((i) || (lan_broadcast)) {
+                    if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
                         sent_to ++;
-                    } else {
+                        log_debug("not broadcasting to same client");
+                    } else
+                    if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
+                        if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) > 0) {
+                            sent_to ++;
+                        } else {
 #ifdef _WIN32
-                        log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+                            log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #else
-                        log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+                            log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #endif
-                        data->clients[i].last_seen = threshold - 1;
+                            data->clients[i].last_seen = threshold - 1;
+                        }
                     }
                 }
 
