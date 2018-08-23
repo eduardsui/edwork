@@ -2548,8 +2548,8 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
         return 0;
     }
 
-    strcat(fullpath, ".json");
 #ifdef EDFS_USE_HARD_DELETE
+    strcat(fullpath, ".json");
     unlink(fullpath);
 #else
     if (!is_broadcast)
@@ -2559,10 +2559,11 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
         noderef[0] = 0;
         snprintf(noderef, MAX_PATH_LEN, "%s/%s", computename(parent, parentb64name), b64name);
         unlink(adjustpath(edfs_context, fullpath, noderef));
-
-        rehash_parent(edfs_context, parent);
+        if (!is_broadcast)
+            rehash_parent(edfs_context, parent);
     }
 
+#ifdef EDFS_USE_HARD_DELETE
     // generate some noise for signing
     unsigned char hash[32];
     SHA256_CTX ctx;
@@ -2578,7 +2579,6 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
     log_info("broadcasting DEL request for %s (generation %" PRIu64 ")", b64name, generation);
     *(uint64_t *)(hash + 16) = htonll(generation);
 
-#ifdef EDFS_USE_HARD_DELETE
     notify_io(edfs_context, "del\x00", hash, 32, NULL, 0, 1, 1, inode, NULL, 0, 0, NULL, 0, NULL, NULL);
 #endif
     return 1;
@@ -2742,7 +2742,9 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     written = -1;
                     log_warn("refused to update descriptor: inode type change is not supported");
                 }
-            }
+            } else
+            if (deleted)
+                do_write = 0;
             if (do_write) {
                 log_info("sync descriptor for inode %s", b64name);
                 if (deleted) {
