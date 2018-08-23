@@ -1185,6 +1185,16 @@ int read_file_json(struct edfs *edfs_context, uint64_t inode, uint64_t *parent, 
             return 0;
     }
     JSON_Object *root_object = json_value_get_object(root_value);
+
+    if (generation)
+        *generation = (uint64_t)json_object_get_number(root_object, "version");
+
+    if ((int)json_object_get_number(root_object, "deleted")) {
+        // save only generation for deleted objects
+        json_value_free(root_value);
+        return 0;
+    }
+
     int type = (int)json_object_get_number(root_object, "type");
     if ((add_directory) || ((namebuf) && (len_namebuf > 0))) {
         const char *name = json_object_get_string(root_object, "name");
@@ -1213,8 +1223,6 @@ int read_file_json(struct edfs *edfs_context, uint64_t inode, uint64_t *parent, 
     if (modified)
         *modified = (time_t)json_object_get_number(root_object, "modified");
 
-    if (generation)
-        *generation = (uint64_t)json_object_get_number(root_object, "version");
     if (iohash) {
         const char *iohash_mime = json_object_get_string(root_object, "iostamp");
         if (iohash_mime) {
@@ -1229,7 +1237,6 @@ int read_file_json(struct edfs *edfs_context, uint64_t inode, uint64_t *parent, 
     }
 
     json_value_free(root_value);
-
     return type;
 }
 
@@ -1420,7 +1427,6 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     uint64_t inode = computeinode(parent, name);
     if (inode_ref)
         *inode_ref = inode;
-
     
     int type = read_file_json(edfs_context, parent, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, old_hash);
     if (!type)
@@ -1433,7 +1439,12 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     else
         attr |= 0644;
 
-    write_json(edfs_context, edfs_context->working_directory, name, 0, inode, parent, attr, NULL, 0, 0, 0, 0);
+    uint64_t version = (uint64_t)0;
+
+    // increment version for previously deleted object, if any
+    read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &version, NULL);
+
+    write_json(edfs_context, edfs_context->working_directory, name, 0, inode, parent, attr, NULL, 0, 0, 0, version);
     
     adjustpath(edfs_context, fullpath, computename(parent, parentb64name));
 
@@ -2503,7 +2514,7 @@ void rehash_parent(struct edfs *edfs_context, edfs_ino_t parent) {
     edfs_update_json(edfs_context, parent, update_data);
 }
 
-int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, int recursive, uint64_t generation) {
+int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, int recursive, uint64_t generation, int is_broadcast) {
     char fullpath[MAX_PATH_LEN];
     char noderef[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
@@ -2522,7 +2533,12 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
     }
 
     strcat(fullpath, ".json");
+#ifdef EDFS_USE_HARD_DELETE
     unlink(fullpath);
+#else
+    if (!is_broadcast)
+        edfs_update_json_number(edfs_context, inode, "deleted", 1);
+#endif
     if (parent != 0) {
         noderef[0] = 0;
         snprintf(noderef, MAX_PATH_LEN, "%s/%s", computename(parent, parentb64name), b64name);
@@ -2546,8 +2562,9 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
     log_info("broadcasting DEL request for %s (generation %" PRIu64 ")", b64name, generation);
     *(uint64_t *)(hash + 16) = htonll(generation);
 
-    generation = htonll(generation);
+#ifdef EDFS_USE_HARD_DELETE
     notify_io(edfs_context, "del\x00", hash, 32, NULL, 0, 1, 1, inode, NULL, 0, 0, NULL, 0, NULL, NULL);
+#endif
     return 1;
 }
 
@@ -2557,7 +2574,7 @@ int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t in
     if (!type)
         return -ENOENT;
     if (type & S_IFDIR) {
-        if (!remove_node(edfs_context, parent, inode, 0, generation))
+        if (!remove_node(edfs_context, parent, inode, 0, generation, 0))
             return -errno;
         else
             return 0;
@@ -2580,7 +2597,7 @@ int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t i
     if (type & S_IFDIR)
         return -EISDIR;
     else
-    if (!remove_node(edfs_context, parent, inode, 1, generation))
+    if (!remove_node(edfs_context, parent, inode, 1, generation, 0))
         return -errno;
 
     return 0;
@@ -2680,6 +2697,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
         int type = (int)json_object_get_number(root_object, "type");
         uint64_t timestamp = (uint64_t)json_object_get_number(root_object, "timestamp");
         uint64_t generation = (uint64_t)json_object_get_number(root_object, "version");
+        int deleted = (int)json_object_get_number(root_object, "deleted");
         if ((inode) && (name) && (b64name) && (parent) && (type) && (timestamp)) {
             uint64_t current_parent = 0;
             time_t current_modified = 0;
@@ -2712,17 +2730,24 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
             }
             if (do_write) {
                 log_info("sync descriptor for inode %s", b64name);
+                if (deleted) {
+                    if (type & S_IFDIR)
+                        remove_node(edfs_context, parent, inode, 0, generation, 1);
+                    else
+                        remove_node(edfs_context, parent, inode, 1, generation, 1);
+                }
                 if (edfs_context->mutex_initialized)
                     thread_mutex_lock(&edfs_context->io_lock);
                 if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)payload, size , ".json", 0, NULL, NULL, NULL, NULL) != size ) {
                     log_warn("error writing file %s", b64name);
                     written = -1;
                 } else
-                if (!current_type)
+                if ((!current_type) && (!deleted))
                     makesyncnode(edfs_context, parentb64name, b64name, name);
                 if (edfs_context->mutex_initialized)
                     thread_mutex_unlock(&edfs_context->io_lock);
-            } else {
+            } else
+            if (!deleted) {
                 char path[MAX_PATH_LEN];
                 snprintf(path, sizeof(path), "%s/%s/%s", edfs_context->working_directory, parentb64name, b64name);
                 if (!edfs_file_exists(path)) {
@@ -2965,9 +2990,9 @@ int edwork_delete(struct edfs *edfs_context, const unsigned char *payload, int s
     }
 
     if (type & S_IFDIR)
-        return remove_node(edfs_context, parent, inode, 0, generation);
+        return remove_node(edfs_context, parent, inode, 0, generation, 0);
 
-    return remove_node(edfs_context, parent, inode, 1, generation);
+    return remove_node(edfs_context, parent, inode, 1, generation, 0);
 }
 
 int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int size, unsigned char *out, const unsigned char *dest_i_am, const unsigned char *src_i_am, const unsigned char *shared_secret) {
@@ -3241,7 +3266,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_info("DESC acknoledged");
             // rebroadcast without acks 3 seconds
             if (timestamp > now - 3000000UL)
-                edwork_broadcast_except(edwork, "desc", payload, payload_size, 0, EDWORK_NODES, clientaddr, clientaddrlen, timestamp, ino);
+                edwork_broadcast_except(edwork, "desc", payload, payload_size, EDWORK_NODES, EDWORK_NODES, clientaddr, clientaddrlen, timestamp, ino);
         } else {
             if (!err) {
                 if (edwork_send_to_peer(edwork, "nack", buffer, sizeof(uint64_t), clientaddr, clientaddrlen) <= 0) {
