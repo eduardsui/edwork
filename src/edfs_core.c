@@ -249,6 +249,8 @@ struct edfs {
 int sign(struct edfs *edfs_context, const char *str, int len, unsigned char *hash, int *info_key_type);
 int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewritebuf *fi);
 unsigned int edwork_resync(struct edfs *edfs_context, void *clientaddr, int clientaddrlen);
+unsigned int edwork_resync_desc(struct edfs *edfs_context, uint64_t inode, void *clientaddr, int clientaddrlen);
+unsigned int edwork_resync_dir_desc(struct edfs *edfs_context, uint64_t inode, void *clientaddr, int clientaddrlen);
 int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int size, unsigned char *out, const unsigned char *dest_i_am, const unsigned char *src_i_am, const unsigned char *shared_secret);
 
 uint64_t microseconds() {
@@ -950,7 +952,6 @@ int edfs_write_file(struct edfs *edfs_context, const char *base_path, const char
 }
 
 int edfs_unlink_file(struct edfs *edfs_context, const char *base_path, const char *name) {
-    FILE *f;
     char fullpath[MAX_PATH_LEN];
     const char *fname;
 
@@ -1059,7 +1060,6 @@ void write_json(struct edfs *edfs_context, const char *base_path, const char *na
     JSON_Value *root_value = json_value_init_object();
     JSON_Object *root_object = json_value_get_object(root_value);
     char *serialized_string = NULL;
-    char *serialized_signature = NULL;
     unsigned char sigdata[64];
     char b64name[MAX_B64_HASH_LEN];
     char b64parent[MAX_B64_HASH_LEN];
@@ -1116,8 +1116,6 @@ void write_json(struct edfs *edfs_context, const char *base_path, const char *na
 
 JSON_Value *read_json(struct edfs *edfs_context, const char *base_path, uint64_t inode) {
     char data[MAX_INODE_DESCRIPTOR_SIZE];
-    unsigned char sig_data[MAX_KEY_SIZE];
-    unsigned char sig_hash[MAX_KEY_SIZE];
 
     char b64name[MAX_B64_HASH_LEN];
     computename(inode, b64name);
@@ -1365,16 +1363,11 @@ int update_file_json(struct edfs *edfs_context, uint64_t inode, edfs_stat *attr,
     return 1;
 }
 
-int makesyncnode(struct edfs *edfs_context, const char *parentb64name, const char *b64name, const char *name, int attr) {
+int makesyncnode(struct edfs *edfs_context, const char *parentb64name, const char *b64name, const char *name) {
     char fullpath[MAX_PATH_LEN];
     
     // if directory exists, silently ignore it
     EDFS_MKDIR(adjustpath(edfs_context, fullpath, b64name), 0755);
-
-    if (attr & S_IFDIR)
-        attr |= 0755;
-    else
-        attr |= 0644;
         
     // silently try to make parent node (if not available)
     EDFS_MKDIR(adjustpath(edfs_context, fullpath, parentb64name), 0755);
@@ -1390,14 +1383,48 @@ int makesyncnode(struct edfs *edfs_context, const char *parentb64name, const cha
     return edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 32, NULL, 1, NULL, NULL, NULL, NULL);
 }
 
+int pathhash(struct edfs *edfs_context, const char *path, unsigned char *hash) {
+    tinydir_dir dir;
+    int r = -1;
+    SHA256_CTX ctx;
+    char buf[0x100];
+
+    sha256_init(&ctx);
+
+    if (!tinydir_open_sorted(&dir, path)) {
+        r = 0;
+        int  i = 0;
+        while ((!r) && (i < dir.n_files)) {
+            tinydir_file file;
+            tinydir_readfile_n(&dir, &file, i++);
+            if (!file.is_dir) {
+                snprintf(buf, sizeof(buf), "%s/%s", path, file.name);
+                if (verify_file(edfs_context, path, file.name))
+                    sha256_update(&ctx, (const BYTE *)file.name, strlen(file.name));
+            }
+            tinydir_next(&dir);
+        }
+        tinydir_close(&dir);
+    }
+    sha256_final(&ctx, hash);
+    return r;
+}
+
 int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int attr, edfs_ino_t *inode_ref) {
     char fullpath[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
     char parentb64name[MAX_B64_HASH_LEN];
+    unsigned char old_hash[32];
+    unsigned char new_hash[32];
     
     uint64_t inode = computeinode(parent, name);
     if (inode_ref)
         *inode_ref = inode;
+
+    
+    int type = read_file_json(edfs_context, parent, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, old_hash);
+    if (!type)
+        return -EPERM;
 
     int err = EDFS_MKDIR(adjustpath(edfs_context, fullpath, computename(inode, b64name)), 0755);
 
@@ -1410,15 +1437,24 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     
     adjustpath(edfs_context, fullpath, computename(parent, parentb64name));
 
-    unsigned char hash[32];
+    unsigned char hash[40];
     SHA256_CTX ctx;
+
+    uint64_t now = htonll(microseconds());
+    memcpy(hash, &now, sizeof(uint64_t));
 
     sha256_init(&ctx);
     sha256_update(&ctx, (const BYTE *)&name, strlen(name));
     sha256_update(&ctx, (const BYTE *)&parentb64name, strlen(parentb64name));
-    sha256_final(&ctx, hash);
+    sha256_final(&ctx, hash + 8);
 
-    err = edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 32, NULL, 1, NULL, NULL, NULL, NULL);
+    err = edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 40, NULL, 1, NULL, NULL, NULL, NULL);
+
+    if (err > 0) {
+        pathhash(edfs_context, fullpath, new_hash);
+        const char *update_data[] = {"iostamp", (const char *)new_hash, NULL, NULL};
+        edfs_update_json(edfs_context, parent, update_data);
+    }
     return err;
 }
 
@@ -1456,7 +1492,7 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
 }
 
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name) {
-    char namebuf[4096];
+    char namebuf[MAX_PATH_LEN];
     int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, ensure_name ? namebuf : NULL, ensure_name ? sizeof(namebuf) : 0, NULL, NULL, NULL, NULL);
     if ((type) && (ensure_name) && (strncmp(namebuf, ensure_name, sizeof(namebuf)))) {
         log_error("%s collides with %s", ensure_name, namebuf);
@@ -1619,7 +1655,6 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     int i = 0;
     uint64_t start = microseconds();
     uint64_t last_key_timestamp = start;
-    uint64_t last_proof_timestamp = start;
     uint64_t forward_chunk = chunk + 10;
     uint64_t last_file_chunk = filebuf->file_size / BLOCK_SIZE;
     uint32_t sig_hash = 0;
@@ -1708,9 +1743,6 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
 }
 
 int read_chunk(struct edfs *edfs_context, const char *path, int64_t chunk, char *buf, size_t size, edfs_ino_t ino, int64_t offset, struct filewritebuf *filebuf) {
-    size_t written = 0;
-    size_t block_written;
-
     if (offset > 0) {
         int max_size = BLOCK_SIZE - offset;
         if (size > max_size)
@@ -1754,7 +1786,6 @@ int edfs_update_chain(struct edfs *edfs_context, uint64_t ino, int64_t file_size
     char fullpath[MAX_PATH_LEN];
     char fullpath2[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
-    char hash_file[0x100];
     unsigned char signature_data[64];
     uint64_t i;
 
@@ -1973,7 +2004,6 @@ int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t of
     size_t bytes_read = 0;
 
     char *buf = ptr;
-    int orig_size=  size;
     while (size > 0) {
         int read_bytes = read_chunk(edfs_context, fullpath, chunk, buf, size, ino, offset, filebuf);
         if (read_bytes <= 0) {
@@ -2032,7 +2062,6 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
 }
 
 int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int64_t chunk, const char *buf, size_t size, int64_t offset, int64_t *filesize) {
-    int written = 0;
     int block_written;
     int written_bytes;
 
@@ -2133,7 +2162,6 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
 
 int edfs_write_block(struct edfs *edfs_context, uint64_t inode, int64_t chunk, const unsigned char *data, size_t size, time_t timestamp) {
     char fullpath[MAX_PATH_LEN];
-    char chunkpath[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
     adjustpath2(edfs_context, fullpath, computename(inode, b64name), chunk);
 
@@ -2181,7 +2209,6 @@ int edfs_write_block(struct edfs *edfs_context, uint64_t inode, int64_t chunk, c
 
 int edfs_write_hash_block(struct edfs *edfs_context, uint64_t inode, int64_t chunk, const unsigned char *data, size_t size, time_t timestamp) {
     char fullpath[MAX_PATH_LEN];
-    char chunkpath[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
     adjustpath3(edfs_context, fullpath, computename(inode, b64name), chunk);
 
@@ -2374,8 +2401,44 @@ int edfs_mkdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name, m
 }
 
 struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
+    unsigned char hash[32];
+    static unsigned char null_hash[32];
+    int type = read_file_json(edfs_context, ino, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    if ((type & S_IFDIR) == 0)
+        return NULL;
+
     struct dirbuf *buf = (struct dirbuf *)malloc(sizeof(struct dirbuf));
     if (buf) {
+        char path[MAX_PATH_LEN];
+        char b64name[MAX_B64_HASH_LEN];
+        unsigned char computed_hash[32];
+        uint64_t network_inode = htonll(ino);
+        if (memcmp(hash, null_hash, 32)) {
+            snprintf(path, sizeof(path), "%s/%s", edfs_context->working_directory, computename(ino, b64name));
+            unsigned char proof_cache[1024];
+            int proof_size = 0;
+
+            uint64_t start = microseconds();
+            do {
+                pathhash(edfs_context, path, computed_hash);
+                if (!memcmp(hash, computed_hash, 32)) {
+                    log_trace("directory hash ok");
+                    break;
+                }
+                notify_io(edfs_context, "roo2", (const unsigned char *)&network_inode, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, proof_cache, &proof_size);
+#ifdef _WIN32
+                Sleep(10);
+#else
+                usleep(10000);
+#endif
+                if (microseconds() - start >= EDWORK_MAX_DIR_RETRY_TIMEOUT * 1000) {
+                    log_warn("directory read timeout, using last known version");
+                    break;
+                }
+            } while (1);
+
+        }
+
         memset(buf, 0, sizeof(struct dirbuf));
         buf->ino = ino;
     }
@@ -2601,9 +2664,6 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
         uint64_t parent = unpacked_ino(parentb64name);
         int type = (int)json_object_get_number(root_object, "type");
         uint64_t timestamp = (uint64_t)json_object_get_number(root_object, "timestamp");
-        time_t modified = (time_t)json_object_get_number(root_object, "modified");
-        time_t created = (time_t)json_object_get_number(root_object, "created");
-        int64_t desc_size = (int64_t)json_object_get_number(root_object, "size");
         uint64_t generation = (uint64_t)json_object_get_number(root_object, "version");
         if ((inode) && (name) && (b64name) && (parent) && (type) && (timestamp)) {
             uint64_t current_parent = 0;
@@ -2644,9 +2704,19 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     written = -1;
                 } else
                 if (!current_type)
-                    makesyncnode(edfs_context, parentb64name, b64name, name, type);
+                    makesyncnode(edfs_context, parentb64name, b64name, name);
                 if (edfs_context->mutex_initialized)
                     thread_mutex_unlock(&edfs_context->io_lock);
+            } else {
+                char path[MAX_PATH_LEN];
+                snprintf(path, sizeof(path), "%s/%s/%s", edfs_context->working_directory, parentb64name, b64name);
+                if (!edfs_file_exists(path)) {
+                    if (edfs_context->mutex_initialized)
+                        thread_mutex_lock(&edfs_context->io_lock);
+                    makesyncnode(edfs_context, parentb64name, b64name, name);
+                    if (edfs_context->mutex_initialized)
+                        thread_mutex_unlock(&edfs_context->io_lock);
+                }
             }
         } else {
             log_error("refused to update descriptor: received JSON is missing at least one required field");
@@ -2851,7 +2921,6 @@ int edwork_delete(struct edfs *edfs_context, const unsigned char *payload, int s
     // 64 - 4
 
     int buffer_size = size - 60;
-    int written = 0;
     if (!verify(edfs_context, (const char *)buffer, buffer_size, payload, 64)) {
         log_warn("DEL signature verification failed, dropping");
         return 0;
@@ -2983,6 +3052,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "addr", 4)) {
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         log_info("ADDR list received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         if (time(NULL) - edfs_context->list_timestamp > 10) {
             log_warn("dropping non-requested ADDR");
@@ -3003,6 +3073,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_error("invalid payload");
             return;
         }
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         edwork_confirm_seq(edwork, ntohll(*(uint64_t *)payload), 1);
         return;
     }
@@ -3012,10 +3083,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_error("invalid payload");
             return;
         }
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         edwork_confirm_seq(edwork, ntohll(*(uint64_t *)payload), 1);
         return;
     }
-    if ((!memcmp(type, "want", 4)) || (!memcmp(type, "wan3", 4)) || (!memcmp(type, "wan4", 4)))  {
+    if ((!memcmp(type, "want", 4)) || (!memcmp(type, "wan3", 4)) || (!memcmp(type, "wan4", 4))) {
         log_info("WANT received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         int magnitude = edwork_magnitude(edwork);
         int randomly_ignore = 0;
@@ -3069,7 +3141,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         }
 
         if (ino > 0) {
-            int i = chunk;
             int size = edfs_reply_chunk(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
             if (size > 0) {
                 // unsigned char additional_data[32];
@@ -3142,6 +3213,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     }
     if (!memcmp(type, "desc", 4)) {
         log_info("DESC received (%s)", edwork_addr_ipv4(clientaddr));
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         // json payload
         uint64_t ino;
         int err = edwork_process_json(edfs_context, payload, payload_size, &ino);
@@ -3155,7 +3227,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             // rebroadcast without acks 3 seconds
             if (timestamp > now - 3000000UL)
                 edwork_broadcast_except(edwork, "desc", payload, payload_size, 0, EDWORK_NODES, clientaddr, clientaddrlen, timestamp, ino);
-            edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         } else {
             if (!err) {
                 if (edwork_send_to_peer(edwork, "nack", buffer, sizeof(uint64_t), clientaddr, clientaddrlen) <= 0) {
@@ -3170,6 +3241,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     if (!memcmp(type, "data", 4)) {
         log_info("DATA received (%s)", edwork_addr_ipv4(clientaddr));
         int err;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         if (EDFS_DATA_BROADCAST_ENCRYPTED) {
             int size = edwork_decrypt(edfs_context, payload, payload_size, buffer, who_am_i, NULL, NULL);
             if (size <= 0) {
@@ -3180,7 +3252,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         }  else
             err = edwork_process_data(edfs_context, payload, payload_size, 1, NULL, 0);
         if (err > 0) {
-            edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
 #ifndef EDWORK_NO_ACK_DATA
             *(uint64_t *)buffer = htonll(sequence);
             if (edwork_send_to_peer(edwork, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen) <= 0) {
@@ -3257,12 +3328,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     if (!memcmp(type, "root", 4)) {
         log_info("ROOT request received (%s)", edwork_addr_ipv4(clientaddr));
         if (payload_size < 8) {
-            edwork_send_to_peer(edwork, "nack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen);
             log_warn("invalid ROOT request");
             return;
         }
         if (!edwork_check_proof_of_work(edwork, payload, payload_size, 8, timestamp, EDWORK_ROOT_WORK_LEVEL, EDWORK_ROOT_WORK_PREFIX, who_am_i)) {
-            edwork_send_to_peer(edwork, "nack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen);
             log_warn("no valid proof of work");
             return;
         }
@@ -3271,6 +3340,34 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         *(uint64_t *)buffer = htonll(1);
         edwork_send_to_peer(edwork, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen);
         log_info("ROOT acknoledged");
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
+        return;
+    }
+    if (!memcmp(type, "roo2", 4)) {
+        log_info("ROO2 request received (%s)", edwork_addr_ipv4(clientaddr));
+        if (payload_size < 8) {
+            log_warn("invalid ROO2 request");
+            return;
+        }
+        if (!edwork_check_proof_of_work(edwork, payload, payload_size, 8, timestamp, EDWORK_ROOT_WORK_LEVEL, EDWORK_ROOT_WORK_PREFIX, who_am_i)) {
+            log_warn("no valid proof of work");
+            return;
+        }
+        edwork_resync_dir_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen);
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
+        return;
+    }
+    if (!memcmp(type, "roo3", 4)) {
+        log_info("ROO3 request received (%s)", edwork_addr_ipv4(clientaddr));
+        if (payload_size < 8) {
+            log_warn("invalid ROO3 request");
+            return;
+        }
+        if (!edwork_check_proof_of_work(edwork, payload, payload_size, 8, timestamp, EDWORK_ROOT_WORK_LEVEL, EDWORK_ROOT_WORK_PREFIX, who_am_i)) {
+            log_warn("no valid proof of work");
+            return;
+        }
+        edwork_resync_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen);
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         return;
     }
@@ -3293,6 +3390,8 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         if (magnitude >= 20)
             randomly_ignore = ((edwork_random() % 20) == 1);
 
+        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
+
         if (randomly_ignore) {
             log_info("randomly ignoring request");
             return;
@@ -3303,7 +3402,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             return;
         }
 
-        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         uint64_t ino = ntohll(*(uint64_t *)payload);
         uint64_t chunk = ntohll(*(uint64_t *)(payload + 8));
 
@@ -3326,7 +3424,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         }
 
         if (ino > 0) {
-            int i = chunk;
             int size = edfs_reply_hash(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
             if (size > 0) {
                 // unsigned char additional_data[32];
@@ -3370,6 +3467,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         }
 
         char b64name[MAX_B64_HASH_LEN];
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         int len = edfs_read_file(edfs_context, edfs_context->working_directory, computename(ino, b64name), buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0);
         if (len > 0) {
             if (edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen) <= 0)
@@ -3500,7 +3598,7 @@ unsigned int edwork_resync(struct edfs *edfs_context, void *clientaddr, int clie
     tinydir_dir dir;
     
     if (tinydir_open(&dir, edfs_context->working_directory)) {
-        log_error("error opening log directory %s", edfs_context->working_directory);
+        log_error("error opening edfs directory %s", edfs_context->working_directory);
         return 0;
     }
     if ((clientaddr) && (clientaddrlen))
@@ -3509,15 +3607,13 @@ unsigned int edwork_resync(struct edfs *edfs_context, void *clientaddr, int clie
         log_info("resync requested by local");
 
     unsigned int rebroadcast_count = 0;
-    unsigned char jumbo_buf[0xA000];
-    unsigned int jumbo_size = 0;
     while (dir.has_next) {
         tinydir_file file;
         tinydir_readfile(&dir, &file);
 
         if (!file.is_dir) {
             // do not send root object
-            if ((string_ends_with(file.name, ".json", 5)) && (strcmp(file.name, "AAAAAAAAAAE.json")))  {
+            if ((string_ends_with(file.name, ".json", 5)) && (strcmp(file.name, "AAAAAAAAAAE.json"))) {
                 unsigned char buffer[EDWORK_PACKET_SIZE];
                 int len = edfs_read_file(edfs_context, edfs_context->working_directory, file.name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
                 if (len > 0) {
@@ -3536,6 +3632,60 @@ unsigned int edwork_resync(struct edfs *edfs_context, void *clientaddr, int clie
     return rebroadcast_count;
 }
 
+unsigned int edwork_resync_desc(struct edfs *edfs_context, uint64_t inode, void *clientaddr, int clientaddrlen) {
+    unsigned char buffer[EDWORK_PACKET_SIZE];
+    char b64name[MAX_B64_HASH_LEN];
+
+    int len = edfs_read_file(edfs_context, edfs_context->working_directory, computename(inode, b64name), buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0);
+    if (len > 0) {
+        if ((clientaddr) && (clientaddrlen))
+            edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen);
+        else
+            edwork_broadcast(edfs_context->edwork, "desc", buffer, len, 0, EDWORK_NODES, 0);
+        return 1;
+    } else
+        log_debug("error");
+    return 0;
+}
+
+unsigned int edwork_resync_dir_desc(struct edfs *edfs_context, uint64_t inode, void *clientaddr, int clientaddrlen) {
+    unsigned char buffer[EDWORK_PACKET_SIZE];
+    char b64name[MAX_B64_HASH_LEN];
+    char path[MAX_PATH_LEN];
+
+    tinydir_dir dir;
+
+    snprintf(path, sizeof(path), "%s/%s", edfs_context->working_directory, computename(inode, b64name));
+    if (tinydir_open(&dir, path)) {
+        log_error("error opening directory %s", path);
+        return 0;
+    }
+    if ((clientaddr) && (clientaddrlen))
+        log_info("resync requested by remote");
+    else
+        log_info("resync requested by local");
+
+    unsigned int rebroadcast_count = 0;
+    while (dir.has_next) {
+        tinydir_file file;
+        tinydir_readfile(&dir, &file);
+
+        if (!file.is_dir) {
+            int len = edfs_read_file(edfs_context, edfs_context->working_directory, file.name, buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0);
+            if (len > 0) {
+                if ((clientaddr) && (clientaddrlen)) {
+                    edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen);
+                    usleep(500);
+                } else
+                    edwork_broadcast(edfs_context->edwork, "desc", buffer, len, 0, EDWORK_NODES, 0);
+            } else
+                log_debug("error");
+        }
+        tinydir_next(&dir);
+    }
+    tinydir_close(&dir);
+    return rebroadcast_count;
+}
 
 int edwork_thread(void *userdata) {
     edwork_init();
@@ -3565,7 +3715,7 @@ int edwork_thread(void *userdata) {
         if (host_and_port[0] == '[') {
             host_and_port ++;
             char *ipv6_port = strchr(host_and_port, ']');
-            if (ipv6_port)  {
+            if (ipv6_port) {
                 port_ptr = strchr(ipv6_port, ':');
                 ipv6_port[0] = 0;
             }
@@ -3588,7 +3738,6 @@ int edwork_thread(void *userdata) {
     time_t ping = 0;
     time_t write_nodes = time(NULL);
     time_t rebroadcast = 0;
-    time_t last_ping = edfs_context->ping_received;
     time_t startup = time(NULL);
     time_t resync_timestamp = time(NULL);
     int broadcast_offset = 0;
@@ -3628,7 +3777,6 @@ int edwork_thread(void *userdata) {
                 broadcast_offset = 0;
             else
                 broadcast_offset += count;
-            last_ping = edfs_context->ping_received;
             rebroadcast = time(NULL);
         }
 
@@ -3744,7 +3892,7 @@ void edfs_edwork_done(struct edfs *edfs_context) {
 }
 
 static void recursive_mkdir(const char *dir) {
-    char tmp[4096];
+    char tmp[MAX_PATH_LEN];
     char *p = NULL;
     size_t len;
 
@@ -3807,7 +3955,6 @@ struct edfs *edfs_create_context(const char *use_working_directory) {
         edfs_context->signature = edfs_add_to_path(use_working_directory, "signature.json");
         edfs_context->nodes_file = edfs_add_to_path(use_working_directory, "nodes");
         edfs_context->default_nodes = edfs_add_to_path(use_working_directory, "default_nodes.json");
-        edfs_context->resync = 1;
 
         edfs_make_key(edfs_context);
 

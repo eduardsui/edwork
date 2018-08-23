@@ -83,6 +83,7 @@
 #define EDWORK_PORT                 4848
 #define EDWORK_PACKET_SIZE          BLOCK_SIZE + 0x200
 #define EDWORK_MAX_RETRY_TIMEOUT    5000
+#define EDWORK_MAX_DIR_RETRY_TIMEOUT 2000
 
 
 #define EDFS_SET_ATTR_MODE	(1 << 0)

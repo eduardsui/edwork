@@ -61,7 +61,7 @@ unsigned int add_directory(const char *name, edfs_ino_t ino, int type, int64_t s
     stbuf.st_mtime = modified;
     stbuf.st_atime = timestamp / 1000000;
 
-    int err = filler(buf, name, &stbuf, 0);
+    filler(buf, name, &stbuf, 0);
     return 1;
 }
 
@@ -153,7 +153,7 @@ static int edfs_fuse_rmdir(const char *path) {
 static int edfs_fuse_mkdir(const char *path, mode_t mode) {
     uint64_t parent;
     const char *name = NULL;
-    uint64_t inode = pathtoinode(path, &parent, &name);
+    pathtoinode(path, &parent, &name);
     if (!name)
         return -EEXIST;
 #ifdef _WIN32
@@ -288,7 +288,6 @@ int main(int argc, char *argv[]) {
     int initial_friend_set = 0;
 
 #ifdef _WIN32
-    static char drive_letter[2];
     // enable colors
     HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD fdwSaveOldMode;
@@ -355,22 +354,14 @@ int main(int argc, char *argv[]) {
                     fprintf(stderr, "edfs: unknown parameter %s\n", arg);
                     exit(-1);
                 }
-#ifdef _WIN32
-                drive_letter[0] = arg[0];
-                drive_letter[1] = 0;
-                mountpoint = drive_letter;
-#else
                 mountpoint = arg;
-#endif
             }
         }
     }
     if (!mountpoint) {
         fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast] mount_point\n", argv[0]);
 #ifdef _WIN32
-        drive_letter[0] = 'J';
-        drive_letter[1] = 0;
-        mountpoint = drive_letter;
+        mountpoint = "J";
 #else
         exit(-1);
 #endif

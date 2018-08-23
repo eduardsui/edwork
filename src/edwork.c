@@ -478,9 +478,6 @@ int edwork_set_info(void *clientinfo, uint64_t last_ino, uint64_t last_chunk, ui
 
 
 void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len, int update_seen, int return_old_peer) {
-    unsigned i;
-    BYTE hash[32];
-
     if ((!sin) || (client_len <= 0) || (sin->sin_addr.s_addr == 0) || (sin->sin_port == 0))
         return 0;
 
@@ -896,7 +893,6 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
     if ((callback) && (!memcmp(type, "jmbo", 4))) {
         log_info("JMBO received");
         unsigned char *ptr = buffer + 128;
-        int index = 0;
         while (size > 2) {
             unsigned short size_short = ntohs(*(unsigned short *)ptr);
             ptr += 2;
@@ -979,7 +975,6 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
     if (!data)
         return -1;
 
-    int i;
     int records = 0;
     char buffer[32];
     while (buf_size >= 7) {
