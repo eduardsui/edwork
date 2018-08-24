@@ -277,6 +277,14 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse) {
     edfs_init(edfs_context);
 }
 
+static const char EDFS_BANNER[] =   " _______   ________  ___       __   ________  ________  ___  __       \n"
+                                    "|\\  ___ \\ |\\   ___ \\|\\  \\     |\\  \\|\\   __  \\|\\   __  \\|\\  \\|\\  \\     \n"
+                                    "\\ \\   __/|\\ \\  \\_|\\ \\ \\  \\    \\ \\  \\ \\  \\|\\  \\ \\  \\|\\  \\ \\  \\/  /|_   \n"
+                                    " \\ \\  \\_|/_\\ \\  \\ \\\\ \\ \\  \\  __\\ \\  \\ \\  \\\\\\  \\ \\   _  _\\ \\   ___  \\  \n"
+                                    "  \\ \\  \\_|\\ \\ \\  \\_\\\\ \\ \\  \\|\\__\\_\\  \\ \\  \\\\\\  \\ \\  \\\\  \\\\ \\  \\\\ \\  \\ \n"
+                                    "   \\ \\_______\\ \\_______\\ \\____________\\ \\_______\\ \\__\\\\ _\\\\ \\__\\\\ \\__\\\n"
+                                    "    \\|_______|\\|_______|\\|____________|\\|_______|\\|__|\\|__|\\|__| \\|__|\n";
+
 int main(int argc, char *argv[]) {
 #if defined(_WIN32) || defined(__APPLE__)
     char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", NULL};
@@ -284,6 +292,7 @@ int main(int argc, char *argv[]) {
 #else
     struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
 #endif
+    FILE *fp = NULL;
     struct fuse_chan *ch;
     char *mountpoint = NULL;
     int err = -1;
@@ -303,6 +312,7 @@ int main(int argc, char *argv[]) {
     log_set_colors(1);
 #endif
 
+    fprintf(stderr, "%s\n", EDFS_BANNER);
     edfs_fuse_init(&edfs_fuse);
 
     for (i = 1; i < argc; i++) {
@@ -312,7 +322,7 @@ int main(int argc, char *argv[]) {
                 arg ++;
                 if (!strcmp(arg, "port")) {
                     if (i >= argc - 1) {
-                        fprintf(stderr, "edfs: port number expected after -port parameter\n");
+                        fprintf(stderr, "edfs: port number expected after -port parameter. Try -help option.\n");
                         exit(-1);
                     }
                     i++;
@@ -320,11 +330,24 @@ int main(int argc, char *argv[]) {
                 } else
                 if (!strcmp(arg, "loglevel")) {
                     if (i >= argc - 1) {
-                        fprintf(stderr, "edfs: log level expected after -loglevel parameter\n");
+                        fprintf(stderr, "edfs: log level expected after -loglevel parameter. Try -help option.\n");
                         exit(-1);
                     }
                     i++;
                     log_set_level(atoi(argv[i]));
+                } else
+                if (!strcmp(arg, "logfile")) {
+                    if (i >= argc - 1) {
+                        fprintf(stderr, "edfs: log filename expected after -logfile parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
+                    fp = fopen(argv[i], "wb");
+                    if (fp)
+                        log_set_fp(fp);
+                    else {
+                        fprintf(stderr, "cannot open log file %s", argv[i]);
+                    }
                 } else
                 if (!strcmp(arg, "readonly")) {
                     edfs_set_readonly(edfs_context, 1);
@@ -338,7 +361,7 @@ int main(int argc, char *argv[]) {
                 } else
                 if (!strcmp(arg, "use")) {
                     if (i >= argc - 1) {
-                        fprintf(stderr, "edfs: host[:ip] expected after use\n");
+                        fprintf(stderr, "edfs: host[:ip] expected after use. Try -help option.\n");
                         exit(-1);
                     }
                     i++;
@@ -352,14 +375,33 @@ int main(int argc, char *argv[]) {
                     edfs_set_rebroadcast(edfs_context, 1);
                 } else
                 if (!strcmp(arg, "chunks")) {
+                    if (i >= argc - 1) {
+                        fprintf(stderr, "edfs: number of chunks expected after -chunks parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
                     edfs_set_forward_chunks(edfs_context, atoi(argv[i]));
+                } else
+                if (!strcmp(arg, "help")) {
+                    fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
+                        "    -port port_number  listen on given port number\n"
+                        "    -loglevel 0 - 5    set log level\n"
+                        "    -logfile filename  set log filename\n"
+                        "    -readonly          mount filesystem as read-only\n"
+                        "    -newkey            generate a new key\n"
+                        "    -use host[:port]   use host:port as initial host\n"
+                        "    -resync            request data resync\n"
+                        "    -rebroadcast       force rebroadcast all local data\n"
+                        "    -chunks n          set the number of forward chunks to be requested on read\n"
+                        , argv[0]);
+                    exit(0);
                 } else {
                     fprintf(stderr, "edfs: unknown parameter %s\n", arg);
                     exit(-1);
                 }
             } else {
                 if (mountpoint) {
-                    fprintf(stderr, "edfs: unknown parameter %s\n", arg);
+                    fprintf(stderr, "edfs: unknown parameter %s. Try -help option.\n", arg);
                     exit(-1);
                 }
                 mountpoint = arg;
@@ -367,13 +409,14 @@ int main(int argc, char *argv[]) {
         }
     }
     if (!mountpoint) {
-        fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast][-chunks] mount_point\n", argv[0]);
+        fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nTo list all options, run with -help option\n");
 #ifdef _WIN32
         mountpoint = "J";
 #else
 #ifdef __APPLE__
         mountpoint = "~/Desktop/edwork";
 #else
+        fprintf(stderr, "no mount point specified\n");
         exit(-1);
 #endif
 #endif
@@ -430,6 +473,8 @@ int main(int argc, char *argv[]) {
 #endif
     }
     fuse_opt_free_args(&args);
+    if (fp)
+        fclose(fp);
 
     return err ? 1 : 0;
 }
