@@ -2464,6 +2464,10 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
                     log_warn("directory read timeout, using last known version");
                     break;
                 }
+                if (!read_file_json(edfs_context, ino, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash)) {
+                    log_warn("directory does not exists anymore");
+                    break;
+                }
             } while (1);
 
         }
@@ -2716,13 +2720,30 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
         uint64_t timestamp = (uint64_t)json_object_get_number(root_object, "timestamp");
         uint64_t generation = (uint64_t)json_object_get_number(root_object, "version");
         int deleted = (int)json_object_get_number(root_object, "deleted");
+        uint64_t current_generation = 0;
+        if ((parent == 0) && (inode == 1) && (!deleted) && (b64name)) {
+            read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &current_generation, NULL);
+            if (current_generation > generation) {
+                log_warn("refused to update descriptor: received version is older (%" PRIu64 " > %" PRIu64 ")", current_generation, generation);
+                json_value_free(root_value);
+                return 0;
+            }
+            if (edfs_context->mutex_initialized)
+                thread_mutex_lock(&edfs_context->io_lock);
+            if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)payload, size , ".json", 0, NULL, NULL, NULL, NULL) != size ) {
+                log_warn("error writing root file %s", b64name);
+                written = -1;
+            }
+            if (edfs_context->mutex_initialized)
+                thread_mutex_unlock(&edfs_context->io_lock);
+            return written;
+        }
         if ((inode) && (name) && (b64name) && (parent) && (type) && (timestamp)) {
             uint64_t current_parent = 0;
             time_t current_modified = 0;
             time_t current_created = 0;
             int64_t current_size = 0;
             uint64_t current_timestamp = 0;
-            uint64_t current_generation = 0;
             int current_type = read_file_json(edfs_context, inode, &current_parent, &current_size, &current_timestamp, NULL, NULL, NULL, 0, &current_created, &current_modified, &current_generation, NULL);
             int do_write = 1;
             if (current_type) {
@@ -2733,7 +2754,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     written = 0;
                     log_warn("refused to update descriptor: received version is older (%" PRIu64 " > %" PRIu64 ")", current_generation, generation);
                 } else
-                if (current_parent > parent) {
+                if (current_parent != parent) {
                     do_write = 0;
                     written = 0;
                     log_warn("refused to update descriptor: current parrent inode is different");
@@ -3414,6 +3435,8 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             return;
         }
         edwork_resync_dir_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen);
+        usleep(500);
+        edwork_resync_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen);
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         return;
     }
