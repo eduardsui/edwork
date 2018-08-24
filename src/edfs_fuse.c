@@ -477,7 +477,7 @@ int main(int argc, char *argv[]) {
             fuse_destroy(se);
         }
 #ifdef __APPLE__
-        unlink(mountpoint);
+        rmdir(mountpoint);
 #endif
     }
     fuse_opt_free_args(&args);
