@@ -3284,9 +3284,9 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 return;
             }
             log_info("DESC acknoledged");
-            // rebroadcast with acks 3 seconds
+            // rebroadcast without ack 3 seconds
             if (timestamp > now - 3000000UL)
-                edwork_broadcast_except(edwork, "desc", payload, payload_size, EDWORK_DATA_NODES, EDWORK_NODES, clientaddr, clientaddrlen, timestamp, ino);
+                edwork_broadcast_except(edwork, "desc", payload, payload_size, 0, EDWORK_NODES, clientaddr, clientaddrlen, timestamp, ino);
         } else {
             if (!err) {
                 if (edwork_send_to_peer(edwork, "nack", buffer, sizeof(uint64_t), clientaddr, clientaddrlen) <= 0) {
