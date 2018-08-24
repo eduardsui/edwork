@@ -278,7 +278,7 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse) {
 }
 
 int main(int argc, char *argv[]) {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
     char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", NULL};
     struct fuse_args args = FUSE_ARGS_INIT(5, dokan_argv);
 #else
@@ -350,6 +350,9 @@ int main(int argc, char *argv[]) {
                 } else
                 if (!strcmp(arg, "rebroadcast")) {
                     edfs_set_rebroadcast(edfs_context, 1);
+                } else
+                if (!strcmp(arg, "chunks")) {
+                    edfs_set_forward_chunks(edfs_context, atoi(argv[i]));
                 } else {
                     fprintf(stderr, "edfs: unknown parameter %s\n", arg);
                     exit(-1);
@@ -364,11 +367,15 @@ int main(int argc, char *argv[]) {
         }
     }
     if (!mountpoint) {
-        fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast] mount_point\n", argv[0]);
+        fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast][-chunks] mount_point\n", argv[0]);
 #ifdef _WIN32
         mountpoint = "J";
 #else
+#ifdef __APPLE__
+        mountpoint = "~/Desktop/edwork";
+#else
         exit(-1);
+#endif
 #endif
     }
 

@@ -236,6 +236,8 @@ struct edfs {
 
     avl_tree_t ino_cache;
     thread_mutex_t ino_cache_lock;
+
+    int forward_chunks;
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -1724,7 +1726,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             request_data(edfs_context, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size);
             log_trace("requesting chunk %s:%" PRIu64, path, chunk);
 #ifndef EDFS_NO_FORWARD_WAIT
-            if (forward_chunks_requested < 5) {
+            if (forward_chunks_requested < edfs_context->forward_chunks) {
                 while (chunk_exists(path, forward_chunk))
                     forward_chunk ++;
                 if (forward_chunk <= last_file_chunk) {
@@ -2735,7 +2737,6 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     do_write = 0;
                     written = 0;
                     log_warn("refused to update descriptor: current parrent inode is different");
-                    written = -1;
                 } else
                 if (((current_type & S_IFDIR) && ((type & S_IFDIR) == 0)) || (((current_type & S_IFDIR) == 0) && (type & S_IFDIR))) {
                     do_write = 0;
@@ -2743,8 +2744,10 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     log_warn("refused to update descriptor: inode type change is not supported");
                 }
             } else
-            if (deleted)
+            if (deleted) {
                 do_write = 0;
+                written = 0;
+            }
             if (do_write) {
                 log_info("sync descriptor for inode %s", b64name);
                 if (deleted) {
@@ -4012,7 +4015,7 @@ struct edfs *edfs_create_context(const char *use_working_directory) {
         edfs_context->signature = edfs_add_to_path(use_working_directory, "signature.json");
         edfs_context->nodes_file = edfs_add_to_path(use_working_directory, "nodes");
         edfs_context->default_nodes = edfs_add_to_path(use_working_directory, "default_nodes.json");
-
+        edfs_context->forward_chunks = 5;
         edfs_make_key(edfs_context);
 
         avl_initialize(&edfs_context->ino_cache, ino_compare, avl_ino_destructor);
@@ -4040,6 +4043,11 @@ void edfs_set_resync(struct edfs *edfs_context, int resync_val) {
     edfs_context->resync = resync_val;
 }
 
+void edfs_set_forward_chunks(struct edfs *edfs_context, int forward_chunks) {
+    if (!edfs_context)
+        return;
+    edfs_context->forward_chunks = forward_chunks;
+}
 void edfs_set_rebroadcast(struct edfs *edfs_context, int rebroadcast_val) {
     if (!edfs_context)
         return;

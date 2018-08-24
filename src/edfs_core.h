@@ -136,6 +136,8 @@ void edfs_set_resync(struct edfs *edfs_context, int resync_val);
 void edfs_set_rebroadcast(struct edfs *edfs_context, int rebroadcast_val);
 void edfs_set_readonly(struct edfs *edfs_context, int readonly_val);
 void edfs_set_initial_friend(struct edfs *edfs_context, const char *peer);
+void edfs_set_forward_chunks(struct edfs *edfs_context, int forward_chunks);
+
 const char *edfs_signature_path(struct edfs *edfs_context);
 int edwork_readonly(struct edfs *edfs_context);
 
