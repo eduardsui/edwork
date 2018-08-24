@@ -2721,9 +2721,10 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
         uint64_t generation = (uint64_t)json_object_get_number(root_object, "version");
         int deleted = (int)json_object_get_number(root_object, "deleted");
         uint64_t current_generation = 0;
+        uint64_t current_timestamp = 0;
         if ((parent == 0) && (inode == 1) && (!deleted) && (b64name)) {
-            read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &current_generation, NULL);
-            if (current_generation > generation) {
+            read_file_json(edfs_context, inode, NULL, NULL, &current_timestamp, NULL, NULL, NULL, 0, NULL, NULL, &current_generation, NULL);
+            if ((current_generation > generation) || ((current_generation == generation) && (current_timestamp >= timestamp))) {
                 log_warn("refused to update descriptor: received version is older (%" PRIu64 " > %" PRIu64 ")", current_generation, generation);
                 json_value_free(root_value);
                 return 0;
@@ -2743,7 +2744,6 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
             time_t current_modified = 0;
             time_t current_created = 0;
             int64_t current_size = 0;
-            uint64_t current_timestamp = 0;
             int current_type = read_file_json(edfs_context, inode, &current_parent, &current_size, &current_timestamp, NULL, NULL, NULL, 0, &current_created, &current_modified, &current_generation, NULL);
             int do_write = 1;
             if (current_type) {
