@@ -17,6 +17,10 @@
         long tv_nsec;
     };
 #endif
+#ifdef __APPLE__
+    #include <unistd.h>
+    #include <wordexp.h>
+#endif
 
 #include "log.h"
 #include "edfs_core.h"
@@ -300,6 +304,9 @@ int main(int argc, char *argv[]) {
     int i;
     static struct fuse_operations edfs_fuse;
     int initial_friend_set = 0;
+#ifdef __APPLE__
+    wordexp_t pathexp;
+#endif
 
 #ifdef _WIN32
     // enable colors
@@ -414,7 +421,8 @@ int main(int argc, char *argv[]) {
         mountpoint = "J";
 #else
 #ifdef __APPLE__
-        mountpoint = "~/Desktop/edwork";
+        wordexp("~/Desktop/edwork", &pathexp, 0);
+        mountpoint = pathexp.we_wordv[0];
 #else
         fprintf(stderr, "no mount point specified\n");
         exit(-1);
