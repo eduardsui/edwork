@@ -425,6 +425,9 @@ int main(int argc, char *argv[]) {
             fuse_unmount(mountpoint, ch);
             fuse_destroy(se);
         }
+#ifdef __APPLE__
+        unlink(mountpoint);
+#endif
     }
     fuse_opt_free_args(&args);
 

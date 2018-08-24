@@ -2009,7 +2009,7 @@ int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t of
     char fullpath[MAX_PATH_LEN];
 
     if (filebuf) {
-        filebuf->in_read = 1;
+        ++ filebuf->in_read;
         edfs_flush_chunk(edfs_context, ino, filebuf);
     }
 
@@ -2027,7 +2027,7 @@ int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t of
                 break;
             log_error("read chunk in %s, errno %i", fullpath, (int)-read_bytes);
             if (filebuf)
-                filebuf->in_read = 0;
+                -- filebuf->in_read;
             return read_bytes;
         }
         bytes_read += read_bytes;
@@ -2037,7 +2037,7 @@ int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t of
         chunk++;
     }
     if (filebuf)
-        filebuf->in_read = 0;
+        -- filebuf->in_read;
     return bytes_read;
 }
 
@@ -3434,9 +3434,9 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("no valid proof of work");
             return;
         }
-        edwork_resync_dir_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen);
-        usleep(500);
         edwork_resync_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen);
+        usleep(500);
+        edwork_resync_dir_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen);
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         return;
     }
