@@ -237,6 +237,8 @@ struct edfs {
     avl_tree_t ino_cache;
     thread_mutex_t ino_cache_lock;
 
+    avl_tree_t ino_checksum_mismatch;
+
     int forward_chunks;
 };
 
@@ -278,6 +280,10 @@ void avl_ino_destructor(void *key) {
 
 void avl_ino_key_data_destructor(void *key, void *data) {
     free(data);
+}
+
+void avl_ino_key_cache_destructor(void *key, void *data) {
+    // nothing
 }
 
 int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource, int resource_len, unsigned char *proof_str, int max_proof_len, unsigned char *proof_of_work) {
@@ -2446,15 +2452,21 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
             snprintf(path, sizeof(path), "%s/%s", edfs_context->working_directory, computename(ino, b64name));
             unsigned char proof_cache[1024];
             int proof_size = 0;
-
+            void *hash_error = (struct edfs_ino_cache *)avl_search(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
             uint64_t start = microseconds();
             do {
                 pathhash(edfs_context, path, computed_hash);
                 if (!memcmp(hash, computed_hash, 32)) {
                     log_trace("directory hash ok");
+                    if (hash_error)
+                        avl_remove(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
                     break;
                 }
                 notify_io(edfs_context, "roo2", (const unsigned char *)&network_inode, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, proof_cache, &proof_size);
+                if (hash_error) {
+                    log_warn("directory hash still mismatched, using last known version (not waiting for timeout)");
+                    break;
+                }
 #ifdef _WIN32
                 Sleep(10);
 #else
@@ -2462,10 +2474,12 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
 #endif
                 if (microseconds() - start >= EDWORK_MAX_DIR_RETRY_TIMEOUT * 1000) {
                     log_warn("directory read timeout, using last known version");
+                    avl_insert(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino, (void *)1);
                     break;
                 }
                 if (!read_file_json(edfs_context, ino, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash)) {
                     log_warn("directory does not exists anymore");
+                    avl_insert(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino, (void *)1);
                     break;
                 }
             } while (1);
@@ -4043,6 +4057,7 @@ struct edfs *edfs_create_context(const char *use_working_directory) {
         edfs_make_key(edfs_context);
 
         avl_initialize(&edfs_context->ino_cache, ino_compare, avl_ino_destructor);
+        avl_initialize(&edfs_context->ino_checksum_mismatch, ino_compare, avl_ino_destructor);
     }
     return edfs_context;
 }
@@ -4052,6 +4067,7 @@ void edfs_destroy_context(struct edfs *edfs_context) {
         return;
 
     avl_destroy(&edfs_context->ino_cache, avl_ino_key_data_destructor);
+    avl_destroy(&edfs_context->ino_checksum_mismatch, avl_ino_key_cache_destructor);
 
     free(edfs_context->working_directory);
     free(edfs_context->cache_directory);
