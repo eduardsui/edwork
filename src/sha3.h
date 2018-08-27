@@ -1,6 +1,5 @@
 #ifndef SHA3_H
 #define SHA3_H
-
 /* -------------------------------------------------------------------------
  * Works when compiled for either 32-bit or 64-bit targets, optimized for 
  * 64 bit.
@@ -18,7 +17,8 @@
  *
  * Aug 2015. Andrey Jivsov. crypto@brainhub.org
  * ---------------------------------------------------------------------- */
-
+#include <stdint.h>
+#include <stddef.h>
 /* 'Words' here refers to uint64_t */
 #define SHA3_KECCAK_SPONGE_WORDS \
 	(((1600)/8/*bits to byte*/)/sizeof(uint64_t))

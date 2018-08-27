@@ -327,8 +327,8 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
     while (1) {
         sha3_Init256(&ctx);
 
-#ifdef EDFS_HASHCASH_ASCII_STRING
         uint64_t counter_be = htonll(counter);
+#ifdef EDFS_HASHCASH_ASCII_STRING
         const BYTE *counter_ptr = (const BYTE *)&counter_be;
         int offset = 0;
         do {
@@ -342,7 +342,7 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
 #else
         len = 8;
         sha3_Update(&ctx, proof_str, proof_len);
-        sha3_Update(&ctx, (unsigned char *)&counter, 8);
+        sha3_Update(&ctx, (unsigned char *)&counter_be, 8);
 #endif
 
         hash = (const unsigned char *)sha3_Finalize(&ctx);
@@ -352,7 +352,7 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
                 if (proof_of_work)
                     memcpy(proof_of_work, hash, 32);
 #ifndef EDFS_HASHCASH_ASCII_STRING
-                memcpy(proof_str + proof_len, &counter, 8);
+                memcpy(proof_str + proof_len, &counter_be, 8);
 #endif
                 proof_str[proof_len + len] = 0;
                 return proof_len + len;
@@ -1160,9 +1160,9 @@ int write_json2(struct edfs *edfs_context, const char *base_path, uint64_t inode
 
         JSON_Object *root_object = json_value_get_object(root_value);
         if (root_object) {
-            uint64_t parent = unpacked_ino(json_object_get_string(root_object, "parent"));
-            if (parent != 0)
-                notify_io(edfs_context, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, edfs_context->edwork, 0, 0, NULL, 0, NULL, NULL);
+            // uint64_t parent = unpacked_ino(json_object_get_string(root_object, "parent"));
+            // if (parent != 0)
+            notify_io(edfs_context, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, edfs_context->edwork, 0, 0, NULL, 0, NULL, NULL);
         }
     } else
         log_warn("error writing file %s", b64name);

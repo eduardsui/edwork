@@ -300,6 +300,7 @@ int main(int argc, char *argv[]) {
     int i;
     static struct fuse_operations edfs_fuse;
     int initial_friend_set = 0;
+    int foreground = 1;
 
 #ifdef _WIN32
     // enable colors
@@ -382,6 +383,9 @@ int main(int argc, char *argv[]) {
                     i++;
                     edfs_set_forward_chunks(edfs_context, atoi(argv[i]));
                 } else
+                if (!strcmp(arg, "daemonize")) {
+                    foreground = 0;
+                } else
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -393,6 +397,7 @@ int main(int argc, char *argv[]) {
                         "    -resync            request data resync\n"
                         "    -rebroadcast       force rebroadcast all local data\n"
                         "    -chunks n          set the number of forward chunks to be requested on read\n"
+                        "    -daemonize         run edfs as daemon/service\n"
                         , argv[0]);
                     exit(0);
                 } else {
@@ -457,6 +462,8 @@ int main(int argc, char *argv[]) {
         if (se != NULL) {
             fuse_set_signal_handlers(fuse_get_session(se));
             edfs_edwork_init(edfs_context, port);
+
+            fuse_daemonize(foreground);
 #ifdef EDFS_MULTITHREADED
             err = fuse_loop_mt(se);
 #else
