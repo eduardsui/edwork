@@ -9,9 +9,9 @@
 #ifdef _WIN32
     #define socklen_t int
     #define _WIN32_WINNT    0x501
+    #include <winsock2.h>
     #include <windows.h>
     #include <io.h>
-    #include <winsock2.h>
     #include <wincrypt.h>
 
     void usleep(uint64_t usec) { 

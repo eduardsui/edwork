@@ -62,11 +62,12 @@
     #else
         #define DELTA_EPOCH_IN_MICROSECS  116444736000000000ULL
     #endif
-
+#ifndef HAVE_TIMEZONE
     struct timezone {
         int tz_minuteswest;
         int tz_dsttime;
     };
+#endif
 
     int gettimeofday(struct timeval *tv, struct timezone *tz) {
         FILETIME         ft;
@@ -2562,7 +2563,7 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
         err = recursive_rmdir(fullpath);
     else
         err = rmdir(fullpath);
-
+    fprintf(stderr, "REMOVE NODE %i\n", is_broadcast);
     if (err) {
         log_warn("error removing node %s", fullpath, err);
         return 0;
@@ -2605,6 +2606,8 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
 }
 
 int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode) {
+    if (edfs_context->read_only_fs)
+        return -EROFS;
     uint64_t generation;
     int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
     if (!type)

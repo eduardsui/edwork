@@ -11,11 +11,12 @@
     #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
         #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
     #endif
-
+#ifndef HAVE_TIMESPEC
     struct timespec {
         time_t tv_sec;
         long tv_nsec;
     };
+#endif
 #endif
 #ifdef __APPLE__
     #include <unistd.h>

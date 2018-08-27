@@ -82,7 +82,7 @@ int block_mine(struct block *newblock, int zero_bits) {
 
     proof_of_work[0] = 0;
 
-    int proof_len = snprintf((char *)proof_of_work, 0x100, "edblock:1:%i:%i:%.*s::", zero_bits, (int)newblock->timestamp, (int)newblock->data_len, (const char *)newblock->data);
+    int proof_len = snprintf((char *)proof_of_work, 0x100, "edblock:1:%i:%i:%.*s::%i:", zero_bits, (int)newblock->timestamp, (int)newblock->data_len, (const char *)newblock->data, (int)newblock->index);
     if (proof_len >= 0x100 - 10)
         return 0;
 
@@ -151,7 +151,7 @@ int block_verify(struct block *newblock, int zero_bits) {
     if (!newblock)
         return 0;
 
-    int proof_len = snprintf((char *)proof_of_work, 0x100, "edblock:1:%i:%i:%.*s::", zero_bits, (int)newblock->timestamp, (int)newblock->data_len, (const char *)newblock->data);
+    int proof_len = snprintf((char *)proof_of_work, 0x100, "edblock:1:%i:%i:%.*s::%i:", zero_bits, (int)newblock->timestamp, (int)newblock->data_len, (const char *)newblock->data, (int)newblock->index);
     sha3_Init256(&ctx);
 
     uint64_t counter_be = ntohll(newblock->nonce);
