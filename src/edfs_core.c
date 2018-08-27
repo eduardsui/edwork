@@ -3696,7 +3696,8 @@ unsigned int edwork_resync(struct edfs *edfs_context, void *clientaddr, int clie
 
         if (!file.is_dir) {
             // do not send root object
-            if ((string_ends_with(file.name, ".json", 5)) && (strcmp(file.name, "AAAAAAAAAAE.json"))) {
+            if (string_ends_with(file.name, ".json", 5)) {
+                // && (strcmp(file.name, "AAAAAAAAAAE.json")))
                 unsigned char buffer[EDWORK_PACKET_SIZE];
                 int len = edfs_read_file(edfs_context, edfs_context->working_directory, file.name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
                 if (len > 0) {
