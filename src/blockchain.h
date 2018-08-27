@@ -21,6 +21,7 @@ struct block *block_new(struct block *previous_block, const unsigned char *data,
 void block_free(struct block *block);
 int block_mine(struct block *newblock, int zero_bits);
 int block_verify(struct block *newblock, int zero_bits);
+int blockchain_verify(struct block *newblock, int zero_bits);
 void blockchain_free(struct block *block);
 
 #endif

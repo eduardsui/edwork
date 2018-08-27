@@ -69,7 +69,7 @@ int block_mine(struct block *newblock, int zero_bits) {
     sha3_context ctx;
     const unsigned char *hash;
     char proof_of_work[0x100];
-    static unsigned char ref_hash[8];
+    static unsigned char ref_hash[32];
     char in[16];
     char out[32];
     int len;
@@ -118,6 +118,8 @@ int block_mine(struct block *newblock, int zero_bits) {
 #endif
         if (newblock->previous_block)
             sha3_Update(&ctx, (struct block *)newblock->previous_block, 32);
+        else
+            sha3_Update(&ctx, ref_hash, 32);
 
         hash = (const unsigned char *)sha3_Finalize(&ctx);
 
@@ -138,7 +140,7 @@ int block_mine(struct block *newblock, int zero_bits) {
 }
 
 int block_verify(struct block *newblock, int zero_bits) {
-    static unsigned char ref_hash[8];
+    static unsigned char ref_hash[32];
     char proof_of_work[0x100];
     sha3_context ctx;
     const unsigned char *hash;
@@ -171,6 +173,8 @@ int block_verify(struct block *newblock, int zero_bits) {
 #endif
     if (newblock->previous_block)
         sha3_Update(&ctx, (struct block *)newblock->previous_block, 32);
+    else
+        sha3_Update(&ctx, ref_hash, 32);
 
     hash = (const unsigned char *)sha3_Finalize(&ctx);
     bytes = zero_bits / 8;
@@ -181,10 +185,23 @@ int block_verify(struct block *newblock, int zero_bits) {
     return 1;
 }
 
-void blockchain_free(struct block *block) {
-    while (block) {
-        struct block *prev = (struct block *)block->previous_block;
+int blockchain_verify(struct block *newblock, int zero_bits) {
+    if (!newblock)
+        return 0;
+
+    while (newblock) {
+        if (!block_verify(newblock, zero_bits))
+            return 0;
+
+        newblock = (struct block *)newblock->previous_block;
+    }
+    return 1;
+}
+
+void blockchain_free(struct block *newblock) {
+    while (newblock) {
+        struct block *prev = (struct block *)newblock->previous_block;
         block_free(prev);
-        block = prev;
+        newblock = prev;
     }
 }
