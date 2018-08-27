@@ -17,6 +17,10 @@
         long tv_nsec;
     };
 #endif
+#ifdef __APPLE__
+    #include <unistd.h>
+    #include <wordexp.h>
+#endif
 
 #include "log.h"
 #include "edfs_core.h"
@@ -301,6 +305,9 @@ int main(int argc, char *argv[]) {
     static struct fuse_operations edfs_fuse;
     int initial_friend_set = 0;
     int foreground = 1;
+#ifdef __APPLE__
+    wordexp_t pathexp;
+#endif
 
 #ifdef _WIN32
     // enable colors
@@ -397,7 +404,7 @@ int main(int argc, char *argv[]) {
                         "    -resync            request data resync\n"
                         "    -rebroadcast       force rebroadcast all local data\n"
                         "    -chunks n          set the number of forward chunks to be requested on read\n"
-                        "    -daemonize         run edfs as daemon/service\n"
+                        "    -daemonize         run as daemon/service\n"
                         , argv[0]);
                     exit(0);
                 } else {
@@ -419,7 +426,8 @@ int main(int argc, char *argv[]) {
         mountpoint = "J";
 #else
 #ifdef __APPLE__
-        mountpoint = "~/Desktop/edwork";
+        wordexp("~/Desktop/edwork", &pathexp, 0);
+        mountpoint = pathexp.we_wordv[0];
 #else
         fprintf(stderr, "no mount point specified\n");
         exit(-1);
@@ -462,8 +470,6 @@ int main(int argc, char *argv[]) {
         if (se != NULL) {
             fuse_set_signal_handlers(fuse_get_session(se));
             edfs_edwork_init(edfs_context, port);
-
-            fuse_daemonize(foreground);
 #ifdef EDFS_MULTITHREADED
             err = fuse_loop_mt(se);
 #else
@@ -476,7 +482,7 @@ int main(int argc, char *argv[]) {
             fuse_destroy(se);
         }
 #ifdef __APPLE__
-        unlink(mountpoint);
+        rmdir(mountpoint);
 #endif
     }
     fuse_opt_free_args(&args);
