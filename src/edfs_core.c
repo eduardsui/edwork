@@ -34,22 +34,22 @@
 #include "curve25519.h"
 #include "edfs_core.h"
 #include "avl.h"
+#include "blockchain.h"
 
-#define BLOCK_SIZE_MAX      BLOCK_SIZE + 0x3000
-#define EDFS_INO_CACHE_ADDR 20
+#define BLOCK_SIZE_MAX          BLOCK_SIZE + 0x3000
+#define EDFS_INO_CACHE_ADDR     20
+#define BLOCKCHAIN_COMPLEXITY   22
 
 #define DEBUG
 
 #ifdef DEBUG
 #define DEBUG_PRINT(...)            fprintf(stderr, __VA_ARGS__)
 #define DEBUG_DUMP_HEX(buf, len)    {int __i__; for (__i__ = 0; __i__ < len; __i__++) { DEBUG_PRINT("%02X ", (unsigned int)(buf)[__i__]); } }
-#define DEBUG_INDEX(fields)         print_index(fields)
 #define DEBUG_DUMP(buf, length)     fwrite(buf, 1, length, stderr);
 #define DEBUG_DUMP_HEX_LABEL(title, buf, len)    {fprintf(stderr, "%s (%i): ", title, (int)len); DEBUG_DUMP_HEX(buf, len); fprintf(stderr, "\n");}
 #else
 #define DEBUG_PRINT(...)            { }
 #define DEBUG_DUMP_HEX(buf, len)    { }
-#define DEBUG_INDEX(fields)         { }
 #define DEBUG_DUMP(buf, length)     { }
 #define DEBUG_DUMP_HEX_LABEL(title, buf, len) { }
 #endif
@@ -208,6 +208,7 @@ struct edfs {
     char *signature;
     char *nodes_file;
     char *default_nodes;
+    char *blockchain_directory;
 
     struct edwork_data *edwork;
     struct edwork_io *queue;
@@ -241,6 +242,9 @@ struct edfs {
     avl_tree_t ino_checksum_mismatch;
 
     int forward_chunks;
+
+    char proof_of_time[40];
+    struct block *chain;
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -258,6 +262,7 @@ unsigned int edwork_resync(struct edfs *edfs_context, void *clientaddr, int clie
 unsigned int edwork_resync_desc(struct edfs *edfs_context, uint64_t inode, void *clientaddr, int clientaddrlen);
 unsigned int edwork_resync_dir_desc(struct edfs *edfs_context, uint64_t inode, void *clientaddr, int clientaddrlen);
 int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int size, unsigned char *out, const unsigned char *dest_i_am, const unsigned char *src_i_am, const unsigned char *shared_secret);
+void edfs_block_save(struct edfs *edfs_context, struct block *chain);
 
 uint64_t microseconds() {
     struct timeval tv;
@@ -389,7 +394,7 @@ int edfs_proof_of_work_verify(int bits, const unsigned char *proof_str, int proo
 
     if ((prefix) && (prefix_len)) {
         if (prefix_len > proof_len) {
-            log_debug("proof to small");
+            log_debug("proof too small");
             return 0;
         }
 
@@ -415,7 +420,7 @@ int edfs_proof_of_work_verify(int bits, const unsigned char *proof_str, int proo
             } else
             if (parameter == 4) {
                 if ((proof_len - i - 1) < verify_len) {
-                    log_debug("verify buffer to small");
+                    log_debug("verify buffer too small");
                     return 0;
                 }
                 if (memcmp(proof_str + i + 1, verify_str, verify_len)) {
@@ -2563,7 +2568,6 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
         err = recursive_rmdir(fullpath);
     else
         err = rmdir(fullpath);
-    fprintf(stderr, "REMOVE NODE %i\n", is_broadcast);
     if (err) {
         log_warn("error removing node %s", fullpath, err);
         return 0;
@@ -3093,7 +3097,7 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
     int proof_of_work_size = payload_size - payload_offset;
 
     if (proof_of_work_size < 10) {
-        log_error("proof of work stamp to small");
+        log_error("proof of work stamp too small (%i)", proof_of_work_size);
         return 0;
     }
 
@@ -3106,7 +3110,6 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
         sha3_Update(&ctx, who_am_i, 32);
 
     int encode_len = base64_encode((const unsigned char *)sha3_Finalize(&ctx), want_hash, 32, 0);
-
     int proof_timestamp = edfs_proof_of_work_verify(work_level, proof_of_work, proof_of_work_size, want_hash, encode_len, (const unsigned char *)work_prefix, strlen(work_prefix));
     if (!proof_timestamp) {
         log_error("proof of work validation failed");
@@ -3127,6 +3130,30 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
     return 1;
 }
 
+void edfs_update_proof_hash(struct edfs *edfs_context, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, const unsigned char *who_am_i) {
+    sha3_context ctx;
+
+    sequence = htonll(sequence);
+    timestamp = htonll(timestamp);
+
+    sha3_Init256(&ctx);
+    sha3_Update(&ctx, (const unsigned char *)edfs_context->proof_of_time, 40);
+    sha3_Update(&ctx, (const unsigned char *)&sequence, sizeof(uint64_t));
+    sha3_Update(&ctx, (const unsigned char *)&timestamp, sizeof(uint64_t));
+    sha3_Update(&ctx, (const unsigned char *)type, 4);
+    sha3_Update(&ctx, who_am_i, 32);
+    if (payload_size > 0)
+        sha3_Update(&ctx, payload, payload_size);
+
+    const unsigned char *hash = (const unsigned char *)sha3_Finalize(&ctx);
+    memcpy(edfs_context->proof_of_time, hash + 8, 32);
+
+    uint64_t messages;
+    memcpy(&messages, edfs_context->proof_of_time, sizeof(uint64_t));
+    messages = htonll(ntohll(messages) + 1);
+    memcpy(edfs_context->proof_of_time, &messages, sizeof(uint64_t));
+}
+
 void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, void *userdata) {
     unsigned char buffer[BLOCK_SIZE_MAX];
     struct edfs *edfs_context = (struct edfs *)userdata;
@@ -3144,6 +3171,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "ping", 4)) {
+        edfs_update_proof_hash(edfs_context, sequence, timestamp, type, payload, payload_size, who_am_i);
         log_info("PING received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         edfs_context->ping_received = time(NULL);
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
@@ -3212,7 +3240,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         int is_encrypted = !memcmp(type, "wan4", 4);
 
         if ((!payload) || (payload_size < 64)) {
-            log_warn("WANT packet to small");
+            log_warn("WANT packet too small");
             return;
         }
 
@@ -3250,7 +3278,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
 
                 if (is_encrypted) {
                     if (payload_size < 96) {
-                        log_warn("WAN4 packet to small");
+                        log_warn("WAN4 packet too small");
                         return;
                     }
                     unsigned char shared_secret[32];
@@ -3390,7 +3418,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     if (!memcmp(type, "dat4", 4)) {
         log_info("DAT4 received (%s)", edwork_addr_ipv4(clientaddr));
         if (payload_size < 32) {
-            log_error("DAT4 packet to small");
+            log_error("DAT4 packet too small");
             return;
         }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
@@ -3472,6 +3500,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "hash", 4)) {
+        edfs_update_proof_hash(edfs_context, sequence, timestamp, type, payload, payload_size, who_am_i);
         log_info("HASH request received (%s)", edwork_addr_ipv4(clientaddr));
         int magnitude = edwork_magnitude(edwork);
         int randomly_ignore = 0;
@@ -3498,7 +3527,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         }
 
         if ((!payload) || (payload_size < 96)) {
-            log_warn("HASH packet to small");
+            log_warn("HASH packet too small");
             return;
         }
 
@@ -3551,7 +3580,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     }
     if (!memcmp(type, "wand", 4)) {
         if (payload_size < 8) {
-            log_warn("WAND packet to small");
+            log_warn("WAND packet too small");
             return;
         }
 
@@ -3580,7 +3609,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     if (!memcmp(type, "dati", 4)) {
         log_info("DATI received (%s)", edwork_addr_ipv4(clientaddr));
         if (payload_size < 32) {
-            log_error("DATI packet to small");
+            log_error("DATI packet too small");
             return;
         }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
@@ -3592,6 +3621,90 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         int err = edwork_process_hash(edfs_context, buffer, size, clientaddr, clientaddrlen);
         if (err <= 0)
             log_warn("DATI: will not write data block");
+        return;
+    }
+    if (!memcmp(type, "hblk", 4)) {
+        log_info("HBLK request received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
+        int is_top = 0;
+        if (payload_size < 48) {
+            log_error("HBLK packet too small");
+            return;
+        }
+        // index is 0 for last block, or 1 for genesis block, 2 for second block and so on
+        uint64_t index = ntohl(*(uint64_t *)payload);
+        if (!index) {
+            // is top
+            is_top = 1;
+            if (edfs_context->chain) {
+                index = edfs_context->chain->index;
+            } else {
+                log_warn("HBLK request cannot be fulfilled");
+                return;
+            }
+        } else
+            index --;
+        if (!edwork_check_proof_of_work(edwork, payload, payload_size, 8, timestamp, EDWORK_WANT_WORK_LEVEL, EDWORK_WANT_WORK_PREFIX, who_am_i)) {
+            log_warn("no valid proof of work", payload_size);
+            return;
+        }
+
+        char b64name[MAX_B64_HASH_LEN];
+        computename(index, b64name);
+        int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+        if (len > 0) {
+            if (edwork_send_to_peer(edfs_context->edwork, is_top ? "topb" : "blkd", buffer, len, clientaddr, clientaddrlen) <= 0)
+                log_error("error sending chain block");
+            else
+                log_info("chain block sent");
+        }
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
+        return;
+    }
+    if (!memcmp(type, "blkd", 4)) {
+        log_info("BLKD received (%s)", edwork_addr_ipv4(clientaddr));
+        if (payload_size < 120) {
+            log_warn("invalid BLKD packet");
+            return;
+        }
+        if (!verify(edfs_context, (const char *)payload + 64, payload_size - 64, payload, 64)) {
+            log_warn("blockchain packet signature verification failed, dropping");
+            return;
+        }
+        struct block *newblock = block_load_buffer(payload + 64, payload_size - 64);
+        if (!newblock) {
+            log_error("invalid chain block received");
+            return;
+        }
+        char b64name[MAX_B64_HASH_LEN];
+        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+        block_free(newblock);
+        return;
+    }
+    if (!memcmp(type, "topb", 4)) {
+        log_info("TOPB received (%s)", edwork_addr_ipv4(clientaddr));
+        if (payload_size < 120) {
+            log_warn("invalid TOPB packet");
+            return;
+        }
+        if (!verify(edfs_context, (const char *)payload + 64, payload_size - 64, payload, 64)) {
+            log_warn("blockchain packet signature verification failed, dropping");
+            return;
+        }
+        struct block *topblock = block_load_buffer(payload + 64, payload_size - 64);
+        if (!topblock) {
+            log_error("invalid top block received");
+            return;
+        }
+        if ((edfs_context->chain) && (edfs_context->chain->index > topblock->index)) {
+            log_error("owned chain index is bigger");
+            block_free(topblock);
+            return;
+        }
+        char b64name[MAX_B64_HASH_LEN];
+        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+        topblock->previous_block = edfs_context->chain;
+        edfs_context->chain = topblock;
+        log_trace("set new block");
         return;
     }
     log_error("unsupported message type received: %s", type);
@@ -3662,6 +3775,11 @@ void edwork_load_nodes(struct edfs *edfs_context) {
     notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     edfs_context->list_offset ++;
     edfs_context->list_timestamp = time(NULL);
+    if (edfs_context->list_offset == 1) {
+        usleep(100000);
+        uint64_t top_block = 0;
+        notify_io(edfs_context, "hblk", (const unsigned char *)&top_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+    }
 }
 
 void flush_queue(struct edfs *edfs_context) {
@@ -4012,12 +4130,47 @@ static void recursive_mkdir(const char *dir) {
     EDFS_MKDIR(tmp, S_IRWXU);
 }
 
+void edfs_block_save(struct edfs *edfs_context, struct block *chain) {
+    if (!chain)
+        return;
+
+    int size = 0;
+    char b64name[MAX_B64_HASH_LEN];
+    unsigned char *buffer = block_save_buffer(chain, &size);
+    if (buffer) {
+        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(chain->index, b64name), buffer, size, NULL, 1, NULL, NULL, NULL, NULL);
+        free(buffer);
+    }
+}
+
+struct block *edfs_blockchain_load(struct edfs *edfs_context) {
+    uint64_t i = 0;
+    struct block *newblock = NULL;
+    struct block *top_block;
+    do {
+        top_block = newblock;
+
+        char b64name[MAX_B64_HASH_LEN];
+        unsigned char buffer[BLOCK_SIZE_MAX];
+
+        int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computename(i ++, b64name), buffer, BLOCK_SIZE_MAX, NULL, 0, 1, 0, NULL, 0);
+        if (len <= 0)
+            break;
+
+        newblock = block_load_buffer(buffer, len);
+        if (newblock)
+            newblock->previous_block = top_block;
+    } while (newblock);
+    return top_block;
+}
+
 int edfs_init(struct edfs *edfs_context) {
     if (!edfs_context)
         return -1;
 
     recursive_mkdir(edfs_context->working_directory);
     recursive_mkdir(edfs_context->cache_directory);
+    recursive_mkdir(edfs_context->blockchain_directory);
 
     if (!edfs_context->read_only_fs) {
         if (signature_allows_write(edfs_context))
@@ -4030,6 +4183,14 @@ int edfs_init(struct edfs *edfs_context) {
     } else {
         // init root foloder
         read_file_json(edfs_context, 1, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+    }
+    edfs_context->chain = edfs_blockchain_load(edfs_context);
+    if (!edfs_context->chain) {
+        log_info("please wait while initializing first block");
+        edfs_context->chain = block_new(NULL, NULL, 0);
+        block_mine(edfs_context->chain, BLOCKCHAIN_COMPLEXITY);
+        edfs_block_save(edfs_context, edfs_context->chain);
+        log_info("done");
     }
     return 0;
 }
@@ -4056,6 +4217,7 @@ struct edfs *edfs_create_context(const char *use_working_directory) {
         edfs_context->signature = edfs_add_to_path(use_working_directory, "signature.json");
         edfs_context->nodes_file = edfs_add_to_path(use_working_directory, "nodes");
         edfs_context->default_nodes = edfs_add_to_path(use_working_directory, "default_nodes.json");
+        edfs_context->blockchain_directory = edfs_add_to_path(use_working_directory, "blockchain");
         edfs_context->forward_chunks = 5;
         edfs_make_key(edfs_context);
 
@@ -4072,11 +4234,13 @@ void edfs_destroy_context(struct edfs *edfs_context) {
     avl_destroy(&edfs_context->ino_cache, avl_ino_key_data_destructor);
     avl_destroy(&edfs_context->ino_checksum_mismatch, avl_ino_key_cache_destructor);
 
+    blockchain_free(edfs_context->chain);
     free(edfs_context->working_directory);
     free(edfs_context->cache_directory);
     free(edfs_context->signature);
     free(edfs_context->nodes_file);
     free(edfs_context->default_nodes);
+    free(edfs_context->blockchain_directory);
     free(edfs_context->host_and_port);
 }
 

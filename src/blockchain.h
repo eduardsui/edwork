@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 struct block {
-    unsigned int index;
+    uint64_t index;
     time_t timestamp;
     unsigned char *data;
     uint64_t nonce;
@@ -22,6 +22,11 @@ void block_free(struct block *block);
 int block_mine(struct block *newblock, int zero_bits);
 int block_verify(struct block *newblock, int zero_bits);
 int blockchain_verify(struct block *newblock, int zero_bits);
+int block_save(struct block *newblock, const char *path);
+struct block *block_load(const char *path, uint64_t index);
+struct block *blockchain_load(const char *path);
+unsigned char *block_save_buffer(struct block *newblock, int *size);
+struct block *block_load_buffer(const unsigned char *buffer, int size);
 void blockchain_free(struct block *block);
 
 #endif

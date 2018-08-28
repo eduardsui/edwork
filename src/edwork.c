@@ -113,9 +113,16 @@ const char *edwork_addr_ipv4(const void *clientaddr_ptr) {
     if (!clientaddr)
         return "";
 
-    const unsigned char *sin_addr = (const unsigned char *)&clientaddr->sin_addr;
-    snprintf(str_addr, sizeof(str_addr), "%i.%i.%i.%i:%i", (int)sin_addr[0], (int)sin_addr[1], (int)sin_addr[2], (int)sin_addr[3], (int)ntohs(clientaddr->sin_port));
-    return str_addr;
+    if (clientaddr->sin_family == AF_INET) {
+        const unsigned char *sin_addr = (const unsigned char *)&clientaddr->sin_addr;
+        snprintf(str_addr, sizeof(str_addr), "%i.%i.%i.%i:%i", (int)sin_addr[0], (int)sin_addr[1], (int)sin_addr[2], (int)sin_addr[3], (int)ntohs(clientaddr->sin_port));
+        return str_addr;
+    }
+    if (clientaddr->sin_family == AF_INET6) {
+        // to do
+        return "(ipv6addr)";
+    }
+    return "(unknown socket type)";
 }
 
 static int sockaddr_compare(void *k1, void *k2) {

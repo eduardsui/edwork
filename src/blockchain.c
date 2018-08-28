@@ -7,27 +7,14 @@
     #include <arpa/inet.h>
 #endif
 
-uint64_t block_switchorder(uint64_t input) {
-    uint64_t rval;
-    uint8_t *data = (uint8_t *)&rval;
-
-    data[0] = input >> 56;
-    data[1] = input >> 48;
-    data[2] = input >> 40;
-    data[3] = input >> 32;
-    data[4] = input >> 24;
-    data[5] = input >> 16;
-    data[6] = input >> 8;
-    data[7] = input >> 0;
-    return rval;
-}
+uint64_t switchorder(uint64_t input);
 
 #ifndef htonll
-#define htonll(x) ((1==htonl(1)) ? (x) : block_switchorder(x))
+#define htonll(x) ((1==htonl(1)) ? (x) : switchorder(x))
 #endif
 
 #ifndef ntohll
-#define ntohll(x) ((1==ntohl(1)) ? (x) : block_switchorder(x))
+#define ntohll(x) ((1==ntohl(1)) ? (x) : switchorder(x))
 #endif
 
 struct block *block_new(struct block *previous_block, const unsigned char *data, unsigned int data_len) {
@@ -87,7 +74,7 @@ int block_mine(struct block *newblock, int zero_bits) {
         return 0;
 
     uint64_t counter = 0;
-    unsigned char *ptr = proof_of_work + proof_len;
+    unsigned char *ptr = (unsigned char *)proof_of_work + proof_len;
 
     int bytes = zero_bits / 8;
     int mbits = zero_bits % 8;
@@ -204,4 +191,180 @@ void blockchain_free(struct block *newblock) {
         block_free(prev);
         newblock = prev;
     }
+}
+
+int block_save(struct block *newblock, const char *path) {
+    char fullpath[4096];
+    char out[32];
+
+    if (!newblock)
+        return -1;
+
+    fullpath[0] = 0;
+
+    uint64_t index = htonll(newblock->index);
+
+    size_t len = base64_encode((const BYTE *)&index, (BYTE *)out, sizeof(uint64_t), 0);
+    out[len] = 0;
+
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", path, out);
+
+    FILE *f = fopen(fullpath, "wb");
+    if (!f)
+        return -1;
+
+    uint64_t timestamp = htonll(newblock->timestamp);
+    uint64_t nonce = htonll(newblock->nonce);
+    unsigned int data_len = htonl(newblock->data_len);
+
+    fwrite("EDB0100", 1, 7, f);
+    fwrite(&index, 1, sizeof(uint64_t), f);
+    fwrite(&timestamp, 1, sizeof(uint64_t), f);
+    fwrite(&nonce, 1, sizeof(uint64_t), f);
+    fwrite(&newblock->hash, 1, 32, f);
+    fwrite(&data_len, 1, sizeof(unsigned int), f);
+    if (newblock->data_len)
+        fwrite(newblock->data, 1, newblock->data_len, f);
+    fclose(f);
+
+    return 0;
+}
+
+unsigned char *block_save_buffer(struct block *newblock, int *size) {
+    uint64_t index = htonll(newblock->index);
+    uint64_t timestamp = htonll(newblock->timestamp);
+    uint64_t nonce = htonll(newblock->nonce);
+    unsigned int data_len = htonl(newblock->data_len);
+    *size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32 + sizeof(unsigned int) + newblock->data_len;
+    unsigned char *buffer = (unsigned char *)malloc(*size);
+    unsigned char *ptr = buffer;
+
+    memcpy(ptr, &index, sizeof(uint64_t));
+    ptr += sizeof(uint64_t);
+    memcpy(ptr, &timestamp, sizeof(uint64_t));
+    ptr += sizeof(uint64_t);
+    memcpy(ptr, &nonce, sizeof(uint64_t));
+    ptr += sizeof(uint64_t);
+    memcpy(ptr, newblock->hash, 32);
+    ptr += 32;
+    memcpy(ptr, &data_len, sizeof(unsigned int));
+    ptr += sizeof(unsigned int);
+    if (newblock->data_len) {
+        memcpy(ptr, newblock->data, newblock->data_len);
+        ptr += newblock->data_len;
+    }
+    return buffer;
+}
+
+struct block *block_load_buffer(const unsigned char *buffer, int size) {
+    int min_size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32 + sizeof(unsigned int);
+    if ((!buffer) || (size < min_size))
+        return NULL;
+
+    uint64_t index;
+    uint64_t timestamp;
+    uint64_t nonce;
+    unsigned int data_len;
+    const unsigned char *ptr = buffer;
+
+    struct block *newblock = block_new(NULL, NULL, 0);
+
+    memcpy(&index, ptr, sizeof(uint64_t));
+    ptr += sizeof(uint64_t);
+    memcpy(&timestamp, ptr, sizeof(uint64_t));
+    ptr += sizeof(uint64_t);
+    memcpy(&nonce, ptr, sizeof(uint64_t));
+    ptr += sizeof(uint64_t);
+    memcpy(newblock->hash, ptr, 32);
+    ptr += 32;
+    memcpy(&data_len, ptr, sizeof(unsigned int));
+    ptr += sizeof(unsigned int);
+
+    newblock->index = ntohll(index);
+    newblock->timestamp = ntohll(timestamp);
+    newblock->nonce = ntohll(nonce);
+    newblock->data_len = ntohl(data_len);
+    if (newblock->data_len) {
+        newblock->data = (unsigned char *)malloc(data_len + 1);
+        if (!newblock->data) {
+            block_free(newblock);
+            return NULL;
+        }
+        memcpy(newblock->data, ptr, newblock->data_len);
+        newblock->data[newblock->data_len] = 0;
+        ptr += newblock->data_len;
+    }
+    return newblock;
+}
+
+struct block *block_load(const char *path, uint64_t index) {
+    char fullpath[4096];
+    char out[32];
+    struct block *newblock = NULL;
+
+    fullpath[0] = 0;
+
+    uint64_t index_be = htonll(index);
+
+    size_t len = base64_encode((const BYTE *)&index_be, (BYTE *)out, sizeof(uint64_t), 0);
+    out[len] = 0;
+
+    snprintf(fullpath, sizeof(fullpath), "%s/%s", path, out);
+
+    FILE *f = fopen(fullpath, "rb");
+    if (!f)
+        return NULL;
+
+    uint64_t timestamp;
+    unsigned char *data;
+    uint64_t nonce;
+    unsigned int data_len;
+    void *previous_block;
+    unsigned char hash[32];
+
+    char version_buffer[7];
+    if ((fread(version_buffer, 1, 7, f) < 7) || (memcmp(version_buffer, "EDB0100", 7))) {
+        // unsupported version
+        fclose(f);
+        return 0;
+    }
+    fread(&index, 1, sizeof(uint64_t), f);
+    fread(&timestamp, 1, sizeof(uint64_t), f);
+    fread(&nonce, 1, sizeof(uint64_t), f);
+    newblock = block_new(NULL, NULL, 0);
+    if (newblock) {
+        newblock->index = ntohll(index);
+        newblock->timestamp = ntohl(timestamp);
+        newblock->nonce = ntohll(nonce);
+        fread(&newblock->hash, 1, 32, f);
+        fread(&data_len, 1, sizeof(unsigned int), f);
+        newblock->data_len = ntohl(data_len);
+        if (newblock->data_len) {
+            newblock->data = (unsigned char *)malloc(newblock->data_len + 1);
+            if (data) {
+                newblock->data[newblock->data_len] = 0;
+            } else {
+                fclose(f);
+                block_free(newblock);
+                return NULL;
+            }
+            fread(newblock->data, 1, newblock->data_len, f);
+        }
+    }
+    fclose(f);
+
+    return newblock;
+}
+
+struct block *blockchain_load(const char *path) {
+    uint64_t i = 0;
+    struct block *newblock = NULL;
+    struct block *top_block;
+    do {
+        top_block = newblock;
+        newblock = block_load(path, i ++);
+        if (newblock)
+            newblock->previous_block = top_block;
+    } while (newblock);
+    return top_block;
 }
