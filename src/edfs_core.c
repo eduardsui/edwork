@@ -3171,7 +3171,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "ping", 4)) {
-        edfs_update_proof_hash(edfs_context, sequence, timestamp, type, payload, payload_size, who_am_i);
         log_info("PING received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         edfs_context->ping_received = time(NULL);
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
@@ -3345,6 +3344,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         int err = edwork_process_json(edfs_context, payload, payload_size, &ino);
         *(uint64_t *)buffer = htonll(ino);
         if (err > 0) {
+            edfs_update_proof_hash(edfs_context, sequence, timestamp, type, payload, payload_size, who_am_i);
             if (edwork_send_to_peer(edwork, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen) <= 0) {
                 log_error("error sending ACK");
                 return;
@@ -3500,7 +3500,6 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "hash", 4)) {
-        edfs_update_proof_hash(edfs_context, sequence, timestamp, type, payload, payload_size, who_am_i);
         log_info("HASH request received (%s)", edwork_addr_ipv4(clientaddr));
         int magnitude = edwork_magnitude(edwork);
         int randomly_ignore = 0;
@@ -3704,7 +3703,12 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
         topblock->previous_block = edfs_context->chain;
         edfs_context->chain = topblock;
-        log_trace("set new block");
+        if (!block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
+            log_error("block verify error");
+            edfs_context->chain = (struct block *)edfs_context->chain->previous_block;
+            block_free(topblock);
+        } else
+            log_trace("set new block");
         return;
     }
     log_error("unsupported message type received: %s", type);
