@@ -1,6 +1,8 @@
 #include "blockchain.h"
 #include "sha3.h"
 #include "base64.h"
+#include "inttypes.h"
+
 #ifdef _WIN32
     #include <windows.h>
 #else
@@ -8,6 +10,7 @@
 #endif
 
 uint64_t switchorder(uint64_t input);
+uint64_t microseconds();
 
 #ifndef htonll
 #define htonll(x) ((1==htonl(1)) ? (x) : switchorder(x))
@@ -22,7 +25,7 @@ struct block *block_new(struct block *previous_block, const unsigned char *data,
     if (!newblock)
         return NULL;
 
-    newblock->timestamp = time(NULL);
+    newblock->timestamp = microseconds();
     newblock->index = previous_block ? (previous_block->index + 1) : 0;
     newblock->previous_block = (void *)previous_block;
     newblock->nonce = 0;
@@ -69,7 +72,7 @@ int block_mine(struct block *newblock, int zero_bits) {
 
     proof_of_work[0] = 0;
 
-    int proof_len = snprintf((char *)proof_of_work, 0x100, "edblock:1:%i:%i:%.*s::%i:", zero_bits, (int)newblock->timestamp, (int)newblock->data_len, (const char *)newblock->data, (int)newblock->index);
+    int proof_len = snprintf((char *)proof_of_work, 0x100, "edblock:1:%i:%i:%.*s::%" PRIu64 ":", zero_bits, (int)(newblock->timestamp / 1000000UL), (int)newblock->data_len, (const char *)newblock->data, newblock->index);
     if (proof_len >= 0x100 - 10)
         return 0;
 
@@ -138,7 +141,7 @@ int block_verify(struct block *newblock, int zero_bits) {
     if (!newblock)
         return 0;
 
-    int proof_len = snprintf((char *)proof_of_work, 0x100, "edblock:1:%i:%i:%.*s::%i:", zero_bits, (int)newblock->timestamp, (int)newblock->data_len, (const char *)newblock->data, (int)newblock->index);
+    int proof_len = snprintf((char *)proof_of_work, 0x100, "edblock:1:%i:%i:%.*s::%" PRIu64 ":", zero_bits, (int)(newblock->timestamp / 1000000UL), (int)newblock->data_len, (const char *)newblock->data, newblock->index);
     sha3_Init256(&ctx);
 
     uint64_t counter_be = ntohll(newblock->nonce);

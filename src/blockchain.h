@@ -9,7 +9,7 @@
 
 struct block {
     uint64_t index;
-    time_t timestamp;
+    uint64_t timestamp;
     unsigned char *data;
     uint64_t nonce;
     unsigned int data_len;

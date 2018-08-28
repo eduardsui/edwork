@@ -85,6 +85,9 @@
 #define EDWORK_MAX_RETRY_TIMEOUT    5000
 #define EDWORK_MAX_DIR_RETRY_TIMEOUT 2000
 
+// new block every 2 minutes
+#define EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT   120000000UL
+
 
 #define EDFS_SET_ATTR_MODE	(1 << 0)
 #define EDFS_SET_ATTR_UID	(1 << 1)

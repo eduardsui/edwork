@@ -243,7 +243,7 @@ struct edfs {
 
     int forward_chunks;
 
-    char proof_of_time[40];
+    unsigned char proof_of_time[40];
     struct block *chain;
 };
 
@@ -3152,6 +3152,27 @@ void edfs_update_proof_hash(struct edfs *edfs_context, uint64_t sequence, uint64
     memcpy(&messages, edfs_context->proof_of_time, sizeof(uint64_t));
     messages = htonll(ntohll(messages) + 1);
     memcpy(edfs_context->proof_of_time, &messages, sizeof(uint64_t));
+
+    if ((edfs_context->chain) && (!edfs_context->read_only_fs)) {
+        uint64_t timestamp = edfs_context->chain->timestamp;
+        if (microseconds() - edfs_context->chain->timestamp > EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) {
+            struct block *newblock = block_new(edfs_context->chain, edfs_context->proof_of_time, 40);
+            if (newblock) {
+                block_mine(newblock, BLOCKCHAIN_COMPLEXITY);
+                memset(edfs_context->proof_of_time, 0, 40);
+                edfs_context->chain = newblock;
+                edfs_block_save(edfs_context, edfs_context->chain);
+                // update all directory hashes !!
+                char b64name[MAX_B64_HASH_LEN];
+                unsigned char buffer[EDWORK_PACKET_SIZE];
+                int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+                if (len > 0) {
+                    notify_io(edfs_context, "topb", (const unsigned char *)buffer, len, NULL, 0, 0, 0, 0, edfs_context->edwork, 0, 0, NULL, 0, NULL, NULL);
+                    log_info("new chain block");
+                }
+            }
+        }
+    }
 }
 
 void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, void *userdata) {
@@ -4174,7 +4195,6 @@ int edfs_init(struct edfs *edfs_context) {
 
     recursive_mkdir(edfs_context->working_directory);
     recursive_mkdir(edfs_context->cache_directory);
-    recursive_mkdir(edfs_context->blockchain_directory);
 
     if (!edfs_context->read_only_fs) {
         if (signature_allows_write(edfs_context))
@@ -4189,6 +4209,19 @@ int edfs_init(struct edfs *edfs_context) {
         read_file_json(edfs_context, 1, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
     }
     edfs_context->chain = edfs_blockchain_load(edfs_context);
+    if (edfs_context->chain) {
+        time_t stamp = (time_t)(edfs_context->chain->timestamp / 1000000UL);
+        struct tm *tstamp = gmtime(&stamp);
+        if (blockchain_verify(edfs_context->chain, BLOCKCHAIN_COMPLEXITY)) {
+            log_info("blockchain verified, block index is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
+        } else {
+            log_error("blockchain is invalid, block index is %" PRIu64 ", UTC: %s => %" PRIu64, edfs_context->chain->index, asctime(tstamp));
+            blockchain_free(edfs_context->chain);
+            edfs_context->chain = NULL;
+            recursive_rmdir(edfs_context->blockchain_directory);
+        }
+    }
+    recursive_mkdir(edfs_context->blockchain_directory);
     return 0;
 }
 
