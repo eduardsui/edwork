@@ -3694,8 +3694,8 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_error("invalid top block received");
             return;
         }
-        if ((edfs_context->chain) && (edfs_context->chain->index > topblock->index)) {
-            log_error("owned chain index is bigger");
+        if ((edfs_context->chain) && (edfs_context->chain->index >= topblock->index)) {
+            log_warn("owned chain index is bigger");
             block_free(topblock);
             return;
         }
