@@ -4185,14 +4185,19 @@ int edfs_init(struct edfs *edfs_context) {
         read_file_json(edfs_context, 1, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
     }
     edfs_context->chain = edfs_blockchain_load(edfs_context);
-    if (!edfs_context->chain) {
-        log_info("please wait while initializing first block");
-        edfs_context->chain = block_new(NULL, NULL, 0);
-        block_mine(edfs_context->chain, BLOCKCHAIN_COMPLEXITY);
-        edfs_block_save(edfs_context, edfs_context->chain);
-        log_info("done");
-    }
     return 0;
+}
+
+int edfs_genesis_if_new(struct edfs *edfs_context) {
+    if (edfs_context->chain)
+        return 0;
+
+    log_info("please wait while initializing first block");
+    edfs_context->chain = block_new(NULL, NULL, 0);
+    block_mine(edfs_context->chain, BLOCKCHAIN_COMPLEXITY);
+    edfs_block_save(edfs_context, edfs_context->chain);
+    log_info("done");
+    return 1;
 }
 
 char *edfs_add_to_path(const char *path, const char *subpath) {
