@@ -3163,7 +3163,6 @@ void edfs_try_new_block(struct edfs *edfs_context) {
 
         if (edfs_context->start_timestamp > chain_timestamp)
             chain_timestamp = edfs_context->start_timestamp;
-
         if ((microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) {
             edfs_sort(edfs_context->proof_inodes, edfs_context->proof_inodes_len);
             int block_data_size = edfs_context->proof_inodes_len * (sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32) + 72;
@@ -3208,18 +3207,16 @@ void edfs_try_new_block(struct edfs *edfs_context) {
 
 void edfs_update_proof_inode(struct edfs *edfs_context, uint64_t ino) {
    if (ino) {
-        if (edfs_context->proof_inodes_len) {
-            int found = 0;
-            int i;
-            for (i = 0; i < edfs_context->proof_inodes_len; i++) {
-                if (edfs_context->proof_inodes[i] == ino) {
-                    found = 1;
-                    break;
-                }
+        int found = 0;
+        int i;
+        for (i = 0; i < edfs_context->proof_inodes_len; i++) {
+            if (edfs_context->proof_inodes[i] == ino) {
+                found = 1;
+                break;
             }
-            if ((!found) && (edfs_context->proof_inodes_len < MAX_PROOF_INODES))
-                edfs_context->proof_inodes[edfs_context->proof_inodes_len++] = ino;
         }
+        if ((!found) && (edfs_context->proof_inodes_len < MAX_PROOF_INODES))
+            edfs_context->proof_inodes[edfs_context->proof_inodes_len++] = ino;
     }
 }
 
@@ -4326,7 +4323,6 @@ struct block *edfs_blockchain_load(struct edfs *edfs_context) {
 
         char b64name[MAX_B64_HASH_LEN];
         unsigned char buffer[BLOCK_SIZE_MAX];
-
         int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computename(i ++, b64name), buffer, BLOCK_SIZE_MAX, NULL, 0, 1, 0, NULL, 0);
         if (len <= 0)
             break;
@@ -4365,7 +4361,6 @@ int edfs_init(struct edfs *edfs_context) {
             log_info("blockchain verified, head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
         } else {
             log_error("blockchain is invalid, head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
-    exit(0);
             blockchain_free(edfs_context->chain);
             edfs_context->chain = NULL;
             recursive_rmdir(edfs_context->blockchain_directory);
