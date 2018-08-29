@@ -3144,6 +3144,19 @@ void edfs_try_reset_proof(struct edfs *edfs_context) {
     }
 }
 
+void edfs_broadcast_top(struct edfs *edfs_context, void *use_clientaddr, int clientaddr_len) {
+    if ((!edfs_context) || (!edfs_context->chain))
+        return;
+
+    char b64name[MAX_B64_HASH_LEN];
+    unsigned char buffer[EDWORK_PACKET_SIZE];
+    int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computename(edfs_context->chain->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+    if (len > 0) {
+        notify_io(edfs_context, "topb", (const unsigned char *)buffer, len, NULL, 0, 0, 0, 0, edfs_context->edwork, 0, 0, use_clientaddr, clientaddr_len, NULL, NULL);
+        log_info("broadcasting chain block");
+    }
+}
+
 void edfs_try_new_block(struct edfs *edfs_context) {
     if ((edfs_context->chain) && (!edfs_context->read_only_fs) && (edfs_context->proof_inodes_len)) {
         uint64_t chain_timestamp = edfs_context->chain->timestamp;
@@ -3164,7 +3177,9 @@ void edfs_try_new_block(struct edfs *edfs_context) {
                 ptr += sizeof(uint64_t);
                 uint64_t generation = 0;
                 uint64_t timestamp = 0;
-                read_file_json(edfs_context, inode, NULL, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, ptr + sizeof(uint64_t) + sizeof(uint64_t));
+                // set hash to 0 for deleted file
+                if (!read_file_json(edfs_context, inode, NULL, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, ptr + sizeof(uint64_t) + sizeof(uint64_t)))
+                    memset(ptr + sizeof(uint64_t) + sizeof(uint64_t), 0, 32);
                 generation = htonll(generation);
                 timestamp = htonll(timestamp);
                 memcpy(ptr, &generation, sizeof(uint64_t));
@@ -3184,14 +3199,8 @@ void edfs_try_new_block(struct edfs *edfs_context) {
                 edfs_context->proof_inodes_len = 0;
                 edfs_context->chain = newblock;
                 edfs_block_save(edfs_context, edfs_context->chain);
-                // update all directory hashes !!
-                char b64name[MAX_B64_HASH_LEN];
-                unsigned char buffer[EDWORK_PACKET_SIZE];
-                int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
-                if (len > 0) {
-                    notify_io(edfs_context, "topb", (const unsigned char *)buffer, len, NULL, 0, 0, 0, 0, edfs_context->edwork, 0, 0, NULL, 0, NULL, NULL);
-                    log_info("new chain block");
-                }
+                // TODO: update all directory hashes
+                edfs_broadcast_top(edfs_context, NULL, 0);
             }
         }
     }
@@ -3800,9 +3809,44 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_error("invalid top block received");
             return;
         }
+        char b64name[MAX_B64_HASH_LEN];
         if ((edfs_context->chain) && (edfs_context->chain->index >= topblock->index)) {
-            log_warn("owned chain index is bigger");
-            block_free(topblock);
+            int update_current_chain = 0;
+            if (edfs_context->chain->index == topblock->index) {
+                if (!memcmp(topblock->hash, edfs_context->chain->hash, 32)) {
+                    log_info("same block, chain is valid");
+                    return;
+                }
+                // conflict, mediate
+                if (topblock->data_len > topblock->data_len)
+                    update_current_chain = 1;
+                else
+                if (topblock->data_len == topblock->data_len) {
+                    if (memcmp(topblock->hash, edfs_context->chain->hash, 32) == 1)
+                        update_current_chain = 1;
+                }
+            }
+            if (update_current_chain) {
+                struct block *previous_block = (struct block *)edfs_context->chain->previous_block;
+                topblock->previous_block = previous_block;
+                if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
+                    block_free(edfs_context->chain);
+                    edfs_context->chain = topblock;
+                    edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+                    edfs_try_reset_proof(edfs_context);
+                    edfs_broadcast_top(edfs_context, NULL, 0);
+                    log_warn("mediated current block");
+                } else {
+                    log_warn("cannot mediate received block (block verify fails)");
+                    block_free(topblock);
+                }
+            } else {
+                log_warn("owned chain index is bigger");
+                block_free(topblock);
+                // force rebroadcast top
+                edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
+                edfs_broadcast_top(edfs_context, NULL, 0);
+            }
             return;
         }
         if ((edfs_context->chain) && (topblock->index != edfs_context->chain->index + 1)) {
@@ -3814,13 +3858,14 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             block_free(topblock);
             return;
         }
-        char b64name[MAX_B64_HASH_LEN];
         edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
         topblock->previous_block = edfs_context->chain;
         edfs_context->chain = topblock;
         if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
             edfs_try_reset_proof(edfs_context);
             log_trace("set new block");
+            usleep(1000);
+            edfs_broadcast_top(edfs_context, NULL, 0);
         } else {
             log_error("block verify error");
             edfs_context->chain = (struct block *)edfs_context->chain->previous_block;
