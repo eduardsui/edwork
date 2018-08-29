@@ -3881,10 +3881,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     return;
                 }
                 // conflict, mediate
-                if (topblock->data_len > topblock->data_len)
+                if (topblock->data_len > edfs_context->chain->data_len)
                     update_current_chain = 1;
                 else
-                if (topblock->data_len == topblock->data_len) {
+                if (topblock->data_len == edfs_context->chain->data_len) {
                     if (memcmp(topblock->hash, edfs_context->chain->hash, 32) == 1)
                         update_current_chain = 1;
                 }
