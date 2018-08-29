@@ -1129,9 +1129,10 @@ void write_json(struct edfs *edfs_context, const char *base_path, const char *na
         thread_mutex_unlock(&edfs_context->io_lock);
 
     // do not broadcast root object
-    if (parent != 0)
+    if (parent != 0) {
         notify_io(edfs_context, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, edfs_context->edwork, 0, 0, NULL, 0, NULL, NULL);
-    edfs_update_proof_inode(edfs_context, inode);
+        edfs_update_proof_inode(edfs_context, inode);
+    }
 
     json_free_serialized_string(serialized_string);
     json_value_free(root_value);
