@@ -3830,10 +3830,9 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         }
         // hblk is index 1-based, blocks are 0-based
         uint64_t requested_block = htonll(newblock->index + 2);
-        notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-
         char b64name[MAX_B64_HASH_LEN];
         if ((!edfs_context->chain) && (!newblock->index)) {
+            notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
             edfs_context->chain = newblock;
             edfs_try_reset_proof(edfs_context);
@@ -3841,6 +3840,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         if ((edfs_context->chain) && (newblock->index == edfs_context->chain->index + 1)) {
             newblock->previous_block = edfs_context->chain;
             if (block_verify(newblock, BLOCKCHAIN_COMPLEXITY)) {
+                notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
                 edfs_context->chain = newblock;
                 edfs_try_reset_proof(edfs_context);
