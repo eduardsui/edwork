@@ -2448,10 +2448,52 @@ int edfs_mkdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name, m
     return makenode(edfs_context, parent, name, S_IFDIR | 0755, &inode);
 }
 
+int edfs_lookup_blockchain(struct edfs *edfs_context, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char *blockchainhash, uint64_t *generation, uint64_t *timestamp) {
+    if (timestamp)
+        *timestamp = 0;
+    if (generation)
+        *generation = 0;
+    
+    struct block *blockchain = edfs_context->chain;
+    int i;
+    int record_size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32;
+    uint64_t inode_be = htonll(inode);
+    while ((blockchain) && ((blockchain->timestamp + EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) >= block_timestamp_limit)) {
+        int len = blockchain->data_len - 72;
+        if (len >= record_size) {
+            unsigned char *ptr = blockchain->data;
+            for (i = 0; i < len; i += record_size) {
+                if (*(uint64_t *)ptr == inode_be) {
+                    if (generation) {
+                        memcpy(generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
+                        *generation = ntohll(*generation);
+                    }
+                    if (timestamp) {
+                        memcpy(timestamp, ptr + sizeof(uint64_t) + sizeof(uint64_t), sizeof(uint64_t));
+                        *timestamp = ntohll(*timestamp);
+                    }
+                    if (blockchainhash)
+                        memcpy(blockchainhash, ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), 32);
+                    log_debug("got data from blockchain");
+                    return 1;
+                }
+                ptr += record_size;
+            }
+        }
+        blockchain = (struct block *)blockchain->previous_block;
+    }
+    return 0;
+}
+
 struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
     unsigned char hash[32];
+    unsigned char blockchainhash[32];
     static unsigned char null_hash[32];
-    int type = read_file_json(edfs_context, ino, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    uint64_t blockchain_timestamp = 0;
+    uint64_t blockchain_generation = 0;
+    uint64_t blockchain_limit = 0;
+    int type = read_file_json(edfs_context, ino, NULL, NULL, &blockchain_limit, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    int found_in_blockchain = edfs_lookup_blockchain(edfs_context, ino, blockchain_limit, blockchainhash, &blockchain_generation, &blockchain_timestamp);
     if ((type & S_IFDIR) == 0)
         return NULL;
 
@@ -3191,7 +3233,7 @@ void edfs_try_new_block(struct edfs *edfs_context) {
             memcpy(ptr, edfs_context->proof_of_time, 40);
             ptr += 40;
 
-            struct block *newblock = block_new(edfs_context->chain, ptr, block_data_size);
+            struct block *newblock = block_new(edfs_context->chain, block_data, block_data_size);
             if (newblock) {
                 block_mine(newblock, BLOCKCHAIN_COMPLEXITY);
                 memset(edfs_context->proof_of_time, 0, 40);
