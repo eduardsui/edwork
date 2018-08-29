@@ -80,6 +80,8 @@ struct edwork_data {
 
     unsigned char i_am[32];
     unsigned char key_id[32];
+    unsigned char chain[32];
+
     char *log_dir;
     uint64_t sequence;
 
@@ -333,6 +335,12 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     return data;
 }
 
+void edwork_update_chain(struct edwork_data *data, unsigned char *hash) {
+    if ((!data) || (!hash))
+        return;
+    memcpy(data->chain, hash, 32);
+}
+
 int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_work, int proof_of_work_size) {
     char *proof = (char *)malloc(proof_of_work_size + 1);
     if (!proof)
@@ -375,8 +383,8 @@ unsigned char *make_packet(struct edwork_data *data, const char type[4], const u
     timestamp = htonll(timestamp);
     memcpy(buf + 44, &timestamp, sizeof(timestamp));
     // reserved bytes for future use
-    edwork_random_bytes(buf + 52, 40);
-    // memcpy(buf + 52, reserved_buf, sizeof(reserved_buf));
+    memcpy(buf + 52, data->chain, 32);
+    edwork_random_bytes(buf + 84, 8);
     hmac_sha256(data->key_id, 32, buf, 92, data_buffer, *len, buf + 92); 
 
     memcpy(buf + 124, &size, sizeof(uint32_t));
@@ -880,6 +888,8 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
     memcpy(&timestamp, buffer + 44, sizeof(uint64_t));
     timestamp = ntohll(timestamp);
 
+    const unsigned char *blockhash = buffer + 52;
+    
     memcpy(&size, buffer + 124, sizeof(uint32_t));
     size = ntohl(size);
 
@@ -919,7 +929,7 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
     if (callback) {
         // ensure json is 0 terminated
         buffer[n] = 0;
-        callback(data, sequence, timestamp, type, payload, size, clientaddr, clientaddrlen, who_am_i, userdata);
+        callback(data, sequence, timestamp, type, payload, size, clientaddr, clientaddrlen, who_am_i, blockhash, userdata);
     }
 
     return 1;

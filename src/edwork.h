@@ -6,7 +6,7 @@
 
 struct edwork_data;
 
-typedef void (*edwork_dispatch_callback)(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, void *userdata);
+typedef void (*edwork_dispatch_callback)(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, const unsigned char *blockhash, void *userdata);
 
 #ifdef _WIN32
     void usleep(uint64_t usec);
@@ -19,6 +19,7 @@ int edwork_random_bytes(unsigned char *destination, int len);
 
 struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned char *key);
 void edwork_confirm_seq(struct edwork_data *data, uint64_t sequence, int acks);
+void edwork_update_chain(struct edwork_data *data, unsigned char *hash);
 void edwork_add_node(struct edwork_data *data, const char *node, int port);
 int edworks_data_pending(struct edwork_data* data, int timeout_ms);
 int edwork_dispatch(struct edwork_data* data, edwork_dispatch_callback callback, int timeout_ms, void *userdata);
