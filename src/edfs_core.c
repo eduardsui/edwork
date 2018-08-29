@@ -4334,7 +4334,7 @@ int edfs_genesis_if_new(struct edfs *edfs_context) {
         return 0;
 
     log_info("please wait while initializing first block");
-    edfs_context->chain = block_new(NULL, NULL, 0);
+    edfs_context->chain = block_new(NULL, edwork_who_i_am(edfs_context->edwork), 32);
     block_mine(edfs_context->chain, BLOCKCHAIN_COMPLEXITY);
     edfs_block_save(edfs_context, edfs_context->chain);
     log_info("done");
