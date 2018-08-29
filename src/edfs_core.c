@@ -4364,7 +4364,8 @@ int edfs_init(struct edfs *edfs_context) {
         if (blockchain_verify(edfs_context->chain, BLOCKCHAIN_COMPLEXITY)) {
             log_info("blockchain verified, head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
         } else {
-            log_error("blockchain is invalid, head is %" PRIu64 ", UTC: %s => %" PRIu64, edfs_context->chain->index, asctime(tstamp));
+            log_error("blockchain is invalid, head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
+    exit(0);
             blockchain_free(edfs_context->chain);
             edfs_context->chain = NULL;
             recursive_rmdir(edfs_context->blockchain_directory);
@@ -4383,6 +4384,7 @@ int edfs_genesis_if_new(struct edfs *edfs_context) {
     block_mine(edfs_context->chain, BLOCKCHAIN_COMPLEXITY);
     edfs_block_save(edfs_context, edfs_context->chain);
     log_info("done");
+    edfs_broadcast_top(edfs_context, NULL, 0);
     return 1;
 }
 

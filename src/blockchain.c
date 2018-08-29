@@ -2,6 +2,7 @@
 #include "sha3.h"
 #include "base64.h"
 #include "inttypes.h"
+#include "log.h"
 
 #ifdef _WIN32
     #include <windows.h>
@@ -107,7 +108,7 @@ int block_mine(struct block *newblock, int zero_bits) {
         sha3_Update(&ctx, (unsigned char *)&counter_be, 8);
 #endif
         if (newblock->previous_block)
-            sha3_Update(&ctx, (struct block *)newblock->previous_block, 32);
+            sha3_Update(&ctx, ((struct block *)newblock->previous_block)->hash, 32);
         else
             sha3_Update(&ctx, ref_hash, 32);
 
@@ -162,15 +163,17 @@ int block_verify(struct block *newblock, int zero_bits) {
     sha3_Update(&ctx, (unsigned char *)&counter_be, 8);
 #endif
     if (newblock->previous_block)
-        sha3_Update(&ctx, (struct block *)newblock->previous_block, 32);
+        sha3_Update(&ctx, ((struct block *)newblock->previous_block)->hash, 32);
     else
         sha3_Update(&ctx, ref_hash, 32);
 
     hash = (const unsigned char *)sha3_Finalize(&ctx);
     bytes = zero_bits / 8;
     mbits = zero_bits % 8;
-    if ((memcmp(hash, ref_hash, bytes)) || ((mbits) && ((hash[bytes] >> mbits) != (ref_hash[bytes] >> mbits))))
+    if ((memcmp(hash, ref_hash, bytes)) || ((mbits) && ((hash[bytes] >> mbits) != (ref_hash[bytes] >> mbits)))) {
+        log_error("error in hash verify, block %i", (int)newblock->index);
         return 0;
+    }
 
     return 1;
 }
