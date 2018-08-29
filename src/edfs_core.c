@@ -204,6 +204,7 @@ struct edfs {
     char *host_and_port;
     unsigned int list_offset;
     time_t list_timestamp;
+    uint64_t start_timestamp;
 
     char *working_directory;
     char *cache_directory;
@@ -3136,10 +3137,21 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
     return 1;
 }
 
+void edfs_try_reset_proof(struct edfs *edfs_context) {
+    if ((edfs_context->chain) && (!edfs_context->read_only_fs)) {
+        edfs_context->proof_inodes_len = 0;
+        memset(edfs_context->proof_of_time, 0, 40);
+    }
+}
+
 void edfs_try_new_block(struct edfs *edfs_context) {
     if ((edfs_context->chain) && (!edfs_context->read_only_fs) && (edfs_context->proof_inodes_len)) {
-        uint64_t timestamp = edfs_context->chain->timestamp;
-        if ((microseconds() - edfs_context->chain->timestamp > EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) {
+        uint64_t chain_timestamp = edfs_context->chain->timestamp;
+
+        if (edfs_context->start_timestamp > chain_timestamp)
+            chain_timestamp = edfs_context->start_timestamp;
+
+        if ((microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) {
             edfs_sort(edfs_context->proof_inodes, edfs_context->proof_inodes_len);
             int block_data_size = edfs_context->proof_inodes_len * (sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32) + 72;
             unsigned char *block_data = (unsigned char *)malloc(block_data_size);
@@ -3755,12 +3767,14 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         if ((!edfs_context->chain) && (!newblock->index)) {
             edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
             edfs_context->chain = newblock;
+            edfs_try_reset_proof(edfs_context);
         } else
         if ((edfs_context->chain) && (newblock->index == edfs_context->chain->index + 1)) {
             newblock->previous_block = edfs_context->chain;
-            if (!block_verify(newblock, BLOCKCHAIN_COMPLEXITY)) {
+            if (block_verify(newblock, BLOCKCHAIN_COMPLEXITY)) {
                 edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
                 edfs_context->chain = newblock;
+                edfs_try_reset_proof(edfs_context);
             } else {
                 log_error("block verify error");
                 block_free(newblock);
@@ -3804,12 +3818,14 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
         topblock->previous_block = edfs_context->chain;
         edfs_context->chain = topblock;
-        if (!block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
+        if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
+            edfs_try_reset_proof(edfs_context);
+            log_trace("set new block");
+        } else {
             log_error("block verify error");
             edfs_context->chain = (struct block *)edfs_context->chain->previous_block;
             block_free(topblock);
-        } else
-            log_trace("set new block");
+        }
         return;
     }
     log_error("unsupported message type received: %s", type);
@@ -4193,6 +4209,8 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
 
         thread_mutex_unlock(&edfs_context->io_lock);
         thread_mutex_unlock(&edfs_context->lock);
+
+        edfs_context->start_timestamp = microseconds();
     } else
         log_error("edwork already initialized");
 }
