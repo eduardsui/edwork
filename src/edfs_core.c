@@ -269,6 +269,7 @@ unsigned int edwork_resync_dir_desc(struct edfs *edfs_context, uint64_t inode, v
 int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int size, unsigned char *out, const unsigned char *dest_i_am, const unsigned char *src_i_am, const unsigned char *shared_secret);
 void edfs_block_save(struct edfs *edfs_context, struct block *chain);
 void edfs_update_proof_inode(struct edfs *edfs_context, uint64_t ino);
+int edfs_lookup_blockchain(struct edfs *edfs_context, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char *blockchainhash, uint64_t *generation, uint64_t *timestamp);
 
 uint64_t microseconds() {
     struct timeval tv;
@@ -1927,16 +1928,27 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
     static unsigned char null_hash[32];
     unsigned char hash[32];
     unsigned char computed_hash[32];
-    int type = read_file_json(edfs_context, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    unsigned char blockchainhash[32];
+    uint64_t blockchain_timestamp = 0;
+    uint64_t blockchain_generation = 0;
+    uint64_t blockchain_limit = 0;
+    int type = read_file_json(edfs_context, ino, NULL, &size, &blockchain_limit, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
     if (!type)
         return -EACCES;
     if (type & S_IFDIR)
         return -EISDIR;
+
+    int found_in_blockchain = edfs_lookup_blockchain(edfs_context, ino, blockchain_limit, blockchainhash, &blockchain_generation, &blockchain_timestamp);
+
     if (fbuf) {
         if ((edfs_context->read_only_fs) && ((flags & 3) != O_RDONLY))
             return -EROFS;
 
         int check_hash = 0;
+        if ((found_in_blockchain) && (memcmp(blockchainhash, hash, 32))) {
+            log_warn("blockchain hash error, falling back to descriptor check");
+            found_in_blockchain = 0;
+        }
         if ((size > 0) && (memcmp(hash, null_hash, 32))) {
             // file hash hash
             int valid_hash = 0;
@@ -1949,6 +1961,10 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             do {
                 if (edfs_update_chain(edfs_context, ino, size, computed_hash, &max_chunks)) {
                     if (!memcmp(hash, computed_hash, 32)) {
+                        valid_hash = 1;
+                        break;
+                    }
+                    if ((found_in_blockchain) && (!memcmp(blockchainhash, computed_hash, 32))) {
                         valid_hash = 1;
                         break;
                     }
@@ -2503,7 +2519,11 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
         char b64name[MAX_B64_HASH_LEN];
         unsigned char computed_hash[32];
         uint64_t network_inode = htonll(ino);
-        if (memcmp(hash, null_hash, 32)) {
+        if ((found_in_blockchain) && (memcmp(blockchainhash, hash, 32))) {
+            log_warn("blockchain hash error, falling back to descriptor check");
+            found_in_blockchain = 0;
+        }
+        if ((!found_in_blockchain) || (memcmp(hash, null_hash, 32))) {
             snprintf(path, sizeof(path), "%s/%s", edfs_context->working_directory, computename(ino, b64name));
             unsigned char proof_cache[1024];
             int proof_size = 0;
