@@ -250,6 +250,8 @@ struct edfs {
     uint64_t proof_inodes[MAX_PROOF_INODES];
     int proof_inodes_len;
     struct block *chain;
+
+    int proxy;
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -3486,6 +3488,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     else
                         log_info("DAT2 sent");
                 }
+            } else
+            if (edfs_context->proxy) {
+                log_trace("forwarding chunk requet");
+                request_data(edfs_context, ino, chunk, 1, 0, NULL, NULL);
             }
         }
         return;
@@ -4618,4 +4624,10 @@ void edfs_set_initial_friend(struct edfs *edfs_context, const char *peer) {
 
     memcpy(edfs_context->host_and_port, peer, len);
     edfs_context->host_and_port[len] = 0;
+}
+
+void edfs_set_proxy(struct edfs *edfs_context, int proxy) {
+    if (!edfs_context)
+        return;
+    edfs_context->proxy = (proxy != 0);
 }

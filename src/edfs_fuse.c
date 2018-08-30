@@ -397,6 +397,9 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "genesis")) {
                     edfs_genesis_if_new(edfs_context);
                 } else
+                if (!strcmp(arg, "proxy")) {
+                    edfs_set_proxy(edfs_context, 1);
+                } else
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -410,6 +413,7 @@ int main(int argc, char *argv[]) {
                         "    -chunks n          set the number of forward chunks to be requested on read\n"
                         "    -daemonize         run as daemon/service\n"
                         "    -genesis           initialize blockchain if not created\n"
+                        "    -proxy             enable proxy mode (forward WANT requets)\n"
                         , argv[0]);
                     exit(0);
                 } else {
