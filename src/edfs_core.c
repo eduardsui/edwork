@@ -4264,14 +4264,12 @@ int edwork_thread(void *userdata) {
     time_t write_nodes = time(NULL);
     time_t rebroadcast = 0;
     time_t startup = time(NULL);
-    time_t resync_timestamp = time(NULL);
     int broadcast_offset = 0;
     while (!edfs_context->network_done) {
-        if (((edfs_context->resync) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) || (time(NULL) - resync_timestamp > EDWORK_RESYNC_INTERVAL)) {
+        if ((edfs_context->resync) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
             uint64_t ack = htonll(1);
             notify_io(edfs_context, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             edfs_context->resync = 0;
-            resync_timestamp = time(NULL);
         }
         if ((edfs_context->force_rebroadcast) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
             edwork_resync(edfs_context, NULL, 0);
