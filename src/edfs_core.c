@@ -3310,6 +3310,22 @@ void edfs_update_proof_hash(struct edfs *edfs_context, uint64_t sequence, uint64
     memcpy(edfs_context->proof_of_time, &messages, sizeof(uint64_t));
 }
 
+int edfs_check_blockhash(struct edfs *edfs_context, const unsigned char *blockhash, int maxlevel) {
+    if (!blockhash)
+        return 0;
+    if (!edfs_context->chain)
+        return 0;
+
+    struct block *block2 = edfs_context->chain;
+    do {
+        if (!memcmp(block2->hash, blockhash, 32))
+            return 1;
+
+        block2 = (struct block *)block2->previous_block;
+    } while ((block2) && (maxlevel-- > 0));
+    return 0;
+}
+
 void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, const unsigned char *blockhash, void *userdata) {
     unsigned char buffer[BLOCK_SIZE_MAX];
     struct edfs *edfs_context = (struct edfs *)userdata;
@@ -3370,6 +3386,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     }
     if ((!memcmp(type, "want", 4)) || (!memcmp(type, "wan3", 4)) || (!memcmp(type, "wan4", 4))) {
         log_info("WANT received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
+#ifdef EDFS_RANDOMLY_IGNORE_REQUESTS
         int magnitude = edwork_magnitude(edwork);
         int randomly_ignore = 0;
         if (magnitude >= 1000)
@@ -3391,11 +3408,17 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_info("randomly ignoring request");
             return;
         }
+#endif
 
         int is_encrypted = !memcmp(type, "wan4", 4);
 
         if ((!payload) || (payload_size < 64)) {
             log_warn("WANT packet too small");
+            return;
+        }
+
+        if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
+            log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
             return;
         }
 
@@ -3523,6 +3546,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     }
     if (!memcmp(type, "data", 4)) {
         log_info("DATA received (%s)", edwork_addr_ipv4(clientaddr));
+        if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
+            log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            return;
+        }
         int err;
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         if (EDFS_DATA_BROADCAST_ENCRYPTED) {
@@ -3557,6 +3584,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     }
     if (!memcmp(type, "dat2", 4)) {
         log_info("DAT2 received (%s)", edwork_addr_ipv4(clientaddr));
+        if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
+            log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            return;
+        }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         int err = edwork_process_data(edfs_context, payload, payload_size, 0, clientaddr, clientaddrlen);
         if (err <= 0)
@@ -3565,7 +3596,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     }
     if (!memcmp(type, "dat3", 4)) {
         log_info("DAT3 received (%s)", edwork_addr_ipv4(clientaddr));
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
+        if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
+            log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            return;
+        }        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         int size = edwork_decrypt(edfs_context, payload, payload_size, buffer, who_am_i, edwork_who_i_am(edwork), NULL);
         int err = edwork_process_data(edfs_context, buffer, size, 0, clientaddr, clientaddrlen);
         if (err <= 0)
@@ -3576,6 +3610,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         log_info("DAT4 received (%s)", edwork_addr_ipv4(clientaddr));
         if (payload_size < 32) {
             log_error("DAT4 packet too small");
+            return;
+        }
+        if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
+            log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
             return;
         }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
@@ -3658,6 +3696,8 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     }
     if (!memcmp(type, "hash", 4)) {
         log_info("HASH request received (%s)", edwork_addr_ipv4(clientaddr));
+        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
+#ifdef EDFS_RANDOMLY_IGNORE_REQUESTS
         int magnitude = edwork_magnitude(edwork);
         int randomly_ignore = 0;
         if (magnitude >= 1000)
@@ -3675,12 +3715,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         if (magnitude >= 20)
             randomly_ignore = ((edwork_random() % 20) == 1);
 
-        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
-
         if (randomly_ignore) {
             log_info("randomly ignoring request");
             return;
         }
+#endif
 
         if ((!payload) || (payload_size < 96)) {
             log_warn("HASH packet too small");
@@ -3711,6 +3750,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         if (ino > 0) {
             int size = edfs_reply_hash(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
             if (size > 0) {
+                if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
+                    log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+                    return;
+                }
+
                 // unsigned char additional_data[32];
                 unsigned char *additional_data = buffer;
                 *(uint64_t *)additional_data = htonll(ino);
@@ -3750,7 +3794,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("invalid WAND request");
             return;
         }
-
+        if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
+            log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            return;
+        }
         char b64name[MAX_B64_HASH_LEN];
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
         int len = edfs_read_file(edfs_context, edfs_context->working_directory, computename(ino, b64name), buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0);
@@ -3766,6 +3813,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         log_info("DATI received (%s)", edwork_addr_ipv4(clientaddr));
         if (payload_size < 32) {
             log_error("DATI packet too small");
+            return;
+        }
+        if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
+            log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
             return;
         }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen);
@@ -4173,6 +4224,8 @@ int edwork_thread(void *userdata) {
     }
 
     edfs_context->edwork = edwork;
+    if (edfs_context->chain)
+        edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
 
     char *host_and_port = edfs_context->host_and_port;
     if ((host_and_port) && (host_and_port[0])) {
