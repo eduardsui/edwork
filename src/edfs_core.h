@@ -87,6 +87,8 @@
 
 // new block every 2 minutes
 #define EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT   120000000UL
+// not lest than 10 seconds
+#define EDFS_BLOCKCHAIN_MIN_TIMEOUT         10000000UL
 
 
 #define EDFS_SET_ATTR_MODE	(1 << 0)

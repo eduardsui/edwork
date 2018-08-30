@@ -3226,7 +3226,9 @@ void edfs_try_new_block(struct edfs *edfs_context) {
 
         if (edfs_context->start_timestamp > chain_timestamp)
             chain_timestamp = edfs_context->start_timestamp;
-        if ((microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) {
+
+
+        if (((microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) && (microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT)) {
             edfs_sort(edfs_context->proof_inodes, edfs_context->proof_inodes_len);
             int block_data_size = edfs_context->proof_inodes_len * (sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32) + 72;
             unsigned char *block_data = (unsigned char *)malloc(block_data_size);
@@ -3891,6 +3893,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             }
             if (update_current_chain) {
                 struct block *previous_block = (struct block *)edfs_context->chain->previous_block;
+                if ((previous_block) && (previous_block->timestamp + EDFS_BLOCKCHAIN_MIN_TIMEOUT > topblock->timestamp)) {
+                    log_warn("updated top block is too early");
+                    block_free(topblock);
+                    return;
+                }
                 topblock->previous_block = previous_block;
                 if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
                     block_free(edfs_context->chain);
@@ -3919,6 +3926,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             uint64_t requested_block = htonll(edfs_context->chain->index + 2);
             notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
+            block_free(topblock);
+            return;
+        }
+        if ((edfs_context->chain) && (edfs_context->chain->timestamp + EDFS_BLOCKCHAIN_MIN_TIMEOUT > topblock->timestamp)) {
+            log_warn("top block is too early");
             block_free(topblock);
             return;
         }
