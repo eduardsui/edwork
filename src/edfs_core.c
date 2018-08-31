@@ -1949,28 +1949,36 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             return -EROFS;
 
         int check_hash = 0;
+        int blockchain_error = 0;
+        int send_want = 1;
+        unsigned char additional_data[16];
+        *(uint64_t *)additional_data = htonll(ino);
+
         if ((found_in_blockchain) && (memcmp(blockchainhash, hash, 32))) {
             log_warn("blockchain hash error, falling back to descriptor check");
             found_in_blockchain = 0;
+            blockchain_error = 1;
         }
-        if ((size > 0) && (memcmp(hash, null_hash, 32))) {
+
+        if ((size > 0) && ((blockchain_error) || (memcmp(hash, null_hash, 32)))) {
             // file hash hash
             int valid_hash = 0;
             uint64_t max_chunks;
             uint64_t i;
-            unsigned char additional_data[16];
-            *(uint64_t *)additional_data = htonll(ino);
             uint64_t start = microseconds();
-            int send_want = 1;
             do {
-                if (edfs_update_chain(edfs_context, ino, size, computed_hash, &max_chunks)) {
-                    if (!memcmp(hash, computed_hash, 32)) {
-                        valid_hash = 1;
-                        break;
-                    }
-                    if ((found_in_blockchain) && (!memcmp(blockchainhash, computed_hash, 32))) {
-                        valid_hash = 1;
-                        break;
+                if (blockchain_error) {
+                    blockchain_error = 0;
+                } else {
+                    if (edfs_update_chain(edfs_context, ino, size, computed_hash, &max_chunks)) {
+                        if (!memcmp(hash, computed_hash, 32)) {
+                            valid_hash = 1;
+                            break;
+                        }
+                        if ((found_in_blockchain) && (!memcmp(blockchainhash, computed_hash, 32))) {
+                            valid_hash = 1;
+                            break;
+                        }
                     }
                 }
                 if (send_want) {
@@ -2523,11 +2531,13 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
         char b64name[MAX_B64_HASH_LEN];
         unsigned char computed_hash[32];
         uint64_t network_inode = htonll(ino);
+        int blockchain_error = 0;
         if ((found_in_blockchain) && (memcmp(blockchainhash, hash, 32))) {
             log_warn("blockchain hash error, falling back to descriptor check");
             found_in_blockchain = 0;
+            blockchain_error = 1;
         }
-        if ((!found_in_blockchain) || (memcmp(hash, null_hash, 32))) {
+        if ((!found_in_blockchain) || ((blockchain_error) || (memcmp(hash, null_hash, 32)))) {
             snprintf(path, sizeof(path), "%s/%s", edfs_context->working_directory, computename(ino, b64name));
             unsigned char proof_cache[1024];
             int proof_size = 0;
@@ -2535,11 +2545,15 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
             uint64_t start = microseconds();
             do {
                 pathhash(edfs_context, path, computed_hash);
-                if (!memcmp(hash, computed_hash, 32)) {
-                    log_trace("directory hash ok");
-                    if (hash_error)
-                        avl_remove(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
-                    break;
+                if (blockchain_error) {
+                    blockchain_error = 0;
+                } else {
+                    if (!memcmp(hash, computed_hash, 32)) {
+                        log_trace("directory hash ok");
+                        if (hash_error)
+                            avl_remove(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
+                        break;
+                    }
                 }
                 notify_io(edfs_context, "roo2", (const unsigned char *)&network_inode, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, proof_cache, &proof_size);
                 if (hash_error) {
