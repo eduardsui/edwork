@@ -1960,7 +1960,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             blockchain_error = 1;
         }
 
-        if ((size > 0) && ((blockchain_error) || (memcmp(hash, null_hash, 32)))) {
+        if ((size > 0) && (memcmp(hash, null_hash, 32))) {
             // file hash hash
             int valid_hash = 0;
             uint64_t max_chunks;
@@ -2532,12 +2532,15 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
         unsigned char computed_hash[32];
         uint64_t network_inode = htonll(ino);
         int blockchain_error = 0;
-        if ((found_in_blockchain) && (memcmp(blockchainhash, hash, 32))) {
-            log_warn("blockchain hash error, falling back to descriptor check");
-            found_in_blockchain = 0;
-            blockchain_error = 1;
+        if (found_in_blockchain) {
+            if (memcmp(blockchainhash, hash, 32)) {
+                log_warn("blockchain hash error, falling back to descriptor check");
+                found_in_blockchain = 0;
+                blockchain_error = 1;
+            } else
+                log_trace("directory hash ok (blockchain)");
         }
-        if ((!found_in_blockchain) || ((blockchain_error) || (memcmp(hash, null_hash, 32)))) {
+        if ((!found_in_blockchain) && ((blockchain_error) || (memcmp(hash, null_hash, 32)))) {
             snprintf(path, sizeof(path), "%s/%s", edfs_context->working_directory, computename(ino, b64name));
             unsigned char proof_cache[1024];
             int proof_size = 0;
@@ -2576,7 +2579,6 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
                     break;
                 }
             } while (1);
-
         }
 
         memset(buf, 0, sizeof(struct dirbuf));
@@ -3343,6 +3345,35 @@ int edfs_check_blockhash(struct edfs *edfs_context, const unsigned char *blockha
     return 0;
 }
 
+void edfs_new_chain_request_descriptors(struct edfs *edfs_context, int level) {
+    struct block *blockchain = edfs_context->chain;
+    unsigned char hash[32];
+
+    if (!blockchain)
+        return;
+
+    uint64_t generation = 0;
+   
+    int i;
+    int record_size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32;
+    do {
+        int len = blockchain->data_len - 72;
+        if (len >= record_size) {
+            unsigned char *ptr = blockchain->data;
+            for (i = 0; i < len; i += record_size) {
+                uint64_t inode = ntohll(*(uint64_t *)ptr);
+                uint64_t inode_version = 0;
+                int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash);
+                memcpy(&generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
+                if ((generation != inode_version) || (memcmp(hash, ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), 32)))
+                    notify_io(edfs_context, "wand", ptr, 8, NULL, 0, 0, 0, inode, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                ptr += record_size;
+            }
+        }
+        blockchain = (struct block *)blockchain->previous_block;
+    } while ((blockchain) && (level-- > 0));
+}
+
 void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, const unsigned char *blockhash, void *userdata) {
     unsigned char buffer[BLOCK_SIZE_MAX];
     struct edfs *edfs_context = (struct edfs *)userdata;
@@ -3910,6 +3941,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
             edfs_context->chain = newblock;
             edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+            edfs_new_chain_request_descriptors(edfs_context, 0);
             edfs_context->top_broadcast_timestamp = 0;
             edfs_try_reset_proof(edfs_context);
             notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
@@ -3921,6 +3953,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
                 edfs_context->chain = newblock;
                 edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+                edfs_new_chain_request_descriptors(edfs_context, 0);
                 edfs_context->top_broadcast_timestamp = 0;
                 edfs_try_reset_proof(edfs_context);
             } else {
@@ -3985,6 +4018,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     edfs_context->chain = topblock;
                     edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
                     edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+                    edfs_new_chain_request_descriptors(edfs_context, 0);
                     edfs_context->top_broadcast_timestamp = 0;
                     edfs_try_reset_proof(edfs_context);
                     edfs_broadcast_top(edfs_context, NULL, 0);
@@ -4024,6 +4058,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         edfs_context->chain = topblock;
         if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
             edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+            edfs_new_chain_request_descriptors(edfs_context, 0);
             edfs_context->top_broadcast_timestamp = 0;
             edfs_try_reset_proof(edfs_context);
             log_trace("set new block");
