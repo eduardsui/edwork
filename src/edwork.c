@@ -7,7 +7,6 @@
 #include <string.h>
 
 #ifdef _WIN32
-    #define socklen_t int
     #define _WIN32_WINNT    0x501
     #include <winsock2.h>
     #include <windows.h>
@@ -25,6 +24,9 @@
         WaitForSingleObject(timer, INFINITE); 
         CloseHandle(timer); 
     }
+    #ifdef WITH_SCTP
+        #define WITH_USRSCTP
+    #endif
 #else
     #include <signal.h>
     #include <netdb.h>
@@ -34,6 +36,36 @@
     #include <netinet/in.h>
     #include <arpa/inet.h>
     #include <unistd.h>
+#endif
+#ifdef WITH_SCTP
+    #ifdef WITH_USRSCTP
+        #include <usrsctp.h>
+        #define SCTP_SOCKET_TYPE    struct socket *
+        #define SCTP_socket(domain, type, protocol)                     usrsctp_socket(domain, type, protocol, edwork_sctp_receive, NULL, 0, data)
+        #define SCTP_setsockopt(socket, level, optname, optval, optlen) usrsctp_setsockopt(socket, level, optname, optval, optlen)
+        #define SCTP_bind(socket, addr, addrlen)                        usrsctp_bind(socket, addr, addrlen)
+        #define SCTP_listen(socket, backlog)                            usrsctp_listen(socket, backlog)
+        #define SCTP_connect(socket, addr, addrlen)                     usrsctp_connect(socket, addr, addrlen)
+        #define SCTP_send(socket, buf, len, flags, dest_addr, addrlen)  usrsctp_sendv(socket, buf, len, dest_addr, 1, NULL, 0, 0, flags)
+        #define SCTP_recv(socket, buf, len, flags, src_addr, addrlen)   usrsctp_recvv(socket, buf, len, src_addr, addrlen, &rcv_info, &infolen, &infotype, &flags)
+        #define SCTP_getpaddrs(socket, assoc_id, addrs)                 usrsctp_getpaddrs(socket, assoc_id, addrs)
+        #define SCTP_freepaddrs(addrs)                                  usrsctp_freepaddrs(addrs)
+        #define SCTP_getassocid(socket, sa)                             usrsctp_getassocid(socket, sa)
+        #define SCTP_shutdown(socket, how)                              usrsctp_shutdown(socket, how)
+        #define SCTP_close(socket)                                      usrsctp_close(socket)
+    #else
+        #include <netinet/sctp.h>
+        #define SCTP_SOCKET_TYPE    int
+        #define SCTP_socket(domain, type, protocol)                     socket(domain, type, protocol, NULL, NULL, 0, NULL)
+        #define SCTP_setsockopt(socket, level, optname, optval, optlen) setsockopt(socket, level, optname, optval, optlen)
+        #define SCTP_bind(socket, addr, addrlen)                        bind(socket, addr, addrlen)
+        #define SCTP_listen(socket, backlog)                            listen(socket, backlog)
+        #define SCTP_connect(socket, addr, addrlen)                     connect(socket, addr, addrlen)
+        #define SCTP_getpaddrs(socket, assoc_id, addrs)                 sctp_getpaddrs(socket, assoc_id, addrs)
+        #define SCTP_freepaddrs(addrs)                                  sctp_freepaddrs(addrs)
+        #define SCTP_shutdown(socket, how)                              shutdown(socket, how)
+        #define SCTP_close(socket)                                      close(socket)
+    #endif
 #endif
 
 #include "thread.h"
@@ -77,6 +109,9 @@ struct client_data {
 
 struct edwork_data {
     int socket;
+#ifdef WITH_SCTP
+    SCTP_SOCKET_TYPE sctp_socket;
+#endif
 
     unsigned char i_am[32];
     unsigned char key_id[32];
@@ -99,6 +134,12 @@ struct edwork_data {
 #ifdef EDFS_MULTITHREADED
     thread_mutex_t thread_lock;
 #endif
+
+#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+    edwork_dispatch_callback callback;
+    void *userdata;
+#endif
+
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -173,15 +214,79 @@ void edwork_init() {
 #else
     signal(SIGPIPE, SIG_IGN);
 #endif
+#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+    #ifdef SCTP_UDP_ENCAPSULATION
+        usrsctp_init(SCTP_OVER_UDP_TUNNELING_PORT, NULL, NULL);
+    #else
+        usrsctp_init(0, NULL, NULL);
+    #endif
+#endif
 }
 
 void edwork_done() {
 #ifdef _WIN32
     WSACleanup();
 #endif
+#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+    usrsctp_finish();
+#endif
 }
 
+#ifdef WITH_SCTP
+
+#ifdef WITH_USRSCTP
+static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, void *data, size_t datalen, struct sctp_rcvinfo rcvinfo, int flags, void *ulp_info) {
+    struct edwork_data *edwork = (struct edwork_data *)ulp_info;
+    if ((flags & MSG_NOTIFICATION) || (!data) || (!edwork)) {
+        free(data);
+        return 1;
+    }
+
+    if (edwork->callback) {
+        struct sockaddr *addrs = NULL;
+        int n = SCTP_getpaddrs(sock, rcvinfo.rcv_assoc_id, &addrs);
+        if (n <= 0) {
+            log_error("error in sctp_getpaddrs (%i)", errno);
+        } else {
+            log_trace("SCTP dispatch");
+            edwork_dispatch_data(edwork, edwork->callback, data, datalen, addrs, sizeof(struct sockaddr_in), edwork->userdata);
+            SCTP_freepaddrs(addrs);
+        }
+    }    
+    free(data);
+    return 1;
+}
+#endif
+
+ssize_t safe_sctp_sendto(struct edwork_data *data, const void *buf, size_t len, int flags, struct sockaddr *dest_addr, socklen_t addrlen) {
+    if (!data->sctp_socket)
+        return -1;
+    thread_mutex_lock(&data->sock_lock);
+    ssize_t err = SCTP_send(data->sctp_socket, (const char *)buf, len, flags, dest_addr, addrlen);
+    thread_mutex_unlock(&data->sock_lock);
+    return err;
+}
+
+ssize_t safe_sctp_recvfrom(struct edwork_data *data, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen) {
+#ifdef WITH_USRSCTP
+    socklen_t infolen;
+	struct sctp_rcvinfo rcv_info;
+	unsigned int infotype; 
+#endif
+    if (!data->sctp_socket)
+        return -1;
+    thread_mutex_lock(&data->sock_lock);
+    ssize_t err = SCTP_recv(data->sctp_socket, (char *)buf, len, flags, src_addr, addrlen);
+    thread_mutex_unlock(&data->sock_lock);
+    return err;
+}
+#endif
+
 ssize_t safe_sendto(struct edwork_data *data, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
+#ifdef WITH_SCTP
+    if ((data->sctp_socket) && (SCTP_getassocid(data->sctp_socket, dest_addr) > 0))
+        return safe_sctp_sendto(data, buf, len, flags, dest_addr, addrlen);
+#endif
     thread_mutex_lock(&data->sock_lock);
     ssize_t err = sendto(data->socket, (const char *)buf, len, flags, dest_addr, addrlen);
     thread_mutex_unlock(&data->sock_lock);
@@ -292,6 +397,38 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     memset(data, 0, sizeof(struct edwork_data));
 
     data->socket = sockfd;
+#ifdef WITH_SCTP
+    data->sctp_socket = SCTP_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
+    if (data->sctp_socket) {
+        optval = 1;
+        SCTP_setsockopt(data->sctp_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&optval, sizeof(int));
+
+        struct sctp_initmsg initmsg;
+        memset(&initmsg, 0, sizeof(struct sctp_initmsg));
+        initmsg.sinit_num_ostreams = 1;
+        initmsg.sinit_max_instreams = 1;
+        initmsg.sinit_max_attempts = 6;
+
+        SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_INITMSG, (const char *)&initmsg, sizeof(struct sctp_initmsg));
+
+        if (SCTP_bind(data->sctp_socket, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0) {
+            log_error("error binding SCTP socket");
+            SCTP_close(data->sctp_socket);
+            data->sctp_socket = 0;
+        } else
+        if (SCTP_listen(data->sctp_socket, 128) < 0) {
+            log_error("error in listen (SCTP socket)");
+            SCTP_close(data->sctp_socket);
+            data->sctp_socket = 0;
+        }
+#ifdef WITH_USRSCTP
+        log_info("SCTP socket created (usrsctp)");
+#else
+        log_info("SCTP socket created (native)");
+#endif
+    } else
+        log_error("error creating SCTP socket");
+#endif
 
     int len = log_dir ? strlen(log_dir) : 0;
     data->log_dir = (char *)malloc(len + 1);
@@ -781,7 +918,7 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
     return rebroadcast_count;
 }
 
-int edworks_data_pending(struct edwork_data* data, int timeout_ms) {
+int edworks_data_pending(struct edwork_data *data, int timeout_ms) {
     if (!data)
         return -1;
 
@@ -810,6 +947,38 @@ int edworks_data_pending(struct edwork_data* data, int timeout_ms) {
     return poll(ufds, 1, (int)timeout_ms);
 #endif
 }
+
+#if defined(WITH_SCTP) && !defined(WITH_USRSCTP)
+int edworks_data_pending_sctp(struct edwork_data *data, int timeout_ms) {
+    if (!data)
+        return -1;
+
+#ifdef _WIN32
+    struct timeval timeout;
+    timeout.tv_sec = 0;
+    if (timeout_ms < 0)
+        timeout.tv_usec = 0;
+    else
+        timeout.tv_usec = (int)timeout_ms * 1000;
+    fd_set socks;
+
+    FD_ZERO(&socks);
+    FD_SET(data->sctp_socket, &socks);
+
+    int sel_val = select(FD_SETSIZE, &socks, 0, 0, &timeout);
+    return (sel_val != 0);
+#else
+    struct pollfd ufds[1];
+    ufds[0].fd     = data->sctp_socket;
+    ufds[0].events = POLLIN;
+
+    if (timeout_ms < 0)
+        timeout_ms = 0;
+
+    return poll(ufds, 1, (int)timeout_ms);
+#endif
+}
+#endif
 
 int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen) {
     unsigned char *packet = make_packet(data, type, buf, &len, 0, 0, 0);
@@ -853,7 +1022,7 @@ int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
     return 1;
 }
 
-int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback callback, unsigned char *buffer, int n, void *clientaddr, int clientaddrlen, void *userdata) {
+int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback callback, unsigned char *buffer, int n, void *clientaddr, int clientaddrlen, void *userdata) {
     if (n < 0)
         return -1;
 
@@ -935,10 +1104,14 @@ int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback call
     return 1;
 }
 
-int edwork_dispatch(struct edwork_data* data, edwork_dispatch_callback callback, int timeout_ms, void *userdata) {
+int edwork_dispatch(struct edwork_data *data, edwork_dispatch_callback callback, int timeout_ms, void *userdata) {
     if (!data)
         return -1;
 
+#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+    data->callback = callback;
+    data->userdata = userdata;
+#endif
     if (!edworks_data_pending(data, timeout_ms))
         return 0;
 
@@ -1042,10 +1215,12 @@ unsigned int edwork_magnitude(struct edwork_data *data) {
     return magnitude;
 }
 
-void edwork_destroy(struct edwork_data* data) {
+void edwork_destroy(struct edwork_data *data) {
     if (!data)
         return;
-
+#ifdef WITH_SCTP
+    SCTP_shutdown(data->sctp_socket, SHUT_RDWR);
+#endif
     avl_destroy(&data->spent, avl_spent_key_data_destructor);
     avl_destroy(&data->tree, avl_key_data_destructor);
     thread_mutex_term(&data->sock_lock);
@@ -1056,4 +1231,13 @@ void edwork_destroy(struct edwork_data* data) {
     free(data->log_dir);
     free(data->clients);
     free(data);
+
+#ifdef _WIN32
+    closesocket(data->socket);
+#else
+    close(data->socket);
+#endif
+#ifdef WITH_SCTP
+    SCTP_close(data->sctp_socket);
+#endif
 }
