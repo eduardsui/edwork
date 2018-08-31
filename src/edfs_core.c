@@ -3914,9 +3914,12 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 block_free(newblock);
             }
         } else {
-            if (edfs_context->chain) {
-                uint64_t top_block = htonll(edfs_context->chain->index + 2);
-                notify_io(edfs_context, "hblk", (const unsigned char *)&top_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            char b64name[MAX_B64_HASH_LEN];
+            computename(newblock->index + 1, b64name);
+            int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+            if (len > 0) {
+                if (edwork_send_to_peer(edfs_context->edwork, "blkd", buffer, len, clientaddr, clientaddrlen) <= 0)
+                    log_error("error sending chain block");
             }
             log_warn("invalid block received (%i)", (int)newblock->index);
             block_free(newblock);
@@ -3981,7 +3984,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 block_free(topblock);
                 // force rebroadcast top
                 edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
-                if ((edfs_context->chain->index == topblock->index) && (microseconds() - edfs_context->top_broadcast_timestamp >= 5000000UL)) {
+                if ((edfs_context->chain->index == topblock->index) && (microseconds() - edfs_context->top_broadcast_timestamp >= EDFS_BLOCKCHAIN_MIN_TIMEOUT / 2)) {
                     edfs_context->top_broadcast_timestamp = microseconds();
                     edfs_broadcast_top(edfs_context, NULL, 0);
                 }
