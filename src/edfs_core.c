@@ -3826,6 +3826,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     log_error("error sending DATI");
                 else
                     log_info("DATI sent");
+            } else
+            if (edfs_context->proxy) {
+                EDFS_THREAD_LOCK(edfs_context);
+                notify_io(edfs_context, "hash", payload, 16, edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                EDFS_THREAD_UNLOCK(edfs_context);
             }
         }
         return;
@@ -3858,6 +3863,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 log_error("error sending DESC");
             else
                 log_info("DESC sent");
+        } else
+        if (edfs_context->proxy) {
+            EDFS_THREAD_LOCK(edfs_context);
+            notify_io(edfs_context, "wand", payload, 8, NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            EDFS_THREAD_UNLOCK(edfs_context);
         }
         return;
     }
