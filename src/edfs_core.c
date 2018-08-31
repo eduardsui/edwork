@@ -252,6 +252,7 @@ struct edfs {
     struct block *chain;
 
     int proxy;
+    uint64_t top_broadcast_timestamp;
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -3895,6 +3896,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
             edfs_context->chain = newblock;
             edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+            edfs_context->top_broadcast_timestamp = 0;
             edfs_try_reset_proof(edfs_context);
             notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
         } else
@@ -3905,12 +3907,17 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
                 edfs_context->chain = newblock;
                 edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+                edfs_context->top_broadcast_timestamp = 0;
                 edfs_try_reset_proof(edfs_context);
             } else {
                 log_error("block verify error");
                 block_free(newblock);
             }
         } else {
+            if (edfs_context->chain) {
+                uint64_t top_block = htonll(edfs_context->chain->index + 2);
+                notify_io(edfs_context, "hblk", (const unsigned char *)&top_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            }
             log_warn("invalid block received (%i)", (int)newblock->index);
             block_free(newblock);
         }
@@ -3961,6 +3968,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     edfs_context->chain = topblock;
                     edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
                     edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+                    edfs_context->top_broadcast_timestamp = 0;
                     edfs_try_reset_proof(edfs_context);
                     edfs_broadcast_top(edfs_context, NULL, 0);
                     log_warn("mediated current block");
@@ -3973,7 +3981,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 block_free(topblock);
                 // force rebroadcast top
                 edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
-                edfs_broadcast_top(edfs_context, NULL, 0);
+                if ((edfs_context->chain->index == topblock->index) && (microseconds() - edfs_context->top_broadcast_timestamp >= 5000000UL)) {
+                    edfs_context->top_broadcast_timestamp = microseconds();
+                    edfs_broadcast_top(edfs_context, NULL, 0);
+                }
             }
             return;
         }
@@ -3996,6 +4007,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         edfs_context->chain = topblock;
         if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
             edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+            edfs_context->top_broadcast_timestamp = 0;
             edfs_try_reset_proof(edfs_context);
             log_trace("set new block");
             usleep(1000);
@@ -4230,8 +4242,10 @@ int edwork_thread(void *userdata) {
     }
 
     edfs_context->edwork = edwork;
-    if (edfs_context->chain)
+    if (edfs_context->chain) {
         edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+        edfs_context->top_broadcast_timestamp = 0;
+    }
 
     char *host_and_port = edfs_context->host_and_port;
     if ((host_and_port) && (host_and_port[0])) {
@@ -4496,6 +4510,7 @@ int edfs_init(struct edfs *edfs_context) {
         struct tm *tstamp = gmtime(&stamp);
         if (blockchain_verify(edfs_context->chain, BLOCKCHAIN_COMPLEXITY)) {
             edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+            edfs_context->top_broadcast_timestamp = 0;
             log_info("blockchain verified, head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
         } else {
             log_error("blockchain is invalid, head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
@@ -4517,6 +4532,7 @@ int edfs_genesis_if_new(struct edfs *edfs_context) {
     block_mine(edfs_context->chain, BLOCKCHAIN_COMPLEXITY);
     edfs_block_save(edfs_context, edfs_context->chain);
     edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+    edfs_context->top_broadcast_timestamp = 0;
     log_info("done");
     edfs_broadcast_top(edfs_context, NULL, 0);
     return 1;
