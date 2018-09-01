@@ -48,7 +48,7 @@ static int edfs_fuse_utimens(const char *path, const struct timespec tv[2]) {
 
     attr.st_mtime = tv[1].tv_sec;
 
-    if (tv[1].tv_nsec < -1)
+    if ((tv[1].tv_nsec < -1) || (!tv[1].tv_sec))
         return 0;
 
     if (tv[1].tv_nsec == -1)

@@ -254,6 +254,8 @@ struct edfs {
     int proxy;
     uint64_t proxy_timestamp;
     uint64_t top_broadcast_timestamp;
+
+    uint32_t chain_errors;
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -4067,9 +4069,17 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     log_warn("cannot mediate received block (block verify failed)");
                     // fork? resync chain
                     if (edfs_context->chain) {
-                        struct block *previous_block = (struct block *)edfs_context->chain->previous_block;
-                        block_free(edfs_context->chain);
-                        edfs_context->chain = previous_block;
+                        edfs_context->chain_errors++;
+                        struct block *previous_block = NULL;
+                        if (edfs_context->chain_errors < 10000) {
+                            block_free(edfs_context->chain);
+                            edfs_context->chain = previous_block;
+                            previous_block = (struct block *)edfs_context->chain->previous_block;
+                        } else {
+                            blockchain_free(edfs_context->chain);
+                            edfs_context->chain = NULL;
+                            edfs_context->chain_errors = 0;
+                        }
                         uint64_t requested_block;
                         if ((previous_block) && (previous_block->index))
                             requested_block = htonll(previous_block->index);
