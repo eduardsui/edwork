@@ -3593,8 +3593,8 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     log_error("error sending NACK");
                     return;
                 }
-            }
-            log_warn("invalid data received");
+            } else
+                log_warn("invalid data received");
         }
         return;
     }
@@ -3989,7 +3989,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             }
         } else {
             char b64name[MAX_B64_HASH_LEN];
-            computename(newblock->index /* + 1 */, b64name);
+            computename(newblock->index, b64name);
             int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
             if (len > 64) {
                 struct block *temp_block = block_load_buffer(buffer + 64, len - 64);
@@ -4064,7 +4064,21 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     edfs_broadcast_top(edfs_context, NULL, 0);
                     log_warn("mediated current block");
                 } else {
-                    log_warn("cannot mediate received block (block verify fails)");
+                    log_warn("cannot mediate received block (block verify failed)");
+                    // fork? resync chain
+                    if (edfs_context->chain) {
+                        struct block *previous_block = (struct block *)edfs_context->chain->previous_block;
+                        block_free(edfs_context->chain);
+                        edfs_context->chain = previous_block;
+                        uint64_t requested_block;
+                        if ((previous_block) && (previous_block->index))
+                            requested_block = htonll(previous_block->index);
+                        else
+                            requested_block = htonll(1);
+                        EDFS_THREAD_LOCK(edfs_context);
+                        notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                        EDFS_THREAD_UNLOCK(edfs_context);
+                    }
                     block_free(topblock);
                 }
             } else {

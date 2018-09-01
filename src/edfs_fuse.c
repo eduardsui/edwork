@@ -348,7 +348,22 @@ int main(int argc, char *argv[]) {
                         exit(-1);
                     }
                     i++;
-                    log_set_level(atoi(argv[i]));
+                    if (!strcmp(argv[i], "trace"))
+                        log_set_level(0);
+                    else
+                    if (!strcmp(argv[i], "debug"))
+                        log_set_level(1);
+                    else
+                    if (!strcmp(argv[i], "info"))
+                        log_set_level(2);
+                    else
+                    if (!strcmp(argv[i], "warning"))
+                        log_set_level(3);
+                    else
+                    if (!strcmp(argv[i], "error"))
+                        log_set_level(4);
+                    else
+                        log_set_level(atoi(argv[i]));
                 } else
                 if (!strcmp(arg, "logfile")) {
                     if (i >= argc - 1) {
@@ -408,7 +423,7 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
-                        "    -loglevel 0 - 5    set log level\n"
+                        "    -loglevel level    set log level, 0 to 5 or trace, debug, info, warning, error\n"
                         "    -logfile filename  set log filename\n"
                         "    -readonly          mount filesystem as read-only\n"
                         "    -newkey            generate a new key\n"
