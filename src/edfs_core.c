@@ -2825,6 +2825,8 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         return;
 
     uint64_t last_file_chunk = file_size / BLOCK_SIZE;
+    if (last_file_chunk % BLOCK_SIZE == 0)
+        last_file_chunk --;
     if (chunk <= last_file_chunk) {
         if (chunk == last_file_chunk) {
             unsigned char computed_hash[32];
