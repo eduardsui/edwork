@@ -50,6 +50,7 @@
         #define SCTP_setsockopt(socket, level, optname, optval, optlen) usrsctp_setsockopt(socket, level, optname, optval, optlen)
         #define SCTP_bind(socket, addr, addrlen)                        usrsctp_bind(socket, addr, addrlen)
         #define SCTP_listen(socket, backlog)                            usrsctp_listen(socket, backlog)
+        #define SCTP_accept(socket, addr, addrlen)                      usrsctp_accept(socket, addr, addrlen)
         #define SCTP_connect(socket, addr, addrlen)                     usrsctp_connect(socket, addr, addrlen)
         #define SCTP_send(socket, buf, len, flags, dest_addr, addrlen)  usrsctp_sendv(socket, buf, len, (struct sockaddr *)dest_addr, 1, &sndinfo, 0, 0, flags)
         #define SCTP_recv(socket, buf, len, flags, src_addr, addrlen)   usrsctp_recvv(socket, buf, len, src_addr, addrlen, &rcv_info, &infolen, &infotype, &flags)
@@ -87,6 +88,7 @@
         #define SCTP_setsockopt(socket, level, optname, optval, optlen) setsockopt(socket, level, optname, optval, optlen)
         #define SCTP_bind(socket, addr, addrlen)                        bind(socket, addr, addrlen)
         #define SCTP_listen(socket, backlog)                            listen(socket, backlog)
+        #define SCTP_accept(socket, addr, addrlen)                      accept(socket, addr, addrlen)
         #define SCTP_connect(socket, addr, addrlen)                     connect(socket, addr, addrlen)
         #define SCTP_send(socket, buf, len, flags, dest_addr, addrlen)  sctp_sendmsg(socket, buf, len, (struct sockaddr *)dest_addr, addrlen, 0, flags, 0, EDWORK_SCTP_TTL, 0)
         #define SCTP_recv(socket, buf, len, flags, src_addr, addrlen)   sctp_recvmsg(socket, buf, len, src_addr, addrlen, NULL, &flags)
@@ -132,6 +134,9 @@ uint64_t switchorder(uint64_t input);
 struct client_data {
     struct sockaddr_in clientaddr;
     int clientlen;
+#ifdef WITH_SCTP
+    SCTP_SOCKET_TYPE socket;
+#endif
     uint64_t last_ino;
     uint64_t last_chunk;
     uint64_t last_msg_timestamp;
@@ -315,6 +320,36 @@ static void edwork_remove_poll_socket(struct edwork_data *data, int offset) {
 }
 #endif
 
+static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const struct sockaddr *addr, int addr_len) {
+    SCTP_SOCKET_TYPE peer_socket = SCTP_socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
+    if (!socket)
+        return 0;
+
+    // usrsctp seems to be non-blocking by default
+    int err = SCTP_connect(peer_socket, addr, addr_len);
+    if (!err)
+        return peer_socket;
+
+    SCTP_close(peer_socket);
+    return 0;
+}
+
+static SCTP_SOCKET_TYPE edwork_sctp_connect_hostname(struct edwork_data *data, const char *hostname, int port) {
+    struct sockaddr_in sin;
+    struct hostent     *hp;
+
+    if ((hp = gethostbyname(hostname)) == 0)
+        return 0;
+
+    // add ipv6
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_addr.s_addr = ((struct in_addr *)(hp->h_addr))->s_addr;
+    sin.sin_family      = AF_INET;
+    sin.sin_port        = htons((int)port);
+
+    return edwork_sctp_connect(data, (struct sockaddr *)&sin, sizeof(sin));
+}
+
 ssize_t safe_sctp_sendto(struct edwork_data *data, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
     if (!data->sctp_socket)
         return -1;
@@ -466,7 +501,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     #ifndef WITH_USRSCTP
         edwork_add_poll_socket(data, data->socket);
     #endif
-    data->sctp_socket = SCTP_socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
+    data->sctp_socket = SCTP_socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
     if (data->sctp_socket) {
         optval = 1;
         SCTP_setsockopt(data->sctp_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&optval, sizeof(int));
@@ -478,7 +513,6 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
         initmsg.sinit_max_attempts = 6;
 
         SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_INITMSG, (const char *)&initmsg, sizeof(struct sctp_initmsg));
-
         if (SCTP_bind(data->sctp_socket, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0) {
             log_error("error binding SCTP socket");
             SCTP_close(data->sctp_socket);
@@ -730,6 +764,9 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     data->clients[data->clients_count].last_chunk = 0;
     data->clients[data->clients_count].last_msg_timestamp = 0;
     data->clients[data->clients_count].last_seen = time(NULL);
+#ifdef WITH_SCTP
+    data->clients[data->clients_count].socket = 0;
+#endif
 
     data->clients_count ++;
 
