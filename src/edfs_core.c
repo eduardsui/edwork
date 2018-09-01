@@ -252,6 +252,7 @@ struct edfs {
     struct block *chain;
 
     int proxy;
+    uint64_t proxy_timestamp;
     uint64_t top_broadcast_timestamp;
 };
 
@@ -3535,9 +3536,10 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                         log_info("DAT2 sent");
                 }
             } else
-            if (edfs_context->proxy) {
-                log_trace("forwarding chunk requet");
+            if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
+                log_trace("forwarding chunk request");
                 request_data(edfs_context, ino, chunk, 1, 0, NULL, NULL);
+                edfs_context->proxy_timestamp = microseconds();
             }
         }
         return;
@@ -3827,10 +3829,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 else
                     log_info("DATI sent");
             } else
-            if (edfs_context->proxy) {
+            if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
                 EDFS_THREAD_LOCK(edfs_context);
                 notify_io(edfs_context, "hash", payload, 16, edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 EDFS_THREAD_UNLOCK(edfs_context);
+                edfs_context->proxy_timestamp = microseconds();
             }
         }
         return;
@@ -3864,10 +3867,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             else
                 log_info("DESC sent");
         } else
-        if (edfs_context->proxy) {
+        if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
             EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "wand", payload, 8, NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             EDFS_THREAD_UNLOCK(edfs_context);
+            edfs_context->proxy_timestamp = microseconds();
         }
         return;
     }
