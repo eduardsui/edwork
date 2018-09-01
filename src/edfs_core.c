@@ -3973,6 +3973,18 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             } else {
                 log_error("block verify error");
                 block_free(newblock);
+
+                // fork? resync chain
+                if (edfs_context->chain) {
+                    struct block *previous = (struct block *)edfs_context->chain->previous_block;
+                    block_free(edfs_context->chain);
+                    edfs_context->chain = previous;
+                    if (previous)
+                        requested_block = htonll(1);
+                    else
+                        requested_block = htonll(previous->index + 2);
+                    notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                }
             }
         } else {
             char b64name[MAX_B64_HASH_LEN];
@@ -4337,6 +4349,7 @@ int edwork_thread(void *userdata) {
     time_t startup = time(NULL);
     time_t last_chain_request = time(NULL);
     int broadcast_offset = 0;
+    int initial_chain_request = 1;
     while (!edfs_context->network_done) {
         if ((edfs_context->resync) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
             uint64_t ack = htonll(1);
@@ -4345,13 +4358,14 @@ int edwork_thread(void *userdata) {
             EDFS_THREAD_UNLOCK(edfs_context);
             edfs_context->resync = 0;
         }
-        if ((!edfs_context->chain) && (time(NULL) - last_chain_request >= EDWORK_INIT_INTERVAL)) {
+        if (((!edfs_context->chain) || (initial_chain_request)) && (time(NULL) - last_chain_request >= EDWORK_INIT_INTERVAL)) {
             uint64_t top_block = 0;
             top_block = htonll(1);
             EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "hblk", (const unsigned char *)&top_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             EDFS_THREAD_UNLOCK(edfs_context);
             last_chain_request = time(NULL);
+            initial_chain_request = 0;
         }
         if ((edfs_context->force_rebroadcast) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
             edwork_resync(edfs_context, NULL, 0);
