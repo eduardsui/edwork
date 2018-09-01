@@ -62,8 +62,8 @@
 #define BLOCK_SIZE                  57280
 #define PROOF_OF_WORK_MAX_SIZE      0x1000
 
-#define EDWORK_WANT_WORK_LEVEL      12
-#define EDWORK_WANT_WORK_PREFIX     "edwork:1:12:"
+#define EDWORK_WANT_WORK_LEVEL      11
+#define EDWORK_WANT_WORK_PREFIX     "edwork:1:11:"
 
 #define EDWORK_LIST_WORK_LEVEL      14
 #define EDWORK_LIST_WORK_PREFIX     "edwork:1:14:"

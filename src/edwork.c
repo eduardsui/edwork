@@ -792,7 +792,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
     }
     uint64_t rand = edwork_random() % data->clients_count;
     int wrapped_to_first = 0;
-    time_t threshold = time(NULL) - 120;
+    time_t threshold = time(NULL) - 180;
     if ((ptr) && (len > 0)) {
         unsigned int i;
         if ((clientaddr) && (clientaddr_len > 0)) {
@@ -893,7 +893,7 @@ int edwork_broadcast_client(struct edwork_data *data, const char type[4], const 
 }
 
 int edwork_broadcast_except(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino) {
-    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 0);
+    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 500);
 }
 
 unsigned int edwork_jumbo(struct edwork_data *data, unsigned char *jumbo_buf, unsigned int max_jumbo_size, unsigned int jumbo_size, unsigned char *buf, int buf_size) {

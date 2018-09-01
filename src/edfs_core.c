@@ -4149,15 +4149,6 @@ void edwork_load_nodes(struct edfs *edfs_context) {
     notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     edfs_context->list_offset ++;
     edfs_context->list_timestamp = time(NULL);
-    if (edfs_context->list_offset == 1) {
-        usleep(100000);
-        uint64_t top_block = 0;
-        if (!edfs_context->chain) {
-            // request every block, starting from first (index 1)
-            top_block = htonll(1);
-        }
-        notify_io(edfs_context, "hblk", (const unsigned char *)&top_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-    }
 }
 
 void flush_queue(struct edfs *edfs_context) {
@@ -4340,12 +4331,23 @@ int edwork_thread(void *userdata) {
     time_t write_nodes = time(NULL);
     time_t rebroadcast = 0;
     time_t startup = time(NULL);
+    time_t last_chain_request = time(NULL);
     int broadcast_offset = 0;
     while (!edfs_context->network_done) {
         if ((edfs_context->resync) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
             uint64_t ack = htonll(1);
+            EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            EDFS_THREAD_UNLOCK(edfs_context);
             edfs_context->resync = 0;
+        }
+        if ((!edfs_context->chain) && (time(NULL) - last_chain_request >= EDWORK_INIT_INTERVAL)) {
+            uint64_t top_block = 0;
+            top_block = htonll(1);
+            EDFS_THREAD_LOCK(edfs_context);
+            notify_io(edfs_context, "hblk", (const unsigned char *)&top_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            EDFS_THREAD_UNLOCK(edfs_context);
+            last_chain_request = time(NULL);
         }
         if ((edfs_context->force_rebroadcast) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
             edwork_resync(edfs_context, NULL, 0);
