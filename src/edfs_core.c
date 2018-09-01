@@ -2830,12 +2830,13 @@ int edfs_create_key(struct edfs *edfs_context) {
     return 0;
 }
 
-void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_size, uint64_t chunk) {
+void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_size, int try_update_hash) {
     char b64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
 
     adjustpath(edfs_context, fullpath, computename(inode, b64name));
 
+    uint64_t chunk = 0;
     while (chunk_exists(fullpath, chunk))
         chunk ++;
 
@@ -2849,19 +2850,6 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
     if (last_file_chunk % BLOCK_SIZE == 0)
         last_file_chunk --;
     if (chunk <= last_file_chunk) {
-        if ((chunk == last_file_chunk) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
-            unsigned char computed_hash[32];
-            unsigned char additional_data[16];
-            uint64_t max_chunks;
-
-            edfs_update_chain(edfs_context, inode, file_size, computed_hash, &max_chunks);
-            *(uint64_t *)additional_data = htonll(inode);
-            int i;
-            for (i = 0; i < max_chunks; i++) {
-                *(uint64_t *)(additional_data + 8)= htonll(i);
-                notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, inode, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            }
-        }
         log_trace("requesting shard chunk %s:%" PRIu64 "/%" PRIu64, fullpath, chunk, last_file_chunk);
         if (edwork_random() % 5 == 0) {
             EDFS_THREAD_LOCK(edfs_context);
@@ -2870,6 +2858,19 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         }
         // use cached addresses for 90% of requests, 10% are broadcasts
         request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
+    } else
+    if ((try_update_hash) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
+        unsigned char computed_hash[32];
+        unsigned char additional_data[16];
+        uint64_t max_chunks;
+
+        edfs_update_chain(edfs_context, inode, file_size, computed_hash, &max_chunks);
+        *(uint64_t *)additional_data = htonll(inode);
+        int i;
+        for (i = 0; i < max_chunks; i ++) {
+            *(uint64_t *)(additional_data + 8)= htonll(i);
+            notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, inode, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        }
     }
 }
 
@@ -3125,7 +3126,7 @@ int edwork_process_data(struct edfs *edfs_context, const unsigned char *payload,
         edwork_cache_addr(edfs_context, inode, clientaddr, clientaddrlen);
 
         if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id))
-            edfs_ensure_data(edfs_context, inode, (uint64_t)0, 0);
+            edfs_ensure_data(edfs_context, inode, (uint64_t)0, 1);
 
         if (written_bytes == datasize) {
             written = 1;
