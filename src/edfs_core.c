@@ -1853,7 +1853,7 @@ int edfs_update_chain(struct edfs *edfs_context, uint64_t ino, int64_t file_size
         snprintf(fullpath2, MAX_PATH_LEN, "%s/hash.%" PRIu64, fullpath, i);
         FILE *f = fopen(fullpath2, "rb");
         if (!f) {
-            log_error("error reading %s", fullpath2);
+            log_warn("error reading %s", fullpath2);
             return 0;
         }
         if (fread(signature_data, 1, 64, f) != 64) {

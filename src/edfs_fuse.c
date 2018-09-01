@@ -325,6 +325,7 @@ int main(int argc, char *argv[]) {
 #else
     log_set_colors(1);
 #endif
+    log_set_level(3);
 
     fprintf(stderr, "%s\n", EDFS_BANNER);
     edfs_fuse_init(&edfs_fuse);
