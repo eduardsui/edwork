@@ -51,12 +51,12 @@
         #define SCTP_bind(socket, addr, addrlen)                        usrsctp_bind(socket, addr, addrlen)
         #define SCTP_listen(socket, backlog)                            usrsctp_listen(socket, backlog)
         #define SCTP_accept(socket, addr, addrlen)                      usrsctp_accept(socket, addr, addrlen)
-        #define SCTP_connect(socket, addr, addrlen)                     usrsctp_connect(socket, addr, addrlen)
+        #define SCTP_connect(socket, addr, addrlen)                     usrsctp_connect(socket, (struct sockaddr *)addr, addrlen)
         #define SCTP_send(socket, buf, len, flags, dest_addr, addrlen)  usrsctp_sendv(socket, buf, len, (struct sockaddr *)dest_addr, 1, &sndinfo, 0, 0, flags)
         #define SCTP_recv(socket, buf, len, flags, src_addr, addrlen)   usrsctp_recvv(socket, buf, len, src_addr, addrlen, &rcv_info, &infolen, &infotype, &flags)
         #define SCTP_getpaddrs(socket, assoc_id, addrs)                 usrsctp_getpaddrs(socket, assoc_id, addrs)
         #define SCTP_freepaddrs(addrs)                                  usrsctp_freepaddrs(addrs)
-        #define SCTP_getassocid(socket, sa)                             usrsctp_getassocid(socket, sa)
+        #define SCTP_getassocid(socket, sa)                             usrsctp_getassocid(socket, (struct sockaddr *)sa)
         #define SCTP_shutdown(socket, how)                              usrsctp_shutdown(socket, how)
         #define SCTP_close(socket)                                      usrsctp_close(socket)
     #else
@@ -367,7 +367,7 @@ ssize_t safe_sctp_sendto(struct edwork_data *data, const void *buf, size_t len, 
     return err;
 }
 
-ssize_t safe_sctp_recvfrom(struct edwork_data *data, int socket, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen) {
+ssize_t safe_sctp_recvfrom(struct edwork_data *data, SCTP_SOCKET_TYPE socket, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen) {
 #ifdef WITH_USRSCTP
     socklen_t infolen;
 	struct sctp_rcvinfo rcv_info;
