@@ -4079,12 +4079,20 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             }
             return;
         }
+        if ((!edfs_context->chain) && (topblock->index)) {
+            // request all chain
+            uint64_t requested_block = htonll(1);
+            EDFS_THREAD_LOCK(edfs_context);
+            notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            EDFS_THREAD_UNLOCK(edfs_context);
+        }
         if ((edfs_context->chain) && (topblock->index != edfs_context->chain->index + 1)) {
             log_warn("invalid block index");
 
             uint64_t requested_block = htonll(edfs_context->chain->index + 2);
+            EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-
+            EDFS_THREAD_UNLOCK(edfs_context);
             block_free(topblock);
             return;
         }
