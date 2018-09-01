@@ -4,6 +4,9 @@
 #include <inttypes.h>
 #include <time.h>
 
+// 3 seconds ttl
+#define EDWORK_SCTP_TTL 3000
+
 struct edwork_data;
 
 typedef void (*edwork_dispatch_callback)(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, const unsigned char *blockhash, void *userdata);
