@@ -2136,6 +2136,27 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
     return 0;
 }
 
+int edfs_try_make_hash(struct edfs *edfs_context, const char *path, uint64_t file_size) {
+    if (!file_size)
+        return 1;
+
+    uint64_t last_file_chunk = file_size / BLOCK_SIZE;
+    if (last_file_chunk % BLOCK_SIZE == 0)
+        last_file_chunk --;
+
+    uint64_t chunk;
+    for (chunk = 0; chunk <= last_file_chunk; chunk ++) {
+        unsigned char signature[64];
+        char chunk_file[MAX_PATH_LEN];
+        snprintf(chunk_file, MAX_PATH_LEN, "%" PRIu64, (uint64_t)chunk);
+        int read_size = edfs_read_file(edfs_context, path, chunk_file, signature, 64, NULL, 0, 0, 0, NULL, 0);
+        if (read_size != 64)
+            return 0;
+        edfs_update_hash(edfs_context, path, chunk, signature, 64);
+    }
+    return 1;
+}
+
 int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int64_t chunk, const char *buf, size_t size, int64_t offset, int64_t *filesize) {
     int block_written;
     int written_bytes;
@@ -2828,7 +2849,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
     if (last_file_chunk % BLOCK_SIZE == 0)
         last_file_chunk --;
     if (chunk <= last_file_chunk) {
-        if (chunk == last_file_chunk) {
+        if ((chunk == last_file_chunk) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
             unsigned char computed_hash[32];
             unsigned char additional_data[16];
             uint64_t max_chunks;
@@ -2847,7 +2868,8 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             edfs_make_key(edfs_context);
             EDFS_THREAD_UNLOCK(edfs_context);
         }
-        request_data(edfs_context, inode, chunk, 1, 1, NULL, NULL);
+        // use cached addresses for 90% of requests, 10% are broadcasts
+        request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
     }
 }
 
