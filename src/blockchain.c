@@ -194,7 +194,7 @@ int blockchain_verify(struct block *newblock, int zero_bits) {
 void blockchain_free(struct block *newblock) {
     while (newblock) {
         struct block *prev = (struct block *)newblock->previous_block;
-        block_free(prev);
+        block_free(newblock);
         newblock = prev;
     }
 }

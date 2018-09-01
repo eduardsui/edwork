@@ -421,6 +421,14 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "proxy")) {
                     edfs_set_proxy(edfs_context, 1);
                 } else
+                if (!strcmp(arg, "shard")) {
+                    if (i >= argc - 2) {
+                        fprintf(stderr, "edfs: shard id and number of shards expected after -shard parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
+                    edfs_set_shard(edfs_context, atoi(argv[i ++]), atoi(argv[i]));
+                } else
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -435,6 +443,7 @@ int main(int argc, char *argv[]) {
                         "    -daemonize         run as daemon/service\n"
                         "    -genesis           initialize blockchain if not created\n"
                         "    -proxy             enable proxy mode (forward WANT requets)\n"
+                        "    -shard id shards   set shard id, as id number of shard, eg.: -shards 1 2\n"
                         , argv[0]);
                     exit(0);
                 } else {
