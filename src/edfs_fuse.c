@@ -48,6 +48,12 @@ static int edfs_fuse_utimens(const char *path, const struct timespec tv[2]) {
 
     attr.st_mtime = tv[1].tv_sec;
 
+    if (tv[1].tv_nsec < -1)
+        return 0;
+
+    if (tv[1].tv_nsec == -1)
+        attr.st_mtime = time(NULL);
+
     return edfs_setattr(edfs_context, inode, &attr, EDFS_SET_ATTR_MTIME);
 }
 
@@ -276,7 +282,6 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse) {
 #ifdef _WIN32
     edfs_fuse->statfs       = edfs_fuse_statfs;
 #endif
-
 
     edfs_context = edfs_create_context(NULL);
     edfs_init(edfs_context);
