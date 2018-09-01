@@ -4374,7 +4374,7 @@ int edwork_thread(void *userdata) {
         }
         if (((!edfs_context->chain) || (initial_chain_request)) && (time(NULL) - last_chain_request >= EDWORK_INIT_INTERVAL)) {
             uint64_t top_block = 0;
-            top_block = htonll(1);
+            top_block = htonll(0);
             EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "hblk", (const unsigned char *)&top_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             EDFS_THREAD_UNLOCK(edfs_context);
