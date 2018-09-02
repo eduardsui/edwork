@@ -156,6 +156,12 @@ struct dirbuf {
     int64_t start;
 };
 
+struct edfs_hash_buffer {
+    unsigned char buffer[BLOCK_SIZE];
+    int read_size;
+    int64_t chunk;
+};
+
 struct filewritebuf {
     edfs_ino_t ino;
     unsigned char *p;
@@ -170,6 +176,8 @@ struct filewritebuf {
 
     int check_hash;
     int in_read;
+
+    struct edfs_hash_buffer hash_buffer;
 };
 
 struct edwork_io {
@@ -2111,20 +2119,45 @@ int64_t get_size_json(struct edfs *edfs_context, uint64_t inode) {
     return size;
 }
 
-int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk, const unsigned char *buf, int size) {
-    uint32_t hash = htonl(XXH32(buf, size, 0));
+int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk, const unsigned char *buf, int size, struct edfs_hash_buffer *hash_buffer) {
     char hash_file[0x100];
-    unsigned char buffer[BLOCK_SIZE];
+    unsigned char buffer_container[BLOCK_SIZE];
+    unsigned char *buffer = buffer_container;
     hash_file[0] = 0;
 
     int chunks_per_file = BLOCK_SIZE / sizeof(uint32_t);
     uint64_t hash_chunk = chunk / chunks_per_file;
+
+    if (hash_buffer) {
+        buffer = hash_buffer->buffer;
+        if (((chunk < 0) || (hash_buffer->chunk != hash_chunk)) && (hash_buffer->read_size)) {
+            snprintf(hash_file, sizeof(hash_file), "hash.%" PRIu64, hash_buffer->chunk);
+            edfs_write_file(edfs_context, path, hash_file, buffer, hash_buffer->read_size, NULL, 1, NULL, NULL, NULL, NULL);
+            hash_buffer->chunk = hash_chunk;
+            hash_buffer->read_size = 0;
+        }
+        if (chunk < 0)
+            return 1;
+    }
+
+    uint32_t hash = htonl(XXH32(buf, size, 0));
+
     unsigned int chunk_offset = chunk % chunks_per_file;
 
     snprintf(hash_file, sizeof(hash_file), "hash.%" PRIu64, hash_chunk);
-    int read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0);
-    if (read_size < 0)
-        read_size = 0;
+    int read_size;
+    if (hash_buffer) {
+        read_size = hash_buffer->read_size;
+        if (!read_size) {
+            read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0);
+            if (read_size < 0)
+                read_size = 0;
+        }
+    } else {
+        read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0);
+        if (read_size < 0)
+            read_size = 0;
+    }
     unsigned int offset = chunk_offset * sizeof(uint32_t);
     if (read_size < offset + sizeof(uint32_t)) {
         if (read_size < offset)
@@ -2132,7 +2165,10 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
         read_size = offset + sizeof(uint32_t);
     }
     memcpy(buffer + offset, &hash, sizeof(uint32_t));
-    edfs_write_file(edfs_context, path, hash_file, buffer, read_size, NULL, 1, NULL, NULL, NULL, NULL);
+    if (hash_buffer)
+        hash_buffer->read_size = read_size;
+    else
+        edfs_write_file(edfs_context, path, hash_file, buffer, read_size, NULL, 1, NULL, NULL, NULL, NULL);
     return 0;
 }
 
@@ -2145,6 +2181,8 @@ int edfs_try_make_hash(struct edfs *edfs_context, const char *path, uint64_t fil
         last_file_chunk --;
 
     uint64_t chunk;
+    struct edfs_hash_buffer hash_buffer;
+    memset(&hash_buffer, 0, sizeof(hash_buffer));
     for (chunk = 0; chunk <= last_file_chunk; chunk ++) {
         unsigned char signature[64];
         char chunk_file[MAX_PATH_LEN];
@@ -2152,12 +2190,14 @@ int edfs_try_make_hash(struct edfs *edfs_context, const char *path, uint64_t fil
         int read_size = edfs_read_file(edfs_context, path, chunk_file, signature, 64, NULL, 0, 0, 0, NULL, 0);
         if (read_size != 64)
             return 0;
-        edfs_update_hash(edfs_context, path, chunk, signature, 64);
+        edfs_update_hash(edfs_context, path, chunk, signature, 64, &hash_buffer);
     }
+    // flush to disk
+    edfs_update_hash(edfs_context, path, -1, NULL, 0, &hash_buffer);
     return 1;
 }
 
-int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int64_t chunk, const char *buf, size_t size, int64_t offset, int64_t *filesize) {
+int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int64_t chunk, const char *buf, size_t size, int64_t offset, int64_t *filesize, struct edfs_hash_buffer *hash_buffer) {
     int block_written;
     int written_bytes;
 
@@ -2226,7 +2266,7 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
                     notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)ptr, to_write, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
             }
 #endif
-            edfs_update_hash(edfs_context, path, chunk, additional_data + 32, 64);
+            edfs_update_hash(edfs_context, path, chunk, additional_data + 32, 64, hash_buffer);
             return size;
         }
         return -EIO;
@@ -2255,7 +2295,7 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
                 notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)buf, size, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
         }
 #endif
-        edfs_update_hash(edfs_context, path, chunk, additional_data + 32, 64);
+        edfs_update_hash(edfs_context, path, chunk, additional_data + 32, 64, hash_buffer);
     }
     return written_bytes;
 }
@@ -2354,7 +2394,7 @@ int edfs_write_hash_block(struct edfs *edfs_context, uint64_t inode, int64_t chu
     return written;
 }
 
-int edfs_write_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *buf, size_t size, int64_t off, int64_t *initial_filesize, int set_size) {
+int edfs_write_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *buf, size_t size, int64_t off, int64_t *initial_filesize, int set_size, struct edfs_hash_buffer *hash_buffer) {
     char b64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
 
@@ -2366,7 +2406,7 @@ int edfs_write_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *buf,
 
     int64_t filesize = *initial_filesize;
     while (size > 0) {
-        int written = make_chunk(edfs_context, ino, fullpath, chunk, buf, size, offset, &filesize);
+        int written = make_chunk(edfs_context, ino, fullpath, chunk, buf, size, offset, &filesize, hash_buffer);
         if (written <= 0) {
             if (filesize != *initial_filesize) {
                 if (set_size)
@@ -2405,7 +2445,7 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
         int64_t filesize = initial_filesize;
         fbuf->file_size = filesize;
         while (size > 0) {
-            err = edfs_write_chunk(edfs_context, ino, (const char *)p, edfs_min(BLOCK_SIZE, size), offset, &filesize, 0);
+            err = edfs_write_chunk(edfs_context, ino, (const char *)p, edfs_min(BLOCK_SIZE, size), offset, &filesize, 0, &fbuf->hash_buffer);
             if (err <= 0)
                 break;
 
@@ -2455,7 +2495,7 @@ int edfs_write_cache(struct edfs *edfs_context, edfs_ino_t ino, const char *buf,
         return size;
     }
     int64_t initial_filesize = get_size_json(edfs_context, ino);
-    return edfs_write_chunk(edfs_context, ino, buf, size, off, &initial_filesize, ((off + size) > initial_filesize));
+    return edfs_write_chunk(edfs_context, ino, buf, size, off, &initial_filesize, ((off + size) > initial_filesize), NULL);
 }
 
 int edfs_write(struct edfs *edfs_context, edfs_ino_t ino, const char *buf, size_t size, int64_t off, struct filewritebuf *fbuf) {
@@ -2482,6 +2522,11 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
         edfs_flush_chunk(edfs_context, fbuf->ino, fbuf);
         if (fbuf->written_data) {
             unsigned char hash[32];
+            // flush to disk
+            char b64name[MAX_B64_HASH_LEN];
+            char fullpath[MAX_PATH_LEN];
+            adjustpath(edfs_context, fullpath, computename(fbuf->ino, b64name));
+            edfs_update_hash(edfs_context, fullpath, -1, NULL, 0, &fbuf->hash_buffer);
             if (edfs_update_chain(edfs_context, fbuf->ino, fbuf->file_size, hash, NULL)) {
                 const char *update_data[] = {"iostamp", (const char *)hash, NULL, NULL};
                 edfs_update_json(edfs_context, fbuf->ino, update_data);
@@ -4190,14 +4235,18 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     block_free(topblock);
                 }
             } else {
-                log_warn("owned chain index is bigger");
-                block_free(topblock);
+                if (edfs_context->chain->index == topblock->index)
+                    log_warn("owned chain index is bigger");
+                else
+                if (edfs_context->chain->index > topblock->index)
+                    log_warn("owned chain index is newer");
                 // force rebroadcast top
                 edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
                 if ((edfs_context->chain->index == topblock->index) && (microseconds() - edfs_context->top_broadcast_timestamp >= EDFS_BLOCKCHAIN_MIN_TIMEOUT / 2)) {
                     edfs_context->top_broadcast_timestamp = microseconds();
                     edfs_broadcast_top(edfs_context, NULL, 0);
                 }
+                block_free(topblock);
             }
             return;
         }
