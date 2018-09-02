@@ -2914,7 +2914,9 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         int i;
         for (i = 0; i < max_chunks; i ++) {
             *(uint64_t *)(additional_data + 8)= htonll(i);
+            EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, inode, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            EDFS_THREAD_UNLOCK(edfs_context);
         }
     }
 }
