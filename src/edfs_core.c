@@ -2887,6 +2887,7 @@ int edfs_create_key(struct edfs *edfs_context) {
 void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_size, int try_update_hash, uint64_t start_chunk) {
     char b64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
+    char full_ino_path[MAX_PATH_LEN];
     unsigned char sig_buffer[BLOCK_SIZE_MAX];
 
     adjustpath(edfs_context, fullpath, computename(inode, b64name));
@@ -2895,6 +2896,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
     while (chunk_exists(fullpath, chunk)) {
         uint32_t signature_hash = edfs_get_hash(edfs_context, fullpath, inode, chunk);
         if (signature_hash) {
+            adjustpath2(edfs_context, full_ino_path, b64name, chunk);
             if (edfs_read_file(edfs_context, edfs_context->working_directory, fullpath, sig_buffer, 64, NULL, 0, 0, 0, NULL, signature_hash) != 64) {
                 log_debug("error reading local chunk %s:%" PRIu64, fullpath, chunk);
                 break;
@@ -2925,9 +2927,6 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         }
         // use cached addresses for 90% of requests, 10% are broadcasts
         request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
-
-        if ((!start_chunk) && (last_file_chunk > 2) && (chunk < last_file_chunk - 1))
-            edfs_ensure_data(edfs_context, inode, file_size, try_update_hash, chunk + 1);
     } else
     if ((try_update_hash) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
         unsigned char computed_hash[32];
