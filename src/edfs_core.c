@@ -3052,7 +3052,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             EDFS_THREAD_UNLOCK(edfs_context);
         }
         if (try_update_hash) {
-            edfs_schedule(edfs_context, edfs_shard_data_request, 500000, inode, chunk, 1);
+            edfs_schedule(edfs_context, edfs_shard_data_request, 250000, inode, chunk, 1);
         } else {
             // use cached addresses for 90% of requests, 10% are broadcasts
             request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
