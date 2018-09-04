@@ -4268,9 +4268,9 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                         struct block *previous_block = NULL;
                         if (edfs_context->chain_errors < 10000) {
                             EDFS_THREAD_LOCK(edfs_context);
+                            previous_block = (struct block *)edfs_context->chain->previous_block;
                             block_free(edfs_context->chain);
                             edfs_context->chain = previous_block;
-                            previous_block = (struct block *)edfs_context->chain->previous_block;
                             EDFS_THREAD_UNLOCK(edfs_context);
                         } else {
                             EDFS_THREAD_LOCK(edfs_context);

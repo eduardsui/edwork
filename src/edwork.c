@@ -1222,6 +1222,7 @@ int edwork_dispatch(struct edwork_data *data, edwork_dispatch_callback callback,
         int i;
         for (i = 1; i < data->ufds_len; i++) {
             if (data->ufds[i].revents) {
+                clientlen = sizeof(clientaddr);
                 int n = safe_sctp_recvfrom(data, data->ufds[i].fd, (char *)buffer, sizeof(buffer), 0, (struct sockaddr *) &clientaddr, &clientlen);
                 if (n <= 0) {
                     log_error("error in SCTP_recvmsg: %i", (int)errno);
