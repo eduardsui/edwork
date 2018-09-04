@@ -203,6 +203,14 @@ struct edfs_ino_cache {
     int clientaddr_size;
 };
 
+struct edfs_event {
+    edfs_schedule_callback callback;
+    uint64_t userdata_a;
+    uint64_t userdata_b;
+    uint64_t when;
+    uint64_t timestamp;
+};
+
 struct edfs {
     int read_only_fs;
     int ping_received;
@@ -223,6 +231,9 @@ struct edfs {
 
     struct edwork_data *edwork;
     struct edwork_io *queue;
+
+    struct edfs_event *events;
+    int events_len;
 
     thread_ptr_t network_thread;
     thread_mutex_t lock;
@@ -992,6 +1003,73 @@ int edfs_write_file(struct edfs *edfs_context, const char *base_path, const char
     return written;
 }
 
+int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t userdata_a, uint64_t userdata_b, int run_now) {
+    if ((!callback) || (!edfs_context))
+        return 0;
+
+    edfs_context->events = (struct edfs_event *)realloc(edfs_context->events, sizeof(struct edfs_event) * (edfs_context->events_len + 1));
+    if (!edfs_context->events) {
+        edfs_context->events_len = 0;
+        return 0;
+    }
+    edfs_context->events[edfs_context->events_len].callback = callback;
+    edfs_context->events[edfs_context->events_len].userdata_a = userdata_a;
+    edfs_context->events[edfs_context->events_len].userdata_b = userdata_b;
+    edfs_context->events[edfs_context->events_len].when = when;
+    if ((run_now) && (when))
+        edfs_context->events[edfs_context->events_len].timestamp = microseconds() - when;
+    else
+        edfs_context->events[edfs_context->events_len].timestamp = microseconds();
+    
+    edfs_context->events_len++;
+    return edfs_context->events_len;
+}
+
+int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t userdata_a, uint64_t userdata_b) {
+    if ((!callback) || (!edfs_context) || (!edfs_context->events) || (!edfs_context->events_len))
+        return 0;
+
+    struct edfs_event *new_events = (struct edfs_event *)realloc(edfs_context->events, sizeof(struct edfs_event) * edfs_context->events_len);
+    int i;
+    int len = edfs_context->events_len;
+    int index = 0;
+    for (i = 0; i < len; i ++) {
+        if ((edfs_context->events[i].callback == callback) && (callback)) {
+            if ((userdata_a) || (userdata_b)) {
+                if ((edfs_context->events[i].userdata_a != userdata_a) || (edfs_context->events[i].userdata_b != userdata_b))
+                    new_events[index++] = edfs_context->events[i];
+            }
+        } else
+        if (edfs_context->events[i].callback)
+            new_events[index++] = edfs_context->events[i];
+    }
+    free(edfs_context->events);
+    edfs_context->events = new_events;
+    edfs_context->events_len = index;
+
+    return index;
+}
+
+int edfs_schedule_iterate(struct edfs *edfs_context) {
+    if ((!edfs_context) || (!edfs_context->events) || (!edfs_context->events_len))
+        return 0;
+
+    int i;
+    int deleted = 0;
+    uint64_t now = microseconds();
+    while (i < edfs_context->events_len) {
+        if ((edfs_context->events[i].callback) && ((!edfs_context->events[edfs_context->events_len].when) || (edfs_context->events[i].timestamp + edfs_context->events[i].when <= now))) {
+            deleted += edfs_context->events[i].callback(edfs_context, edfs_context->events[i].userdata_a, edfs_context->events[i].userdata_b);
+            edfs_context->events[i].timestamp = now;
+        }
+        i++;
+    }
+
+    if (deleted)
+        edfs_schedule_remove(edfs_context, NULL, 0, 0);
+    return i;
+}
+
 int edfs_unlink_file(struct edfs *edfs_context, const char *base_path, const char *name) {
     char fullpath[MAX_PATH_LEN];
     const char *fname;
@@ -1658,8 +1736,10 @@ void request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int
 }
 
 void edfs_make_key(struct edfs *edfs_context) {
+    unsigned char random_bytes[32];
     memcpy(&edfs_context->previous_key, &edfs_context->key, sizeof(struct edfs_x25519_key));
-    edwork_random_bytes(edfs_context->key.secret, 32);
+    edwork_random_bytes(random_bytes, 32);
+    sha256(random_bytes, 32, edfs_context->key.secret);
 
     edfs_context->key.secret[0] &= 248;
     edfs_context->key.secret[31] &= 127;
@@ -2128,6 +2208,16 @@ uint64_t get_version_plus_one_json(struct edfs *edfs_context, uint64_t inode) {
         return 0;
 
     return version + 1;
+}
+
+int get_deleted_json(struct edfs *edfs_context, uint64_t inode) {
+    int64_t size;
+
+    int type = read_file_json(edfs_context, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+    if (!type)
+        return 1;
+
+    return 0;
 }
 
 int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk, const unsigned char *buf, int size, struct edfs_hash_buffer *hash_buffer) {
@@ -2895,6 +2985,23 @@ int edfs_create_key(struct edfs *edfs_context) {
     return 0;
 }
 
+int edfs_shard_data_request(struct edfs *edfs_context, uint64_t inode, uint64_t chunk) {
+    char b64name[MAX_B64_HASH_LEN];
+    char fullpath[MAX_PATH_LEN];
+
+    adjustpath(edfs_context, fullpath, computename(inode, b64name));
+
+    if (chunk_exists(fullpath, chunk))
+        return 1;
+
+    // file was deleted
+    if (get_deleted_json(edfs_context, inode))
+        return 1;
+
+    request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
+    return 0;
+}
+
 void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_size, int try_update_hash, uint64_t start_chunk, uint64_t json_version) {
     char b64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
@@ -2944,8 +3051,12 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             edfs_make_key(edfs_context);
             EDFS_THREAD_UNLOCK(edfs_context);
         }
-        // use cached addresses for 90% of requests, 10% are broadcasts
-        request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
+        if (try_update_hash) {
+            edfs_schedule(edfs_context, edfs_shard_data_request, 500000, inode, chunk, 1);
+        } else {
+            // use cached addresses for 90% of requests, 10% are broadcasts
+            request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
+        }
     } else {
         if ((try_update_hash) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
             unsigned char computed_hash[32];
@@ -4649,6 +4760,7 @@ int edwork_thread(void *userdata) {
         }
         flush_queue(edfs_context);
         edwork_dispatch(edwork, edwork_callback, 100, edfs_context);
+        edfs_schedule_iterate(edfs_context);
 
         // check if a new block is due for creation
         edfs_try_new_block(edfs_context);
@@ -4911,6 +5023,8 @@ void edfs_destroy_context(struct edfs *edfs_context) {
     avl_destroy(&edfs_context->ino_sync_file, avl_ino_key_cache_destructor);
 
     blockchain_free(edfs_context->chain);
+
+    free(edfs_context->events);
     free(edfs_context->working_directory);
     free(edfs_context->cache_directory);
     free(edfs_context->signature);

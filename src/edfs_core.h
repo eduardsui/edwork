@@ -106,6 +106,7 @@ struct filewritebuf;
 struct edfs;
 
 typedef unsigned int (*edfs_add_directory)(const char *name, edfs_ino_t ino, int type, int64_t size, time_t created, time_t modified, time_t timestamp, void *userdata);
+typedef int (*edfs_schedule_callback)(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b);
 
 uint64_t pathtoinode(const char *path, uint64_t *parentinode, const char **nameptr);
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name);
@@ -151,6 +152,10 @@ int edwork_readonly(struct edfs *edfs_context);
 
 int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource, int resource_len, unsigned char *proof_str, int max_proof_len, unsigned char *proof_of_work);
 int edfs_proof_of_work_verify(int bits, const unsigned char *proof_str, int proof_len, const unsigned char *subject, int subject_len, const unsigned char *prefix, int prefix_len);
+
+int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t userdata_a, uint64_t userdata_b, int run_now);
+int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t userdata_a, uint64_t userdata_b);
+int edfs_schedule_iterate(struct edfs *edfs_context);
 
 struct edfs *edfs_create_context(const char *use_working_directory);
 void edfs_destroy_context(struct edfs *edfs_context);
