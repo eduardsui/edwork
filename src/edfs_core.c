@@ -1029,7 +1029,7 @@ int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callb
     if ((!callback) || (!edfs_context) || (!edfs_context->events) || (!edfs_context->events_len))
         return 0;
 
-    struct edfs_event *new_events = (struct edfs_event *)realloc(edfs_context->events, sizeof(struct edfs_event) * edfs_context->events_len);
+    struct edfs_event *new_events = (struct edfs_event *)malloc(sizeof(struct edfs_event) * edfs_context->events_len);
     int i;
     int len = edfs_context->events_len;
     int index = 0;
@@ -1058,7 +1058,7 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
     int deleted = 0;
     uint64_t now = microseconds();
     while (i < edfs_context->events_len) {
-        if ((edfs_context->events[i].callback) && ((!edfs_context->events[edfs_context->events_len].when) || (edfs_context->events[i].timestamp + edfs_context->events[i].when <= now))) {
+        if ((edfs_context->events[i].callback) && ((!edfs_context->events[i].when) || (edfs_context->events[i].timestamp + edfs_context->events[i].when <= now))) {
             deleted += edfs_context->events[i].callback(edfs_context, edfs_context->events[i].userdata_a, edfs_context->events[i].userdata_b);
             edfs_context->events[i].timestamp = now;
         }
