@@ -1851,8 +1851,8 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             if (microseconds() - start >= 1000000) {
                 use_addr_cache = 0;
             }
-            if (microseconds() - proof_timestamp >= 250000) {
-                // new proof every 250ms
+            if (microseconds() - proof_timestamp >= 150000) {
+                // new proof every 150ms
                 proof_size = 0;
                 is_sctp = 0;
             }
