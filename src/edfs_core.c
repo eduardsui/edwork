@@ -1805,6 +1805,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     if (filebuf->check_hash)
         sig_hash = edfs_get_hash(edfs_context, path, ino, chunk);
     int use_addr_cache = 1;
+
     do {
         if (edfs_context->mutex_initialized)
             thread_mutex_lock(&edfs_context->io_lock);

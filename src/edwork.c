@@ -53,6 +53,7 @@
         #define SCTP_listen(socket, backlog)                            usrsctp_listen(socket, backlog)
         #define SCTP_accept(socket, addr, addrlen)                      usrsctp_accept(socket, addr, addrlen)
         #define SCTP_connect(socket, addr, addrlen)                     usrsctp_connect(socket, (struct sockaddr *)addr, addrlen)
+        #define SCTP_set_non_blocking(socket, nb)                       usrsctp_set_non_blocking(socket, nb)
         #define SCTP_send(socket, buf, len, flags, dest_addr, addrlen)  usrsctp_sendv(socket, buf, len, (struct sockaddr *)dest_addr, 1, &info, sizeof(info), SCTP_SENDV_PRINFO, flags)
         #define SCTP_recv(socket, buf, len, flags, src_addr, addrlen)   usrsctp_recvv(socket, buf, len, src_addr, addrlen, &rcv_info, &infolen, &infotype, &flags)
         #define SCTP_getpaddrs(socket, assoc_id, addrs)                 usrsctp_getpaddrs(socket, assoc_id, addrs)
@@ -91,6 +92,7 @@
         #define SCTP_listen(socket, backlog)                            listen(socket, backlog)
         #define SCTP_accept(socket, addr, addrlen)                      accept(socket, addr, addrlen)
         #define SCTP_connect(socket, addr, addrlen)                     connect(socket, addr, addrlen)
+        #define SCTP_set_non_blocking(socket, nb)                       
         #define SCTP_send(socket, buf, len, flags, dest_addr, addrlen)  sctp_sendmsg(socket, buf, len, (struct sockaddr *)dest_addr, addrlen, 0, flags, 0, EDWORK_SCTP_TTL, 0)
         #define SCTP_recv(socket, buf, len, flags, src_addr, addrlen)   sctp_recvmsg(socket, buf, len, src_addr, addrlen, NULL, &flags)
         #define SCTP_getpaddrs(socket, assoc_id, addrs)                 sctp_getpaddrs(socket, assoc_id, addrs)
@@ -182,6 +184,7 @@ struct edwork_data {
     #ifdef WITH_USRSCTP
         edwork_dispatch_callback callback;
         void *userdata;
+        thread_mutex_t sctp_lock;
     #else
         struct pollfd *ufds;
         int ufds_len;
@@ -284,9 +287,60 @@ void edwork_done() {
 #ifdef WITH_SCTP
 
 #ifdef WITH_USRSCTP
+static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *sock, union sctp_notification *notif, size_t n) {
+    if (notif->sn_header.sn_length != (uint32_t)n)
+        return;
+
+    switch (notif->sn_header.sn_type) {
+        case SCTP_ASSOC_CHANGE:
+            log_trace("SCTP_ASSOC_CHANGE");
+            break;
+        case SCTP_PEER_ADDR_CHANGE:
+            log_trace("SCTP_PEER_ADDR_CHANGE");
+            break;
+        case SCTP_REMOTE_ERROR:
+            log_trace("SCTP_REMOTE_ERROR");
+            break;
+        case SCTP_SHUTDOWN_EVENT:
+            log_trace("SCTP_SHUTDOWN_EVENT");
+            break;
+        case SCTP_ADAPTATION_INDICATION:
+            log_trace("SCTP_ADAPTATION_INDICATION");
+            break;
+        case SCTP_PARTIAL_DELIVERY_EVENT:
+            log_trace("SCTP_PARTIAL_DELIVERY_EVENT");
+            break;
+        case SCTP_AUTHENTICATION_EVENT:
+            log_trace("SCTP_AUTHENTICATION_EVENT");
+            break;
+        case SCTP_SENDER_DRY_EVENT:
+            log_trace("SCTP_SENDER_DRY_EVENT");
+            break;
+        case SCTP_NOTIFICATIONS_STOPPED_EVENT:
+            log_trace("SCTP_NOTIFICATIONS_STOPPED_EVENT");
+            break;
+        case SCTP_SEND_FAILED_EVENT:
+            log_trace("SCTP_SEND_FAILED_EVENT");
+            break;
+        case SCTP_STREAM_RESET_EVENT:
+            log_trace("SCTP_STREAM_RESET_EVENT");
+            break;
+        case SCTP_ASSOC_RESET_EVENT:
+            log_trace("SCTP_ASSOC_RESET_EVENT");
+            break;
+        case SCTP_STREAM_CHANGE_EVENT:
+            log_trace("SCTP_STREAM_CHANGE_EVENT");
+            break;
+        default:
+            break;
+    }
+}
+
 static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, void *data, size_t datalen, struct sctp_rcvinfo rcvinfo, int flags, void *ulp_info) {
     struct edwork_data *edwork = (struct edwork_data *)ulp_info;
     if ((flags & MSG_NOTIFICATION) || (!data) || (!edwork)) {
+        if (flags & MSG_NOTIFICATION)
+            edwork_sctp_notification(edwork, sock, (union sctp_notification *)data, datalen);
         free(data);
         return 1;
     }
@@ -298,9 +352,18 @@ static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, v
             log_error("error in sctp_getpaddrs (%i)", errno);
         } else {
             log_trace("SCTP dispatch");
-            edwork->sctp_last_addr = &addr;
+            edwork->sctp_last_addr = addrs;
             edwork->sctp_last_assoc_id = rcvinfo.rcv_assoc_id;
-            edwork_dispatch_data(edwork, edwork->callback, (unsigned char *)data, datalen, addrs, sizeof(struct sockaddr_in), edwork->userdata, 1);
+            unsigned char *data_copy = (unsigned char *)malloc(datalen + 1);
+            if (data_copy) {
+                // it is important for data to be null-terminated!!!
+                memcpy(data_copy, data, datalen);
+                data_copy[datalen] = 0;
+                thread_mutex_lock(&edwork->sctp_lock);
+                edwork_dispatch_data(edwork, edwork->callback, (unsigned char *)data_copy, datalen, addrs, sizeof(struct sockaddr_in), edwork->userdata, 1);
+                thread_mutex_unlock(&edwork->sctp_lock);
+                free(data_copy);
+            }
             SCTP_freepaddrs(addrs);
         }
     }    
@@ -336,7 +399,33 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
     if (!socket)
         return 0;
 
-    // usrsctp seems to be non-blocking by default
+    SCTP_set_non_blocking(peer_socket, 1);
+    
+    int opt = 1;
+    SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_NODELAY, (const char *)&opt, sizeof(opt));
+#ifdef SCTP_UDP_ENCAPSULATION
+    #ifdef WITH_USRSCTP
+	    struct sctp_event event;
+	    uint16_t event_types[] = {SCTP_ASSOC_CHANGE, SCTP_PEER_ADDR_CHANGE, SCTP_SEND_FAILED_EVENT};
+        struct sctp_event evt;
+        int i;
+
+	    memset(&evt, 0, sizeof(struct sctp_event));
+	    evt.se_assoc_id = SCTP_ALL_ASSOC;
+	    evt.se_on = 1;
+
+        for (i = 0; i < sizeof(event_types)/sizeof(uint16_t); i++)
+            SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_EVENT, &event, sizeof(event));
+    #endif
+
+    struct sctp_udpencaps encaps;
+	memset(&encaps, 0, sizeof(struct sctp_udpencaps));
+	encaps.sue_address.ss_family = AF_INET;
+	encaps.sue_port = htons(EDWORK_SCTP_UDP_TUNNELING_PORT);
+
+    SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, sizeof(struct sctp_udpencaps));
+#endif
+
     int err = SCTP_connect(peer_socket, addr, addr_len);
     if (!err)
         return peer_socket;
@@ -361,7 +450,7 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect_hostname(struct edwork_data *data, c
     return edwork_sctp_connect(data, (struct sockaddr *)&sin, sizeof(sin));
 }
 
-ssize_t safe_sctp_sendto(struct edwork_data *data, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
+ssize_t safe_sctp_sendto(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
     if (!data->sctp_socket)
         return -1;
 
@@ -371,7 +460,7 @@ ssize_t safe_sctp_sendto(struct edwork_data *data, const void *buf, size_t len, 
     info.pr_value = EDWORK_SCTP_TTL;
 #endif
     thread_mutex_lock(&data->sock_lock);
-    ssize_t err = SCTP_send(data->sctp_socket, (const char *)buf, len, flags, dest_addr, addrlen);
+    ssize_t err = SCTP_send(socket, (const char *)buf, len, flags, dest_addr, addrlen);
     thread_mutex_unlock(&data->sock_lock);
     return err;
 }
@@ -391,10 +480,20 @@ ssize_t safe_sctp_recvfrom(struct edwork_data *data, SCTP_SOCKET_TYPE socket, vo
 }
 #endif
 
-ssize_t safe_sendto(struct edwork_data *data, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
+ssize_t safe_sendto(struct edwork_data *data, struct client_data *peer_data, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
 #ifdef WITH_SCTP
-    if ((data->sctp_socket) && ((data->sctp_last_addr == dest_addr) || (SCTP_getassocid(data->sctp_socket, dest_addr) > 0)))
-        return safe_sctp_sendto(data, buf, len, flags, dest_addr, addrlen);
+    if (data->sctp_socket) {
+        if (!peer_data) {
+            uintptr_t data_index = (uintptr_t)avl_search(&data->tree, (void *)dest_addr);
+            if (data_index > 0)
+                peer_data = &data->clients[data_index - 1];
+        }
+        if ((peer_data) && (peer_data->socket) && (peer_data->is_sctp))
+            return safe_sctp_sendto(data, peer_data->socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen);
+        else
+        if (((peer_data) && (peer_data->is_sctp)) || (data->sctp_last_addr == dest_addr) || (SCTP_getassocid(data->sctp_socket, dest_addr) > 0))
+            return safe_sctp_sendto(data, data->sctp_socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen);
+    }
 #endif
     thread_mutex_lock(&data->sock_lock);
     ssize_t err = sendto(data->socket, (const char *)buf, len, flags, dest_addr, addrlen);
@@ -514,6 +613,8 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     if (data->sctp_socket) {
         optval = 1;
         SCTP_setsockopt(data->sctp_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&optval, sizeof(int));
+        SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_NODELAY, (const char *)&optval, sizeof(int));
+
 
         struct sctp_initmsg initmsg;
         memset(&initmsg, 0, sizeof(struct sctp_initmsg));
@@ -585,6 +686,9 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     thread_mutex_init(&data->sock_lock);
 #ifdef EDFS_MULTITHREADED
     thread_mutex_init(&data->thread_lock);
+#endif
+#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+    thread_mutex_init(&data->sctp_lock);
 #endif
     edwork_add_node(data, "255.255.255.255", port);
 
@@ -748,6 +852,23 @@ int edwork_set_info(void *clientinfo, uint64_t last_ino, uint64_t last_chunk, ui
 }
 
 
+#ifdef WITH_SCTP
+int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen) {
+    if (!socket)
+        return -1;
+    unsigned char *packet = make_packet(data, type, buf, &len, 0, 0, 0);
+    int sent = -1;
+    if ((packet) && (len > 0)) {
+        if (data)
+            sent = safe_sctp_sendto(data, socket, (const char *)packet, len, SCTP_UNORDERED, (struct sockaddr *)clientaddr, clientaddrlen);
+        if (sent < 0)
+            log_error("error in sendto (sctp, peer)");
+    }
+    free(packet);
+    return sent;
+}
+#endif
+
 void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len, int update_seen, int return_old_peer, int is_sctp) {
     if ((!sin) || (client_len <= 0) || (sin->sin_addr.s_addr == 0) || (sin->sin_port == 0))
         return 0;
@@ -783,7 +904,16 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     data->clients[data->clients_count].last_msg_timestamp = 0;
     data->clients[data->clients_count].last_seen = time(NULL);
 #ifdef WITH_SCTP
-    data->clients[data->clients_count].socket = 0;
+    // no sctp for broadcast address
+    if ((is_sctp) || (data->clients_count == 0)) {
+        // is remote socket
+        data->clients[data->clients_count].socket = 0;
+    } else {
+        data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)sin, client_len);
+        if (data->clients[data->clients_count].socket)
+            edwork_send_to_sctp_socket(data, data->clients[data->clients_count].socket, "helo", NULL, 0, sin, client_len);
+    }
+        
     data->clients[data->clients_count].is_sctp = is_sctp;
 #endif
 
@@ -852,7 +982,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
     if ((ptr) && (len > 0)) {
         unsigned int i;
         if ((clientaddr) && (clientaddr_len > 0)) {
-            if (safe_sendto(data, (const char *)ptr, len, 0, (const struct sockaddr *)clientaddr, clientaddr_len) <= 0) {
+            if (safe_sendto(data, NULL, (const char *)ptr, len, 0, (const struct sockaddr *)clientaddr, clientaddr_len) <= 0) {
 #ifdef _WIN32
                 log_trace("error %i in sendto (%s)", (int)WSAGetLastError(), edwork_addr_ipv4(clientaddr));
 #else
@@ -878,7 +1008,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                         log_debug("not broadcasting to same client");
                     } else
                     if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
-                        if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) <= 0) {
+                        if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) <= 0) {
 #ifdef _WIN32
                             log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #else
@@ -909,7 +1039,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                         log_debug("not broadcasting to same client");
                     } else
                     if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
-                        if (safe_sendto(data, (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) > 0) {
+                        if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) > 0) {
                             sent_to ++;
                         } else {
 #ifdef _WIN32
@@ -1088,7 +1218,7 @@ int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsi
     int sent = -1;
     if ((packet) && (len > 0)) {
         if ((data) && (clientaddr) && (clientaddrlen))
-            sent = safe_sendto(data, (const char *)packet, len, 0, (struct sockaddr *)clientaddr, clientaddrlen);
+            sent = safe_sendto(data, NULL, (const char *)packet, len, 0, (struct sockaddr *)clientaddr, clientaddrlen);
         if (sent < 0)
             log_error("error in sendto (peer)");
     }
@@ -1105,6 +1235,12 @@ int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
     }
     
     if ((data->clients_count > 1) && (index <= data->clients_count)) {
+#ifdef WITH_SCTP
+        if (data->clients[index - 1].socket) {
+            SCTP_close(data->clients[index - 1].socket);
+            data->clients[index - 1].socket = 0;
+        }
+#endif
         avl_remove(&data->tree, sin);
         memmove(&data->clients[index - 1], &data->clients[index], sizeof(struct client_data) * (data->clients_count - index));
         int i;
@@ -1361,7 +1497,9 @@ void edwork_destroy(struct edwork_data *data) {
 
 #ifdef WITH_SCTP
     SCTP_close(data->sctp_socket);
-    #ifndef WITH_USRSCTP
+    #ifdef WITH_USRSCTP
+        thread_mutex_term(&data->sctp_lock);
+    #else
         int i;
         for (i = 2; i < data->ufds_len; i++)
             SCTP_close(data->ufds[i].fd);

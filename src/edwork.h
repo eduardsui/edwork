@@ -4,8 +4,8 @@
 #include <inttypes.h>
 #include <time.h>
 
-// 3 seconds ttl
-#define EDWORK_SCTP_TTL                 3000
+// 2 seconds ttl
+#define EDWORK_SCTP_TTL                 2000
 #define SCTP_UDP_ENCAPSULATION
 #define EDWORK_SCTP_UDP_TUNNELING_PORT  4884
 
