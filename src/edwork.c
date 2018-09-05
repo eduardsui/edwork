@@ -178,6 +178,7 @@ struct edwork_data {
     time_t magnitude_stamp;
 
     thread_mutex_t sock_lock;
+    thread_mutex_t clients_lock;
 #ifdef EDFS_MULTITHREADED
     thread_mutex_t thread_lock;
 #endif
@@ -272,13 +273,15 @@ void edwork_init() {
     #else
         usrsctp_init(0, NULL, NULL);
     #endif
-    usrsctp_sysctl_set_sctp_sendspace(0x100000);
-    usrsctp_sysctl_set_sctp_recvspace(0x100000);
-    usrsctp_sysctl_set_sctp_rto_max_default(5000);
-    usrsctp_sysctl_set_sctp_rto_min_default(500);
-    usrsctp_sysctl_set_sctp_rto_initial_default(500);
+    usrsctp_sysctl_set_sctp_sendspace(0x2000000);
+    usrsctp_sysctl_set_sctp_recvspace(0x2000000);
+    usrsctp_sysctl_set_sctp_rto_max_default(100);
+    usrsctp_sysctl_set_sctp_rto_min_default(50);
+    usrsctp_sysctl_set_sctp_rto_initial_default(50);
     usrsctp_sysctl_set_sctp_init_rto_max_default(30000);
     usrsctp_sysctl_set_sctp_sack_freq_default(1);
+    usrsctp_sysctl_set_sctp_delayed_sack_time_default(50);
+    usrsctp_sysctl_set_sctp_max_burst_default(1);
     usrsctp_sysctl_set_sctp_enable_sack_immediately(1);
     usrsctp_sysctl_set_sctp_nat_friendly(1);
     usrsctp_sysctl_set_sctp_mobility_base(1);
@@ -370,9 +373,9 @@ static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, v
                 // it is important for data to be null-terminated!!!
                 memcpy(data_copy, data, datalen);
                 data_copy[datalen] = 0;
-                // thread_mutex_lock(&edwork->sctp_lock);
+                thread_mutex_lock(&edwork->sctp_lock);
                 edwork_dispatch_data(edwork, edwork->callback, (unsigned char *)data_copy, datalen, addrs, sizeof(struct sockaddr_in), edwork->userdata, 1, sock == edwork->sctp_socket);
-                // thread_mutex_unlock(&edwork->sctp_lock);
+                thread_mutex_unlock(&edwork->sctp_lock);
                 free(data_copy);
             }
             SCTP_freepaddrs(addrs);
@@ -494,11 +497,11 @@ ssize_t safe_sctp_recvfrom(struct edwork_data *data, SCTP_SOCKET_TYPE socket, vo
 #ifdef WITH_SCTP
 int edwork_is_sctp(struct edwork_data *data, const void *clientaddr_ptr) {
     int is_sctp = 0;
-    EDWORK_THREAD_LOCK(data);
+    thread_mutex_lock(&data->clients_lock);
     uintptr_t data_index = (uintptr_t)avl_search(&data->tree, (void *)clientaddr_ptr);
     if (data_index > 1)
         is_sctp = data->clients[data_index - 1].is_sctp;
-    EDWORK_THREAD_UNLOCK(data);
+    thread_mutex_unlock(&data->clients_lock);
     return is_sctp;
 }
 #endif
@@ -512,7 +515,6 @@ ssize_t safe_sendto(struct edwork_data *data, struct client_data *peer_data, con
             socket = peer_data->socket;
             is_sctp = peer_data->is_sctp;
         } else {
-            EDWORK_THREAD_LOCK(data);
             uintptr_t data_index = (uintptr_t)avl_search(&data->tree, (void *)dest_addr);
             if (data_index > 0) {
                 peer_data = &data->clients[data_index - 1];
@@ -521,7 +523,6 @@ ssize_t safe_sendto(struct edwork_data *data, struct client_data *peer_data, con
                     is_sctp = peer_data->is_sctp;
                 }
             }
-            EDWORK_THREAD_UNLOCK(data);
         }
         if ((socket) && (is_sctp))
             return safe_sctp_sendto(data, socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen);
@@ -663,7 +664,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
 
         serveraddr.sin_family = AF_INET;
         serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
-        serveraddr.sin_port = htons((unsigned short)port);
+        serveraddr.sin_port = htons((unsigned short)port + 1);
 
         if (SCTP_bind(data->sctp_socket, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0) {
             log_error("error binding SCTP socket");
@@ -719,6 +720,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
         sha256(key, 32, data->key_id);
 
     thread_mutex_init(&data->sock_lock);
+    thread_mutex_init(&data->clients_lock);
 #ifdef EDFS_MULTITHREADED
     thread_mutex_init(&data->thread_lock);
 #endif
@@ -926,7 +928,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     if ((!sin) || (client_len <= 0) || (sin->sin_addr.s_addr == 0) || (sin->sin_port == 0))
         return 0;
 
-    EDWORK_THREAD_LOCK(data);
+    thread_mutex_lock(&data->clients_lock);
     struct client_data *peer = NULL;
     uintptr_t data_index = (uintptr_t)avl_search(&data->tree, sin);
     if (data_index > 0)
@@ -937,9 +939,10 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             peer->last_seen = time(NULL);
         // opt in or out sctp
 #ifdef WITH_SCTP
-        peer->is_sctp = is_sctp;
+        if (is_sctp)
+            peer->is_sctp = is_sctp;
 #endif
-        EDWORK_THREAD_UNLOCK(data);
+        thread_mutex_unlock(&data->clients_lock);
         if (return_old_peer)
             return peer;
         return 0;
@@ -949,6 +952,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     data->clients = (struct client_data *)realloc(data->clients, sizeof(struct client_data) * (data->clients_count + 1));
     if (!data->clients) {
         data->clients_count = 0;
+        thread_mutex_unlock(&data->clients_lock);
         return 0;
     }
     memcpy(&data->clients[data->clients_count].clientaddr, sin, client_len);
@@ -961,7 +965,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     if (is_listen_socket)
         data->clients[data->clients_count].is_listen_socket = 1;
     else
-        data->clients[data->clients_count].is_listen_socket = is_listen_socket;
+        data->clients[data->clients_count].is_listen_socket = 0;
 #ifdef WITH_SCTP
     // no sctp for broadcast address
     if ((is_sctp) || (data->clients_count == 0)) {
@@ -984,7 +988,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         avl_insert(&data->tree, addr_key, (void *)(uintptr_t)data->clients_count);
     }
 
-    EDWORK_THREAD_UNLOCK(data);
+    thread_mutex_unlock(&data->clients_lock);
     return &data->clients[data->clients_count - 1];
 }
 
@@ -1024,7 +1028,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
         return 0;
     }
 
-    EDWORK_THREAD_LOCK(data);
+    thread_mutex_lock(&data->clients_lock);
 
     unsigned char *packet = NULL;
     const unsigned char *ptr = buf;
@@ -1049,7 +1053,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
 #endif
                 // fallback sending to other clients
             } else {
-                EDWORK_THREAD_UNLOCK(data);
+                thread_mutex_unlock(&data->clients_lock);
                 free(packet);
                 return 0;
             }
@@ -1073,7 +1077,8 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
 #else
                             log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #endif
-                            data->clients[i].last_seen = threshold - 1;
+                            if ((!data->clients[i].is_sctp) || (errno != 11))
+                                data->clients[i].last_seen = threshold - 1;
                         } else {
 #ifdef WITH_SCTP
                             if ((sleep_us > 0) && (!data->clients[i].is_sctp))
@@ -1135,7 +1140,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
             } while (sent_to < max_nodes);
         }
     }
-    EDWORK_THREAD_UNLOCK(data);
+    thread_mutex_unlock(&data->clients_lock);
     free(packet);
     return 0;
 }
@@ -1289,11 +1294,11 @@ int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsi
         uintptr_t data_index = (uintptr_t)avl_search(&data->tree, clientaddr);
         SCTP_SOCKET_TYPE socket = 0;
         if (data_index > 0) {
-            EDWORK_THREAD_LOCK(data);
+            thread_mutex_lock(&data->clients_lock);
             struct client_data *peer_data = &data->clients[data_index - 1];
             if (peer_data)
                 socket = peer_data->socket;
-            EDWORK_THREAD_UNLOCK(data);
+            thread_mutex_unlock(&data->clients_lock);
         }
         return edwork_send_to_sctp_socket(data, socket ? socket : data->sctp_socket, type, buf, len, clientaddr, clientaddrlen);
     }
@@ -1311,10 +1316,10 @@ int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsi
 }
 
 int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
-    EDWORK_THREAD_LOCK(data);
+    thread_mutex_lock(&data->clients_lock);
     uintptr_t index = (uintptr_t)avl_search(&data->tree, sin);
     if ((!index) || (index == 1)) {
-        EDWORK_THREAD_UNLOCK(data);
+        thread_mutex_unlock(&data->clients_lock);
         return 0;
     }
     
@@ -1341,7 +1346,7 @@ int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
 
         }
     }
-    EDWORK_THREAD_UNLOCK(data);
+    thread_mutex_unlock(&data->clients_lock);
     return 1;
 }
 
@@ -1486,7 +1491,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     int records = 0;
     unsigned int i;
     // active in last 72 hours
-    EDWORK_THREAD_LOCK(data);
+    thread_mutex_lock(&data->clients_lock);
     for (i = offset; i < data->clients_count; i++) {
         if (*buf_size < 7)
             break;
@@ -1501,7 +1506,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
             records ++;
         }
     }
-    EDWORK_THREAD_UNLOCK(data);
+    thread_mutex_unlock(&data->clients_lock);
     *buf_size = records * 7;
     return records;
 }
@@ -1545,7 +1550,7 @@ unsigned int edwork_magnitude(struct edwork_data *data) {
     if ((data->magnitude_stamp > threshold) && (data->magnitude > 0))
         return data->magnitude;
 
-    EDWORK_THREAD_LOCK(data);
+    thread_mutex_lock(&data->clients_lock);
     for (i = 0; i < data->clients_count; i++) {
         if (data->clients[i].last_seen > threshold) {
             magnitude ++;
@@ -1555,7 +1560,7 @@ unsigned int edwork_magnitude(struct edwork_data *data) {
     }
     data->magnitude_stamp = time(NULL);
     data->magnitude = magnitude;
-    EDWORK_THREAD_UNLOCK(data);
+    thread_mutex_unlock(&data->clients_lock);
 
     return magnitude;
 }
@@ -1569,6 +1574,7 @@ void edwork_destroy(struct edwork_data *data) {
     avl_destroy(&data->spent, avl_spent_key_data_destructor);
     avl_destroy(&data->tree, avl_key_data_destructor);
     thread_mutex_term(&data->sock_lock);
+    thread_mutex_term(&data->clients_lock);
 #ifdef EDFS_MULTITHREADED
     thread_mutex_term(&data->thread_lock);
 #endif

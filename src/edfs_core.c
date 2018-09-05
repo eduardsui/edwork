@@ -280,6 +280,8 @@ struct edfs {
 
     int shard_id;
     int shards;
+
+    int block_timestamp;
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -1814,6 +1816,8 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     int requested = 0;
     int do_forward = 1;
     int is_sctp = 0;
+
+    uint64_t proof_timestamp = microseconds();
     do {
         if (edfs_context->mutex_initialized)
             thread_mutex_lock(&edfs_context->io_lock);
@@ -1836,26 +1840,36 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                 break;
             }
             if ((microseconds() - last_key_timestamp >= 1000000)) {
-                // new key every second
-                EDFS_THREAD_LOCK(edfs_context);
-                edfs_make_key(edfs_context);
-                EDFS_THREAD_UNLOCK(edfs_context);
+                if (!is_sctp) {
+                    // new key every second
+                    EDFS_THREAD_LOCK(edfs_context);
+                    edfs_make_key(edfs_context);
+                    EDFS_THREAD_UNLOCK(edfs_context);
+                }
                 last_key_timestamp = microseconds();
-                // new proof every second
-                proof_size = 0;
             }
-            if (microseconds() - start >= 1000000)
+            if (microseconds() - start >= 1000000) {
                 use_addr_cache = 0;
+            }
+            if (microseconds() - proof_timestamp >= 250000) {
+                // new proof every 250ms
+                proof_size = 0;
+                is_sctp = 0;
+            }
             // end of file, no more quries
             // this is made to avoid an unnecessary edwork query
             if ((filebuf) && (filebuf->file_size > 0)) {
                 if (chunk > last_file_chunk)
                     return read_size;
             }
-            is_sctp = request_data(edfs_context, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size);
-            log_trace("requesting chunk %s:%" PRIu64 " (sctp: %i)", path, chunk, is_sctp);
+            if (!is_sctp) {
+                is_sctp = request_data(edfs_context, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size);
+                if (is_sctp)
+                    do_forward = 0;
+                log_trace("requesting chunk %s:%" PRIu64 " (sctp: %i)", path, chunk, is_sctp);
+            }
 #ifdef WITH_SCTP
-            uint64_t wait_count = is_sctp ? 100000 : 20000;
+            uint64_t wait_count = is_sctp ? 50000 : 20000;
 #else
             uint64_t wait_count = 20000;
 #endif
@@ -3527,18 +3541,18 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
     int encode_len = base64_encode((const unsigned char *)sha3_Finalize(&ctx), want_hash, 32, 0);
     int proof_timestamp = edfs_proof_of_work_verify(work_level, proof_of_work, proof_of_work_size, want_hash, encode_len, (const unsigned char *)work_prefix, strlen(work_prefix));
     if (!proof_timestamp) {
-        log_error("proof of work validation failed");
+        log_warn("proof of work validation failed");
         return 0;
     }
 
     int timestamp_epoch = timestamp/1000000;
     if (abs(timestamp_epoch - proof_timestamp) > 60) {
-        log_error("proof of work validation failed: timestamp validation failed");
+        log_warn("proof of work validation failed: timestamp validation failed");
         return 0;
     }
 
     if (!edwork_try_spend(edwork, proof_of_work, proof_of_work_size)) {
-        log_error("token already spent");
+        log_warn("token already spent");
         return 0;
     }
 
@@ -3719,13 +3733,13 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     if (!memcmp(type, "ping", 4)) {
         log_info("PING received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         edfs_context->ping_received = time(NULL);
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         return;
     }
     if (!memcmp(type, "helo", 4)) {
         log_info("HELO received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         if (is_sctp) {
-            edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+            edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
             if (edwork_send_to_peer(edwork, "ping", NULL, 0, clientaddr, clientaddrlen, is_sctp) > 0)
                 log_info("PING sent");
         } else {
@@ -3734,7 +3748,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         return;
     }
     if (!memcmp(type, "addr", 4)) {
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         log_info("ADDR list received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         if (time(NULL) - edfs_context->list_timestamp > 10) {
             log_warn("dropping non-requested ADDR");
@@ -3755,7 +3769,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_error("invalid payload");
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         edwork_confirm_seq(edwork, ntohll(*(uint64_t *)payload), 1);
         return;
     }
@@ -3765,7 +3779,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_error("invalid payload");
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         edwork_confirm_seq(edwork, ntohll(*(uint64_t *)payload), 1);
         return;
     }
@@ -3807,7 +3821,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             return;
         }
 
-        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         uint64_t ino = ntohll(*(uint64_t *)payload);
         uint64_t chunk = ntohll(*(uint64_t *)(payload + 8));
 
@@ -3831,9 +3845,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         }
 
         if (ino > 0) {
-            int size = edfs_reply_chunk(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
+            int loop_count = 0;
+            int size;
+one_loop:
+            size = edfs_reply_chunk(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
             if (size > 0) {
-                // unsigned char additional_data[32];
                 unsigned char *additional_data = buffer;
                 *(uint64_t *)additional_data = htonll(ino);
                 *(uint64_t *)(additional_data + 8) = htonll(chunk);
@@ -3855,11 +3871,21 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     int size2 = edwork_encrypt(edfs_context, buffer, size + 32, buf2 + 32, who_am_i, edwork_who_i_am(edwork), shared_secret);
                     if (edwork_send_to_peer(edwork, "dat4", buf2, size2 + 32, clientaddr, clientaddrlen, is_sctp) <= 0) {
                         log_error("error sending DAT4");
-                        if (edwork_unspend(edwork, payload + payload_offset, payload_size - payload_offset))
+                        if ((!loop_count) && (edwork_unspend(edwork, payload + payload_offset, payload_size - payload_offset)))
                             log_trace("token unspent");
-                    } else
+                    } else {
                         log_info("DAT4 sent");
-
+#ifndef EDFS_DISABLE_FORWARD_BLOCK_SEND
+                        if ((is_sctp) && (loop_count < 2)) {
+                            if (loop_count == 0)
+                                chunk += 10;
+                            else
+                                chunk ++;
+                            loop_count ++;
+                            goto one_loop;
+                        }
+                    }
+#endif
                 } else
                 if (!memcmp(type, "wan3", 4)) {
                     unsigned char buf2[BLOCK_SIZE_MAX];
@@ -3898,7 +3924,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             return;
         }
 
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
 
         int size = BLOCK_SIZE;
         int records = edwork_get_node_list(edwork, buffer, &size, (unsigned int)offset, time(NULL) - 3600);
@@ -3911,7 +3937,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     }
     if (!memcmp(type, "desc", 4)) {
         log_info("DESC received (%s)", edwork_addr_ipv4(clientaddr));
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         // json payload
         uint64_t ino;
         int err = edwork_process_json(edfs_context, payload, payload_size, &ino);
@@ -3945,7 +3971,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             return;
         }
         int err;
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         if (EDFS_DATA_BROADCAST_ENCRYPTED) {
             int size = edwork_decrypt(edfs_context, payload, payload_size, buffer, who_am_i, NULL, NULL);
             if (size <= 0) {
@@ -3982,7 +4008,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         int err = edwork_process_data(edfs_context, payload, payload_size, 0, clientaddr, clientaddrlen);
         if (err <= 0)
             log_warn("DAT2: will not write data block");
@@ -3994,7 +4020,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         int size = edwork_decrypt(edfs_context, payload, payload_size, buffer, who_am_i, edwork_who_i_am(edwork), NULL);
         int err = edwork_process_data(edfs_context, buffer, size, 0, clientaddr, clientaddrlen);
         if (err <= 0)
@@ -4011,7 +4037,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
 
         unsigned char shared_secret[32];
         curve25519(shared_secret, edfs_context->key.secret, payload);
@@ -4030,7 +4056,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
     if (!memcmp(type, "del\x00", 4)) {
         log_info("DEL received (%s)", edwork_addr_ipv4(clientaddr));
         uint64_t ino;
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         if (edwork_delete(edfs_context, payload, payload_size, &ino)) {
             *(uint64_t *)buffer = htonll(sequence);
             if (edwork_send_to_peer(edwork, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen, is_sctp) <= 0) {
@@ -4057,7 +4083,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             return;
         }
 
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         edwork_resync(edfs_context, clientaddr, clientaddrlen, is_sctp);
         *(uint64_t *)buffer = htonll(1);
         edwork_send_to_peer(edwork, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen, is_sctp);
@@ -4074,7 +4100,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("no valid proof of work");
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         edwork_resync_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen, is_sctp);
         usleep(500);
         edwork_resync_dir_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen, is_sctp);
@@ -4090,13 +4116,13 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("no valid proof of work");
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         edwork_resync_desc(edfs_context, ntohll(*(uint64_t *)payload), clientaddr, clientaddrlen, is_sctp);
         return;
     }
     if (!memcmp(type, "hash", 4)) {
         log_info("HASH request received (%s)", edwork_addr_ipv4(clientaddr));
-        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
 #ifdef EDFS_RANDOMLY_IGNORE_REQUESTS
         int magnitude = edwork_magnitude(edwork);
         int randomly_ignore = 0;
@@ -4200,12 +4226,12 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("invalid WAND request");
             return;
         }
-        if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
-            log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
-            return;
-        }
+        // if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
+        //     log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+        //     return;
+        // }
         char b64name[MAX_B64_HASH_LEN];
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         int len = edfs_read_file(edfs_context, edfs_context->working_directory, computename(ino, b64name), buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0);
         if (len > 0) {
             if (edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen, is_sctp) <= 0)
@@ -4231,7 +4257,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
 
         unsigned char shared_secret[32];
         curve25519(shared_secret, edfs_context->key.secret, payload);
@@ -4266,7 +4292,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("no valid proof of work", payload_size);
             return;
         }
-        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);;
+        edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
 
         char b64name[MAX_B64_HASH_LEN];
         computename(index, b64name);
@@ -4304,6 +4330,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             edfs_new_chain_request_descriptors(edfs_context, 0);
             edfs_context->top_broadcast_timestamp = 0;
             edfs_try_reset_proof(edfs_context);
+            edfs_context->block_timestamp = time(NULL);
             notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
         } else
         if ((edfs_context->chain) && (newblock->index == edfs_context->chain->index + 1)) {
@@ -4316,6 +4343,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                 edfs_new_chain_request_descriptors(edfs_context, 0);
                 edfs_context->top_broadcast_timestamp = 0;
                 edfs_try_reset_proof(edfs_context);
+                edfs_context->block_timestamp = time(NULL);
             } else {
                 log_error("block verify error");
                 // fork? resync chain
@@ -4330,6 +4358,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     EDFS_THREAD_LOCK(edfs_context);
                     notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                     EDFS_THREAD_UNLOCK(edfs_context);
+                    edfs_context->block_timestamp = time(NULL);
                 }
                 block_free(newblock);
             }
@@ -4345,17 +4374,29 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     log_warn("invalid block received (%i)", (int)newblock->index);
                 } else
                     log_trace("already owned received block (%i)", (int)newblock->index);
+
+                if (edfs_context->chain)
+                    requested_block = htonll(edfs_context->chain->index + 2);
+
+                EDFS_THREAD_LOCK(edfs_context);
+                notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                EDFS_THREAD_UNLOCK(edfs_context);
+
                 block_free(temp_block);
+                block_free(newblock);
+                newblock = NULL;
             } else
                 log_warn("invalid block received (%i)", (int)newblock->index);
 
-            computename(newblock->index  + 1, b64name);
-            len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
-            if (len > 64) {
-                if (edwork_send_to_peer(edfs_context->edwork, "blkd", buffer, len, clientaddr, clientaddrlen, is_sctp) <= 0)
-                    log_error("error sending chain block");
+            if (newblock) {
+                computename(newblock->index  + 1, b64name);
+                len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+                if (len > 64) {
+                    if (edwork_send_to_peer(edfs_context->edwork, "blkd", buffer, len, clientaddr, clientaddrlen, is_sctp) <= 0)
+                        log_error("error sending chain block");
+                }
+                block_free(newblock);
             }
-            block_free(newblock);
         }
         return;
     }
@@ -4380,6 +4421,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             if (edfs_context->chain->index == topblock->index) {
                 if (!memcmp(topblock->hash, edfs_context->chain->hash, 32)) {
                     log_info("same block, chain is valid");
+                    edfs_context->block_timestamp = time(NULL);
                     return;
                 }
                 // conflict, mediate
@@ -4410,6 +4452,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
                     edfs_broadcast_top(edfs_context, NULL, 0);
                     log_warn("mediated current block");
                     edfs_context->chain_errors = 0;
+                    edfs_context->block_timestamp = time(NULL);
                 } else {
                     log_warn("cannot mediate received block (block verify failed)");
                     // fork? resync chain
@@ -4489,6 +4532,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_trace("set new block");
             usleep(1000);
             edfs_broadcast_top(edfs_context, NULL, 0);
+            edfs_context->block_timestamp = time(NULL);
         } else {
             log_error("block verify error");
             edfs_context->chain = (struct block *)edfs_context->chain->previous_block;
@@ -4750,7 +4794,7 @@ int edwork_thread(void *userdata) {
     int broadcast_offset = 0;
     int initial_chain_request = 1;
     while (!edfs_context->network_done) {
-        if ((edfs_context->resync) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
+        if ((edfs_context->resync) && (edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= EDWORK_INIT_INTERVAL)) {
             uint64_t ack = htonll(1);
             EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
