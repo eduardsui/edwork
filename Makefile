@@ -1,7 +1,7 @@
 CC = gcc
 RM = rm
 USRSCTP_CFLAGS = -DSCTP_SIMPLE_ALLOCATOR -DSCTP_PROCESS_LEVEL_LOCKS -D__Userspace__ -D__Userspace_os_Linux -DINET -D_LIB -Isrc/usrsctp
-CFLAGS = -pthread -O3 -D_FILE_OFFSET_BITS=64 -DEDFS_DEFAULT_HOST=\"discovery.gyrogears.com:4848\" $(USRSCTP_CFLAGS)
+CFLAGS = -pthread -O3 -D_FILE_OFFSET_BITS=64 -DEDFS_DEFAULT_HOST=\"discovery.gyrogears.com:4848\" -DWITH_SCTP -DWITH_USRSCTP $(USRSCTP_CFLAGS)
 LIBS = -lfuse
 BUILDFLAGS= -o edfs_mount
 
