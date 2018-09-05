@@ -3143,7 +3143,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
             int64_t current_size = 0;
             int current_type = read_file_json(edfs_context, inode, &current_parent, &current_size, &current_timestamp, NULL, NULL, NULL, 0, &current_created, &current_modified, &current_generation, NULL);
             int do_write = 1;
-            if (current_type) {
+            if ((current_type) || (current_generation)) {
                 // check all the parameters, not just modified, in case of a setattr(mtime)
                 // also, allows a 0.1s difference
                 if ((current_generation > generation) || ((current_generation == generation) && (current_timestamp >= timestamp))) {
@@ -3157,15 +3157,17 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                             edfs_ensure_data(edfs_context, inode, file_size, 0, 0, generation + 1);
                     }
                 } else
-                if (current_parent != parent) {
-                    do_write = 0;
-                    written = 0;
-                    log_warn("refused to update descriptor: current parrent inode is different");
-                } else
-                if (((current_type & S_IFDIR) && ((type & S_IFDIR) == 0)) || (((current_type & S_IFDIR) == 0) && (type & S_IFDIR))) {
-                    do_write = 0;
-                    written = -1;
-                    log_warn("refused to update descriptor: inode type change is not supported");
+                if (current_type) {
+                    if (current_parent != parent) {
+                        do_write = 0;
+                        written = 0;
+                        log_warn("refused to update descriptor: current parrent inode is different");
+                    } else
+                    if (((current_type & S_IFDIR) && ((type & S_IFDIR) == 0)) || (((current_type & S_IFDIR) == 0) && (type & S_IFDIR))) {
+                        do_write = 0;
+                        written = -1;
+                        log_warn("refused to update descriptor: inode type change is not supported");
+                    }
                 }
             } else
             if (deleted) {
