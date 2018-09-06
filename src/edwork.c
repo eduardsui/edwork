@@ -184,10 +184,10 @@ struct edwork_data {
 #endif
 
 #ifdef WITH_SCTP
+    thread_mutex_t sctp_lock;
     #ifdef WITH_USRSCTP
         edwork_dispatch_callback callback;
         void *userdata;
-        thread_mutex_t sctp_lock;
     #else
         struct pollfd *ufds;
         int ufds_len;
@@ -458,15 +458,17 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
 
         for (i = 0; i < sizeof(event_types) / sizeof(uint16_t); i++)
             SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_EVENT, &evt, sizeof(evt));
+
+        struct sctp_udpencaps encaps;
+	    memset(&encaps, 0, sizeof(struct sctp_udpencaps));
+	    encaps.sue_address.ss_family = AF_INET;
+	    encaps.sue_port = htons(EDWORK_SCTP_UDP_TUNNELING_PORT);
+
+        if (SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, sizeof(struct sctp_udpencaps)))
+            log_error("error in SCTP_setsockopt %i", errno);
+    #else
+        // todo
     #endif
-
-    struct sctp_udpencaps encaps;
-	memset(&encaps, 0, sizeof(struct sctp_udpencaps));
-	encaps.sue_address.ss_family = AF_INET;
-	encaps.sue_port = htons(EDWORK_SCTP_UDP_TUNNELING_PORT);
-
-    if (SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, sizeof(struct sctp_udpencaps)))
-        log_error("error in SCTP_setsockopt %i", errno);
 #endif
     struct sctp_initmsg initmsg;
     memset(&initmsg, 0, sizeof(struct sctp_initmsg));
@@ -774,7 +776,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
 #ifdef EDFS_MULTITHREADED
     thread_mutex_init(&data->thread_lock);
 #endif
-#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+#ifdef WITH_SCTP
     thread_mutex_init(&data->sctp_lock);
 #endif
     edwork_add_node(data, "255.255.255.255", port, 0);
@@ -1070,7 +1072,7 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port, int i
     sin.sin_family      = AF_INET;
     sin.sin_port        = htons((int)port);
 
-    if (add_node(data, &sin, sizeof(sin), 0, 0, 0, 0), is_listen_socket)
+    if (add_node(data, &sin, sizeof(sin), 0, 0, 0, is_listen_socket))
         log_info("added node %s:%i", node, port);
 }
 
@@ -1584,13 +1586,14 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
 
 int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int buf_size) {
     if (!data)
-        return -1;
+        return 0;
 
     int records = 0;
     char buffer[32];
     while (buf_size >= 7) {
         int size = *buf ++;
-        if (size > buf_size)
+        buf_size --;
+        if ((size > buf_size) || (!size))
             break;
 
         if (size == 6) {
@@ -1601,8 +1604,8 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
             unsigned short port;
             memcpy(&port, buf + 4, 2);
             port = ntohs(port);
-
             edwork_add_node(data, buffer, port, 0);
+            records ++;
         }
 
         buf_size -= size;
@@ -1693,7 +1696,7 @@ void edwork_destroy(struct edwork_data *data) {
     thread_mutex_term(&data->thread_lock);
 #endif
 
-#if defined(WITH_USRSCTP) && defined(WITH_SCTP)
+#ifdef WITH_USRSCTP
     thread_mutex_term(&data->sctp_lock);
 #endif
 

@@ -1715,7 +1715,7 @@ int request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int 
 
     struct sockaddr_in *use_clientaddr = NULL;
     int clientaddr_size = 0;
-    int is_sctp = 0;
+    int is_sctp = edfs_context->force_sctp;
     struct sockaddr_in addrbuffer;
     if (use_cached_addr) {
         if (edfs_context->mutex_initialized)
@@ -3772,11 +3772,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("dropping non-requested ADDR");
             return;
         }
-        edwork_add_node_list(edwork, payload, payload_size);
-        if (payload_size >= BLOCK_SIZE - 0x100) {
+        int records = edwork_add_node_list(edwork, payload, payload_size);
+        if (records > 0) {
+            edfs_context->list_offset += records;
             uint32_t offset = htonl(edfs_context->list_offset);
             notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            edfs_context->list_offset ++;
             edfs_context->list_timestamp = time(NULL);
         }
         return;
@@ -4565,7 +4565,7 @@ void edwork_save_nodes(struct edfs *edfs_context) {
     unsigned char buffer[BLOCK_SIZE];
     int size = BLOCK_SIZE;
     unsigned int offset = 0;
-    int records = edwork_get_node_list(edfs_context->edwork, buffer, &size, (unsigned int)offset ++, 0);
+    int records = edwork_get_node_list(edfs_context->edwork, buffer, &size, (unsigned int)offset, 0);
 
     if (records > 0) {
         FILE *out = fopen(edfs_context->nodes_file, "wb");
@@ -4574,7 +4574,10 @@ void edwork_save_nodes(struct edfs *edfs_context) {
                 uint32_t size_data = htonl(size);
                 fwrite(&size_data, 1, sizeof(uint32_t), out);
                 fwrite(buffer, 1, size, out);
-                records = edwork_get_node_list(edfs_context->edwork, buffer, &size, offset ++, 0);
+                records = edwork_get_node_list(edfs_context->edwork, buffer, &size, offset, 0);
+
+                if (records > 0)
+                    offset += records;
             } while (records);
         }
         fclose(out);
@@ -4624,7 +4627,6 @@ void edwork_load_nodes(struct edfs *edfs_context) {
     }
     uint32_t offset = htonl(edfs_context->list_offset);
     notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-    edfs_context->list_offset ++;
     edfs_context->list_timestamp = time(NULL);
 }
 
@@ -4812,7 +4814,7 @@ int edwork_thread(void *userdata) {
 
     edwork_load_nodes(edfs_context);
     time_t ping = 0;
-    time_t write_nodes = time(NULL);
+    time_t write_nodes = time(NULL) - EDWORK_NODE_WRITE_INTERVAL + EDWORK_INIT_INTERVAL;
     time_t rebroadcast = 0;
     time_t startup = time(NULL);
     time_t last_chain_request = time(NULL);
@@ -4848,7 +4850,6 @@ int edwork_thread(void *userdata) {
             edfs_context->list_offset = 0;
             uint32_t offset = htonl(edfs_context->list_offset);
             notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            edfs_context->list_offset ++;
             edfs_context->list_timestamp = time(NULL);
         }
 
