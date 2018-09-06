@@ -1061,7 +1061,10 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
     uint64_t now = microseconds();
     while (i < edfs_context->events_len) {
         if ((edfs_context->events[i].callback) && ((!edfs_context->events[i].when) || (edfs_context->events[i].timestamp + edfs_context->events[i].when <= now))) {
-            deleted += edfs_context->events[i].callback(edfs_context, edfs_context->events[i].userdata_a, edfs_context->events[i].userdata_b);
+            if (edfs_context->events[i].callback(edfs_context, edfs_context->events[i].userdata_a, edfs_context->events[i].userdata_b)) {
+                deleted ++;
+                edfs_context->events[i].callback = NULL;
+            }
             edfs_context->events[i].timestamp = now;
         }
         i++;
@@ -3020,6 +3023,17 @@ int edfs_create_key(struct edfs *edfs_context) {
     return 0;
 }
 
+int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b) {
+    if (edfs_context->chain) {
+        uint64_t requested_block = htonll(edfs_context->chain->index + 2);
+        notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+
+        if (time(NULL) - edfs_context->block_timestamp >= 10)
+            return 1;
+    }
+    return 0;
+}
+
 int edfs_shard_data_request(struct edfs *edfs_context, uint64_t inode, uint64_t chunk) {
     char b64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
@@ -3717,6 +3731,8 @@ void edfs_new_chain_request_descriptors(struct edfs *edfs_context, int level) {
 void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, const unsigned char *blockhash, void *userdata, int is_sctp, int is_listen_socket) {
     unsigned char buffer[BLOCK_SIZE_MAX];
     struct edfs *edfs_context = (struct edfs *)userdata;
+
+    edfs_schedule_iterate(edfs_context);
     if ((!edwork) || (!type) || (!edfs_context))
         return;
     uint64_t now = microseconds();
@@ -4375,15 +4391,6 @@ one_loop:
                 } else
                     log_trace("already owned received block (%i)", (int)newblock->index);
 
-                if (edfs_context->chain)
-                    requested_block = htonll(edfs_context->chain->index + 2);
-                else
-                    requested_block = 1;
-
-                EDFS_THREAD_LOCK(edfs_context);
-                notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                EDFS_THREAD_UNLOCK(edfs_context);
-
                 block_free(temp_block);
                 block_free(newblock);
                 newblock = NULL;
@@ -4761,6 +4768,9 @@ int edwork_thread(void *userdata) {
         edfs_context->top_broadcast_timestamp = 0;
     }
 
+    if (edfs_context->resync)
+        edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0);
+
     char *host_and_port = edfs_context->host_and_port;
     if ((host_and_port) && (host_and_port[0])) {
         int add_port = EDWORK_PORT;
@@ -4796,7 +4806,7 @@ int edwork_thread(void *userdata) {
     int broadcast_offset = 0;
     int initial_chain_request = 1;
     while (!edfs_context->network_done) {
-        if ((edfs_context->resync) && (edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= EDWORK_INIT_INTERVAL)) {
+        if ((edfs_context->resync) && (time(NULL) - startup >= EDWORK_INIT_INTERVAL)) {
             uint64_t ack = htonll(1);
             EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
