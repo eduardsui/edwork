@@ -1058,7 +1058,7 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
     if ((!edfs_context) || (!edfs_context->events) || (!edfs_context->events_len))
         return 0;
 
-    int i;
+    int i = 0;
     int deleted = 0;
     uint64_t now = microseconds();
     while (i < edfs_context->events_len) {
