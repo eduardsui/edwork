@@ -54,7 +54,7 @@
         #define SCTP_accept(socket, addr, addrlen)                      usrsctp_accept(socket, addr, addrlen)
         #define SCTP_connect(socket, addr, addrlen)                     usrsctp_connect(socket, (struct sockaddr *)addr, addrlen)
         #define SCTP_set_non_blocking(socket, nb)                       usrsctp_set_non_blocking(socket, nb)
-        #define SCTP_send(socket, buf, len, flags, dest_addr, addrlen)  usrsctp_sendv(socket, buf, len, (struct sockaddr *)dest_addr, 1, &info, sizeof(info), SCTP_SENDV_PRINFO, flags)
+        #define SCTP_send(socket, buf, len, flags, dest_addr, addrlen)  usrsctp_sendv(socket, buf, len, (struct sockaddr *)dest_addr, dest_addr ? 1 : 0, &info, sizeof(info), SCTP_SENDV_PRINFO, flags)
         #define SCTP_recv(socket, buf, len, flags, src_addr, addrlen)   usrsctp_recvv(socket, buf, len, src_addr, addrlen, &rcv_info, &infolen, &infotype, &flags)
         #define SCTP_getpaddrs(socket, assoc_id, addrs)                 usrsctp_getpaddrs(socket, assoc_id, addrs)
         #define SCTP_freepaddrs(addrs)                                  usrsctp_freepaddrs(addrs)
@@ -286,6 +286,9 @@ void edwork_init() {
     usrsctp_sysctl_set_sctp_nat_friendly(1);
     usrsctp_sysctl_set_sctp_mobility_base(1);
     usrsctp_sysctl_set_sctp_mobility_fasthandoff(1);
+    usrsctp_sysctl_set_sctp_blackhole(2);
+    usrsctp_sysctl_set_sctp_default_frag_interleave(2);
+    usrsctp_sysctl_set_sctp_ecn_enable(0);
 #endif
 }
 
@@ -346,6 +349,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             log_trace("SCTP_STREAM_CHANGE_EVENT");
             break;
         default:
+            log_trace("SCTP: unknown event");
             break;
     }
 }
@@ -419,8 +423,7 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
     SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_NODELAY, (const char *)&opt, sizeof(opt));
 #ifdef SCTP_UDP_ENCAPSULATION
     #ifdef WITH_USRSCTP
-	    struct sctp_event event;
-	    uint16_t event_types[] = {SCTP_ASSOC_CHANGE, SCTP_PEER_ADDR_CHANGE, SCTP_SEND_FAILED_EVENT};
+	    uint16_t event_types[] = {SCTP_ASSOC_CHANGE, SCTP_PEER_ADDR_CHANGE, SCTP_REMOTE_ERROR, SCTP_SEND_FAILED, SCTP_SEND_FAILED_EVENT, SCTP_NOTIFICATIONS_STOPPED_EVENT};
         struct sctp_event evt;
         int i;
 
@@ -428,8 +431,8 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
 	    evt.se_assoc_id = SCTP_ALL_ASSOC;
 	    evt.se_on = 1;
 
-        for (i = 0; i < sizeof(event_types)/sizeof(uint16_t); i++)
-            SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_EVENT, &event, sizeof(event));
+        for (i = 0; i < sizeof(event_types) / sizeof(uint16_t); i++)
+            SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_EVENT, &evt, sizeof(evt));
     #endif
 
     struct sctp_udpencaps encaps;
@@ -437,8 +440,16 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
 	encaps.sue_address.ss_family = AF_INET;
 	encaps.sue_port = htons(EDWORK_SCTP_UDP_TUNNELING_PORT);
 
-    SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, sizeof(struct sctp_udpencaps));
+    if (SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, sizeof(struct sctp_udpencaps)))
+        log_error("error in SCTP_setsockopt %i", errno);
 #endif
+    struct sctp_initmsg initmsg;
+    memset(&initmsg, 0, sizeof(struct sctp_initmsg));
+    initmsg.sinit_num_ostreams = 2;
+    initmsg.sinit_max_instreams = 2;
+    initmsg.sinit_max_attempts = 6;
+
+    SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_INITMSG, (const char *)&initmsg, sizeof(struct sctp_initmsg));
 
     int err = SCTP_connect(peer_socket, addr, addr_len);
     if (!err)
@@ -651,6 +662,20 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
         SCTP_setsockopt(data->sctp_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&optval, sizeof(int));
         SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_NODELAY, (const char *)&optval, sizeof(int));
 
+#ifdef SCTP_UDP_ENCAPSULATION
+        #ifdef WITH_USRSCTP
+	        uint16_t event_types[] = {SCTP_ASSOC_CHANGE, SCTP_PEER_ADDR_CHANGE, SCTP_REMOTE_ERROR, SCTP_SEND_FAILED, SCTP_SEND_FAILED_EVENT, SCTP_NOTIFICATIONS_STOPPED_EVENT};
+            struct sctp_event evt;
+            int i;
+
+	        memset(&evt, 0, sizeof(struct sctp_event));
+	        evt.se_assoc_id = SCTP_ALL_ASSOC;
+	        evt.se_on = 1;
+
+            for (i = 0; i < sizeof(event_types) / sizeof(uint16_t); i++)
+                SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_EVENT, &evt, sizeof(evt));
+        #endif
+#endif
 
         struct sctp_initmsg initmsg;
         memset(&initmsg, 0, sizeof(struct sctp_initmsg));
@@ -972,9 +997,14 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         // is remote socket
         data->clients[data->clients_count].socket = 0;
     } else {
-        data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)sin, client_len);
+        struct sockaddr addr2;
+        memcpy(&addr2, sin, client_len);
+        if (addr2.sa_family == AF_INET)
+            ((struct sockaddr_in *)&addr2)->sin_port = htons(ntohs(((struct sockaddr_in *)&addr2)->sin_port) + 1);
+
+        data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len);
         if (data->clients[data->clients_count].socket)
-            edwork_send_to_sctp_socket(data, data->clients[data->clients_count].socket, "helo", NULL, 0, sin, client_len);
+            edwork_send_to_sctp_socket(data, data->clients[data->clients_count].socket, "helo", NULL, 0, &addr2, client_len);
     }
         
     data->clients[data->clients_count].is_sctp = is_sctp;

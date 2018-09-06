@@ -4377,6 +4377,8 @@ one_loop:
 
                 if (edfs_context->chain)
                     requested_block = htonll(edfs_context->chain->index + 2);
+                else
+                    requested_block = 1;
 
                 EDFS_THREAD_LOCK(edfs_context);
                 notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
