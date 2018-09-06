@@ -440,7 +440,7 @@ static void edwork_remove_poll_socket(struct edwork_data *data, int offset) {
 
 static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const struct sockaddr *addr, int addr_len) {
     SCTP_SOCKET_TYPE peer_socket = SCTP_socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
-    if (!socket)
+    if (!peer_socket)
         return 0;
 
     SCTP_set_non_blocking(peer_socket, 1);

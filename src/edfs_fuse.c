@@ -426,8 +426,8 @@ int main(int argc, char *argv[]) {
                         fprintf(stderr, "edfs: shard id and number of shards expected after -shard parameter. Try -help option.\n");
                         exit(-1);
                     }
-                    i++;
-                    edfs_set_shard(edfs_context, atoi(argv[i ++]), atoi(argv[i]));
+                    edfs_set_shard(edfs_context, atoi(argv[i + 1]), atoi(argv[i + 2]));
+                    i += 2;
                 } else
 #ifdef WITH_SCTP
                 if (!strcmp(arg, "sctp")) {
