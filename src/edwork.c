@@ -298,7 +298,7 @@ void edwork_done() {
     WSACleanup();
 #endif
 #if defined(WITH_SCTP) && defined(WITH_USRSCTP)
-    int max_loop = 1000;
+    int max_loop = 100;
     while (usrsctp_finish() != 0) {
         usleep(100000);
         if (--max_loop <= 0) {
@@ -316,6 +316,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
     if (notif->sn_header.sn_length != (uint32_t)n)
         return;
 
+    int reset = 0;
     switch (notif->sn_header.sn_type) {
         case SCTP_ASSOC_CHANGE:
             log_trace("SCTP_ASSOC_CHANGE");
@@ -325,9 +326,11 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             break;
         case SCTP_REMOTE_ERROR:
             log_trace("SCTP_REMOTE_ERROR");
+            reset = 1;
             break;
         case SCTP_SHUTDOWN_EVENT:
             log_trace("SCTP_SHUTDOWN_EVENT");
+            reset = 1;
             break;
         case SCTP_ADAPTATION_INDICATION:
             log_trace("SCTP_ADAPTATION_INDICATION");
@@ -346,6 +349,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             break;
         case SCTP_SEND_FAILED_EVENT:
             log_trace("SCTP_SEND_FAILED_EVENT");
+            reset = 1;
             break;
         case SCTP_STREAM_RESET_EVENT:
             log_trace("SCTP_STREAM_RESET_EVENT");
@@ -359,6 +363,19 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
         default:
             log_trace("SCTP: unknown event");
             break;
+    }
+    if ((reset) && (sock != edwork->sctp_socket)) {
+        int i;
+        thread_mutex_lock(&edwork->clients_lock);
+        for (i = 0; i < edwork->clients_count; i++) {
+            if ((edwork->clients[i].socket) && (edwork->clients[i].socket == sock)) {
+                SCTP_close(edwork->clients[i].socket);
+                edwork->clients[i].socket = 0;
+                edwork->clients[i].is_sctp = 0;
+                break;
+            }
+        }
+        thread_mutex_unlock(&edwork->clients_lock);
     }
 }
 
@@ -431,7 +448,7 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
     SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_NODELAY, (const char *)&opt, sizeof(opt));
 #ifdef SCTP_UDP_ENCAPSULATION
     #ifdef WITH_USRSCTP
-	    uint16_t event_types[] = {SCTP_ASSOC_CHANGE, SCTP_PEER_ADDR_CHANGE, SCTP_REMOTE_ERROR, SCTP_SEND_FAILED, SCTP_SEND_FAILED_EVENT, SCTP_NOTIFICATIONS_STOPPED_EVENT};
+	    uint16_t event_types[] = {SCTP_ASSOC_CHANGE, SCTP_PEER_ADDR_CHANGE, SCTP_REMOTE_ERROR, SCTP_SEND_FAILED, SCTP_SEND_FAILED_EVENT, SCTP_NOTIFICATIONS_STOPPED_EVENT, SCTP_SHUTDOWN_EVENT, SCTP_STREAM_RESET_EVENT};
         struct sctp_event evt;
         int i;
 
@@ -1653,12 +1670,13 @@ void edwork_close(struct edwork_data *data) {
     int i;
     thread_mutex_lock(&data->clients_lock);
     for (i = 0; i < data->clients_count; i++) {
-        if (data->clients[i].socket) {
-            SCTP_shutdown(data->clients[i].socket, SHUT_RDWR);
-            SCTP_close(data->clients[i].socket);
-            data->clients[i].socket = 0;
-        }
+        SCTP_SOCKET_TYPE socket = data->clients[i].socket;
         data->clients[i].is_sctp = 0;
+        if (socket) {
+            data->clients[i].socket = 0;
+            SCTP_shutdown(socket, SHUT_RDWR);
+            SCTP_close(socket);
+        }
     }
     thread_mutex_unlock(&data->clients_lock);
 #endif

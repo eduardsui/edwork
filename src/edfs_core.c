@@ -4880,10 +4880,10 @@ int edwork_thread(void *userdata) {
 
     edwork_close(edwork);
 
+    edwork_done();
+
     edfs_context->edwork = NULL;
     edwork_destroy(edwork);
-
-    edwork_done();
 
     return 0;
 }
