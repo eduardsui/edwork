@@ -179,6 +179,7 @@ struct edwork_data {
 
     thread_mutex_t sock_lock;
     thread_mutex_t clients_lock;
+    thread_mutex_t lock;
 #ifdef EDFS_MULTITHREADED
     thread_mutex_t thread_lock;
 #endif
@@ -773,6 +774,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
 
     thread_mutex_init(&data->sock_lock);
     thread_mutex_init(&data->clients_lock);
+    thread_mutex_init(&data->lock);
 #ifdef EDFS_MULTITHREADED
     thread_mutex_init(&data->thread_lock);
 #endif
@@ -796,9 +798,10 @@ int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_wor
         return 0;
     memcpy(proof, proof_of_work, proof_of_work_size);
     proof[proof_of_work_size] = 0;
-
+    thread_mutex_lock(&data->lock);
     void *exists = avl_search(&data->spent, proof);
     if (exists) {
+        thread_mutex_unlock(&data->lock);
         free(proof);
         return 0;
     }
@@ -812,6 +815,7 @@ int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_wor
 
     avl_insert(&data->spent, proof, (void *)1);
     data->spent_count ++;
+    thread_mutex_unlock(&data->lock);
     return 1;
 }
 
@@ -821,9 +825,11 @@ int edwork_unspend(struct edwork_data *data, const unsigned char *proof_of_work,
         return 0;
     memcpy(proof, proof_of_work, proof_of_work_size);
     proof[proof_of_work_size] = 0;
+    thread_mutex_lock(&data->lock);
     void *exists = avl_remove(&data->spent, proof);
     if (exists)
         data->spent_count --;
+    thread_mutex_unlock(&data->lock);
 
     free(proof);
 
@@ -1692,6 +1698,7 @@ void edwork_destroy(struct edwork_data *data) {
     avl_destroy(&data->tree, avl_key_data_destructor);
     thread_mutex_term(&data->sock_lock);
     thread_mutex_term(&data->clients_lock);
+    thread_mutex_init(&data->lock);
 #ifdef EDFS_MULTITHREADED
     thread_mutex_term(&data->thread_lock);
 #endif
