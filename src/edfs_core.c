@@ -280,7 +280,9 @@ struct edfs {
 
     int shard_id;
     int shards;
-
+#ifdef WITH_SCTP
+    int force_sctp;
+#endif
     int block_timestamp;
 };
 
@@ -4432,6 +4434,7 @@ one_loop:
                 if (!hash_compare) {
                     log_info("same block, chain is valid");
                     edfs_context->block_timestamp = time(NULL);
+                    block_free(topblock);
                     return;
                 }
                 // conflict, mediate
@@ -4608,14 +4611,14 @@ void edwork_load_nodes(struct edfs *edfs_context) {
         while (fread(&size, 1, sizeof(uint32_t), in) == sizeof(uint32_t)) {
             size = ntohl(size);
             if (size > BLOCK_SIZE) {
-                DEBUG_PRINT("ERROR LOADING NODE LIST (block size)");
+                log_error("ERROR LOADING NODE LIST (block size)");
                 break;
             }
             if (fread(buffer, 1, size, in) != size) {
-                DEBUG_PRINT("ERROR LOADING NODE LIST");
+                log_error("ERROR LOADING NODE LIST");
                 break;
             }
-            edwork_add_node_list(edfs_context->edwork, buffer, size);
+            edwork_add_node_list(edfs_context->edwork, buffer, (int)size);
         }
         fclose(in);
     }
@@ -4769,6 +4772,10 @@ int edwork_thread(void *userdata) {
     }
 
     edfs_context->edwork = edwork;
+#ifdef WITH_SCTP
+    if (edfs_context->force_sctp)
+        edwork_force_sctp(edfs_context->edwork, 1);
+#endif
     if (edfs_context->chain) {
         edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
         edfs_context->top_broadcast_timestamp = 0;
@@ -4871,10 +4878,12 @@ int edwork_thread(void *userdata) {
     flush_queue(edfs_context);
     edwork_save_nodes(edfs_context);
 
-    edwork_done();
+    edwork_close(edwork);
 
     edfs_context->edwork = NULL;
     edwork_destroy(edwork);
+
+    edwork_done();
 
     return 0;
 }
@@ -5134,6 +5143,8 @@ void edfs_destroy_context(struct edfs *edfs_context) {
     free(edfs_context->default_nodes);
     free(edfs_context->blockchain_directory);
     free(edfs_context->host_and_port);
+
+    free(edfs_context);
 }
 
 void edfs_set_resync(struct edfs *edfs_context, int resync_val) {
@@ -5193,6 +5204,16 @@ void edfs_set_proxy(struct edfs *edfs_context, int proxy) {
     if (!edfs_context)
         return;
     edfs_context->proxy = (proxy != 0);
+}
+
+void edfs_set_force_sctp(struct edfs *edfs_context, int force_sctp) {
+    if (!edfs_context)
+        return;
+#ifdef WITH_SCTP
+    edfs_context->force_sctp = (force_sctp != 0);
+    if (edfs_context->edwork)
+        edwork_force_sctp(edfs_context->edwork, edfs_context->force_sctp);
+#endif
 }
 
 void edfs_set_shard(struct edfs *edfs_context, int shard_id, int shards) {

@@ -144,6 +144,7 @@ void edfs_set_initial_friend(struct edfs *edfs_context, const char *peer);
 void edfs_set_forward_chunks(struct edfs *edfs_context, int forward_chunks);
 void edfs_set_proxy(struct edfs *edfs_context, int proxy);
 void edfs_set_shard(struct edfs *edfs_context, int shard_id, int shards);
+void edfs_set_force_sctp(struct edfs *edfs_context, int force_sctp);
 int edfs_genesis_if_new(struct edfs *edfs_context);
 
 const char *edfs_signature_path(struct edfs *edfs_context);

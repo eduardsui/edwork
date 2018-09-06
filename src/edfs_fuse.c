@@ -429,6 +429,11 @@ int main(int argc, char *argv[]) {
                     i++;
                     edfs_set_shard(edfs_context, atoi(argv[i ++]), atoi(argv[i]));
                 } else
+#ifdef WITH_SCTP
+                if (!strcmp(arg, "sctp")) {
+                    edfs_set_force_sctp(edfs_context, 1);
+                } else
+#endif
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -444,6 +449,9 @@ int main(int argc, char *argv[]) {
                         "    -genesis           initialize blockchain if not created\n"
                         "    -proxy             enable proxy mode (forward WANT requets)\n"
                         "    -shard id shards   set shard id, as id number of shard, eg.: -shards 1 2\n"
+#ifdef WITH_SCTP
+                        "    -sctp              force SCTP-only mode\n"
+#endif
                         , argv[0]);
                     exit(0);
                 } else {
@@ -523,6 +531,9 @@ int main(int argc, char *argv[]) {
 #ifdef __APPLE__
         rmdir(mountpoint);
 #endif
+    } else {
+        edfs_destroy_context(edfs_context);
+        edfs_context = NULL;
     }
     fuse_opt_free_args(&args);
     if (fp)

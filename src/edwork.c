@@ -192,6 +192,7 @@ struct edwork_data {
         struct pollfd *ufds;
         int ufds_len;
     #endif
+    int force_sctp;
 #endif
 };
 
@@ -297,7 +298,14 @@ void edwork_done() {
     WSACleanup();
 #endif
 #if defined(WITH_SCTP) && defined(WITH_USRSCTP)
-    usrsctp_finish();
+    int max_loop = 1000;
+    while (usrsctp_finish() != 0) {
+        usleep(100000);
+        if (--max_loop <= 0) {
+            log_error("usrsctp_finish timed out");
+            break;
+        }
+    }
 #endif
 }
 
@@ -1097,6 +1105,9 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
             unsigned int send_to = 0;
             while (send_to < data->clients_count) {
                 if ((i) || (lan_broadcast)) {
+#ifdef WITH_SCTP
+                    if ((!data->force_sctp) || (data->clients[i].is_sctp)) {
+#endif
                     if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
                         log_debug("not broadcasting to same client");
                     } else
@@ -1110,6 +1121,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                             if ((!data->clients[i].is_sctp) || (errno != 11))
                                 data->clients[i].last_seen = threshold - 1;
                         } else {
+                            send_to ++;
 #ifdef WITH_SCTP
                             if ((sleep_us > 0) && (!data->clients[i].is_sctp))
                                 usleep(sleep_us);
@@ -1119,6 +1131,9 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
 #endif
                         }
                     }
+#ifdef WITH_SCTP
+                    }
+#endif
                 }
                 i ++;
                 if (i >= data->clients_count) {
@@ -1127,13 +1142,15 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                         break;
                     wrapped_to_first = 1;
                 }
-                send_to ++;
             }
         } else {
             int sent_to = 0;
             i = (unsigned int)rand;
             do {
                 if ((i) || (lan_broadcast)) {
+#ifdef WITH_SCTP
+                    if ((!data->force_sctp) || (data->clients[i].is_sctp)) {
+#endif
                     if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
                         sent_to ++;
                         log_debug("not broadcasting to same client");
@@ -1157,6 +1174,9 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                             data->clients[i].last_seen = threshold - 1;
                         }
                     }
+#ifdef WITH_SCTP
+                    }
+#endif
                 }
 
                 i ++;
@@ -1289,6 +1309,12 @@ int edworks_data_pending(struct edwork_data *data, int timeout_ms) {
     if (!data)
         return -1;
 
+#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+      if (data->force_sctp) {
+          usleep(timeout_ms * 1000);
+          return 0;
+      }
+#endif
 #ifdef _WIN32
     struct timeval timeout;
     timeout.tv_sec = 0;
@@ -1366,8 +1392,6 @@ int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
         data->clients_count --;
 
         for (i = index - 1; i < data->clients_count; i++) {
-            avl_remove(&data->tree, sin);
-
             struct sockaddr_in *addr_key = (struct sockaddr_in *)malloc(sizeof(struct sockaddr_in));
             if (addr_key) {
                 memcpy(addr_key, &data->clients[index].clientaddr, sizeof(struct sockaddr_in));
@@ -1595,12 +1619,54 @@ unsigned int edwork_magnitude(struct edwork_data *data) {
     return magnitude;
 }
 
+#ifdef WITH_SCTP
+void edwork_force_sctp(struct edwork_data *data, int force_sctp) {
+    if (!data)
+        return;
+    data->force_sctp = force_sctp;
+}
+#endif
+
+void edwork_close(struct edwork_data *data) {
+    if (!data)
+        return;
+
+    if (data->socket) {
+        thread_mutex_lock(&data->sock_lock);
+#ifdef _WIN32
+        closesocket(data->socket);
+#else
+        close(data->socket);
+#endif
+        data->socket = 0;
+        thread_mutex_unlock(&data->sock_lock);
+    }
+
+#ifdef WITH_SCTP
+    thread_mutex_lock(&data->sctp_lock);
+    if (data->sctp_socket) {
+        SCTP_shutdown(data->sctp_socket, SHUT_RDWR);
+        SCTP_close(data->sctp_socket);
+        data->sctp_socket = 0;
+    }
+    thread_mutex_unlock(&data->sctp_lock);
+    int i;
+    thread_mutex_lock(&data->clients_lock);
+    for (i = 0; i < data->clients_count; i++) {
+        if (data->clients[i].socket) {
+            SCTP_shutdown(data->clients[i].socket, SHUT_RDWR);
+            SCTP_close(data->clients[i].socket);
+            data->clients[i].socket = 0;
+        }
+        data->clients[i].is_sctp = 0;
+    }
+    thread_mutex_unlock(&data->clients_lock);
+#endif
+}
+
 void edwork_destroy(struct edwork_data *data) {
     if (!data)
         return;
-#ifdef WITH_SCTP
-    SCTP_shutdown(data->sctp_socket, SHUT_RDWR);
-#endif
     avl_destroy(&data->spent, avl_spent_key_data_destructor);
     avl_destroy(&data->tree, avl_key_data_destructor);
     thread_mutex_term(&data->sock_lock);
@@ -1609,22 +1675,8 @@ void edwork_destroy(struct edwork_data *data) {
     thread_mutex_term(&data->thread_lock);
 #endif
 
-#ifdef _WIN32
-    closesocket(data->socket);
-#else
-    close(data->socket);
-#endif
-
-#ifdef WITH_SCTP
-    SCTP_close(data->sctp_socket);
-    #ifdef WITH_USRSCTP
-        thread_mutex_term(&data->sctp_lock);
-    #else
-        int i;
-        for (i = 2; i < data->ufds_len; i++)
-            SCTP_close(data->ufds[i].fd);
-        free(data->ufds);
-    #endif
+#if defined(WITH_USRSCTP) && defined(WITH_SCTP)
+    thread_mutex_term(&data->sctp_lock);
 #endif
 
     free(data->log_dir);

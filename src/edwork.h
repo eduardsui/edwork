@@ -45,8 +45,10 @@ int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_wor
 int edwork_unspend(struct edwork_data *data, const unsigned char *proof_of_work, int proof_of_work_size);
 #ifdef WITH_SCTP
 int edwork_is_sctp(struct edwork_data *data, const void *clientaddr_ptr);
+void edwork_force_sctp(struct edwork_data *data, int force_sctp);
 #endif
 const char *edwork_addr_ipv4(const void *clientaddr_ptr);
+void edwork_close(struct edwork_data *data);
 void edwork_destroy(struct edwork_data *data);
 
 void edwork_done();
