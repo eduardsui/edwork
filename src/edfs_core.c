@@ -4428,18 +4428,24 @@ one_loop:
         if ((edfs_context->chain) && (edfs_context->chain->index >= topblock->index)) {
             int update_current_chain = 0;
             if (edfs_context->chain->index == topblock->index) {
-                if (!memcmp(topblock->hash, edfs_context->chain->hash, 32)) {
+                int hash_compare = memcmp(topblock->hash, edfs_context->chain->hash, 32);
+                if (!hash_compare) {
                     log_info("same block, chain is valid");
                     edfs_context->block_timestamp = time(NULL);
                     return;
                 }
                 // conflict, mediate
-                if (topblock->data_len > edfs_context->chain->data_len)
+                if (topblock->data_len > edfs_context->chain->data_len) {
+                    log_trace("block is larger");
                     update_current_chain = 1;
-                else
+                } else
                 if (topblock->data_len == edfs_context->chain->data_len) {
-                    if (memcmp(topblock->hash, edfs_context->chain->hash, 32) == 1)
+                    if (hash_compare > 0) {
                         update_current_chain = 1;
+                        log_trace("block hash is larger");
+                    } else {
+                        log_trace("block hash is smaller");
+                    }
                 }
             }
             if (update_current_chain) {
@@ -4865,10 +4871,11 @@ int edwork_thread(void *userdata) {
     flush_queue(edfs_context);
     edwork_save_nodes(edfs_context);
 
+    edwork_done();
+
     edfs_context->edwork = NULL;
     edwork_destroy(edwork);
 
-    edwork_done();
     return 0;
 }
 
