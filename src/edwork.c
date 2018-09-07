@@ -501,14 +501,14 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect_hostname(struct edwork_data *data, c
     return edwork_sctp_connect(data, (struct sockaddr *)&sin, sizeof(sin));
 }
 
-ssize_t safe_sctp_sendto(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
+ssize_t safe_sctp_sendto(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen, int ttl) {
     if (!data->sctp_socket)
         return -1;
 
 #ifdef WITH_USRSCTP
     struct sctp_prinfo info;
     info.pr_policy = SCTP_PR_SCTP_TTL;
-    info.pr_value = EDWORK_SCTP_TTL;
+    info.pr_value = ttl;
 #endif
     thread_mutex_lock(&data->sock_lock);
     ssize_t err = SCTP_send(socket, (const char *)buf, len, flags, dest_addr, addrlen);
@@ -562,10 +562,10 @@ ssize_t safe_sendto(struct edwork_data *data, struct client_data *peer_data, con
             }
         }
         if ((socket) && (is_sctp))
-            return safe_sctp_sendto(data, socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen);
+            return safe_sctp_sendto(data, socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen, EDWORK_SCTP_TTL);
         else
         if (((peer_data) && (peer_data->is_sctp)) || (data->sctp_last_addr == dest_addr) || (SCTP_getassocid(data->sctp_socket, dest_addr) > 0))
-            return safe_sctp_sendto(data, data->sctp_socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen);
+            return safe_sctp_sendto(data, data->sctp_socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen, EDWORK_SCTP_TTL);
     }
 #endif
     thread_mutex_lock(&data->sock_lock);
@@ -964,14 +964,14 @@ int edwork_set_info(void *clientinfo, uint64_t last_ino, uint64_t last_chunk, ui
 
 
 #ifdef WITH_SCTP
-int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen) {
+int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int ttl) {
     if (!socket)
         return -1;
     unsigned char *packet = make_packet(data, type, buf, &len, 0, 0, 0);
     int sent = -1;
     if ((packet) && (len > 0)) {
         if (data)
-            sent = safe_sctp_sendto(data, socket, (const char *)packet, len, SCTP_UNORDERED, (struct sockaddr *)clientaddr, clientaddrlen);
+            sent = safe_sctp_sendto(data, socket, (const char *)packet, len, SCTP_UNORDERED, (struct sockaddr *)clientaddr, clientaddrlen, ttl);
         if (sent < 0)
             log_error("error in sendto (sctp, peer), errno: %i", errno);
     }
@@ -995,8 +995,8 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             peer->last_seen = time(NULL);
         // opt in or out sctp
 #ifdef WITH_SCTP
-        if (is_sctp)
-            peer->is_sctp = is_sctp;
+        if ((is_sctp) && (data_index != 1))
+            peer->is_sctp = 1;
 #endif
         thread_mutex_unlock(&data->clients_lock);
         if (return_old_peer)
@@ -1035,10 +1035,13 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
 
         data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len);
         if (data->clients[data->clients_count].socket)
-            edwork_send_to_sctp_socket(data, data->clients[data->clients_count].socket, "helo", NULL, 0, &addr2, client_len);
+            edwork_send_to_sctp_socket(data, data->clients[data->clients_count].socket, "helo", NULL, 0, &addr2, client_len, 0);
     }
-        
-    data->clients[data->clients_count].is_sctp = is_sctp;
+
+    if ((data->force_sctp) && (data->clients_count))
+        data->clients[data->clients_count].is_sctp = 1;
+    else
+        data->clients[data->clients_count].is_sctp = is_sctp;
 #endif
 
     data->clients_count ++;
@@ -1406,7 +1409,7 @@ int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsi
                 socket = peer_data->socket;
             thread_mutex_unlock(&data->clients_lock);
         }
-        return edwork_send_to_sctp_socket(data, socket ? socket : data->sctp_socket, type, buf, len, clientaddr, clientaddrlen);
+        return edwork_send_to_sctp_socket(data, socket ? socket : data->sctp_socket, type, buf, len, clientaddr, clientaddrlen, EDWORK_SCTP_TTL);
     }
 #endif
     unsigned char *packet = make_packet(data, type, buf, &len, 0, 0, 0);
