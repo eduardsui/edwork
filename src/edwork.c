@@ -1608,7 +1608,10 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     for (i = offset; i < data->clients_count; i++) {
         if (*buf_size < 7)
             break;
-
+#if defined(WITH_SCTP) && defined(SCTP_UDP_ENCAPSULATION)
+        if ((!data->force_sctp) && (data->clients[i].is_sctp))
+            continue;
+#endif
         if ((!data->clients[i].is_listen_socket) && (data->clients[i].last_seen >= threshold)) {
             *buf ++ = 6;
             memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
