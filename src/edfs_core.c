@@ -1766,7 +1766,7 @@ int request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int 
             thread_mutex_unlock(&edfs_context->ino_cache_lock);
     }
 
-    EDFS_THREAD_LOCK(edfs_context);
+    // EDFS_THREAD_LOCK(edfs_context);
     if (encrypted)
         notify_io(edfs_context, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     else
@@ -1775,7 +1775,7 @@ int request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int 
         notify_io(edfs_context, "want", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     else
         notify_io(edfs_context, "wan3", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
-    EDFS_THREAD_UNLOCK(edfs_context);
+    // EDFS_THREAD_UNLOCK(edfs_context);
 
     return is_sctp;
 }
@@ -2156,9 +2156,9 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                 }
                 for (i = 0; i < max_chunks; i++) {
                     *(uint64_t *)(additional_data + 8)= htonll(i);
-                    EDFS_THREAD_LOCK(edfs_context);
+                    // EDFS_THREAD_LOCK(edfs_context);
                     notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                    EDFS_THREAD_UNLOCK(edfs_context);
+                    // EDFS_THREAD_UNLOCK(edfs_context);
                 }
                 if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                     log_error("hash read timed out");
@@ -3154,9 +3154,9 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             int i;
             for (i = 0; i < max_chunks; i ++) {
                 *(uint64_t *)(additional_data + 8)= htonll(i);
-                EDFS_THREAD_LOCK(edfs_context);
+                // EDFS_THREAD_LOCK(edfs_context);
                 notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, inode, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                EDFS_THREAD_UNLOCK(edfs_context);
+                // EDFS_THREAD_UNLOCK(edfs_context);
             }
         }
         void *avl_data;
@@ -4255,9 +4255,9 @@ one_loop:
                     log_info("DATI sent");
             } else
             if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
-                EDFS_THREAD_LOCK(edfs_context);
+                // EDFS_THREAD_LOCK(edfs_context);
                 notify_io(edfs_context, "hash", payload, 16, edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                EDFS_THREAD_UNLOCK(edfs_context);
+                // EDFS_THREAD_UNLOCK(edfs_context);
                 edfs_context->proxy_timestamp = microseconds();
             }
         }
@@ -4293,9 +4293,9 @@ one_loop:
                 log_info("DESC sent");
         } else
         if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
-            EDFS_THREAD_LOCK(edfs_context);
+            // EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "wand", payload, 8, NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            EDFS_THREAD_UNLOCK(edfs_context);
+            // EDFS_THREAD_UNLOCK(edfs_context);
             edfs_context->proxy_timestamp = microseconds();
         }
         return;
@@ -4408,9 +4408,9 @@ one_loop:
                         requested_block = htonll(previous_block->index);
                     else
                         requested_block = htonll(1);
-                    EDFS_THREAD_LOCK(edfs_context);
+                    // EDFS_THREAD_LOCK(edfs_context);
                     notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                    EDFS_THREAD_UNLOCK(edfs_context);
+                    // EDFS_THREAD_UNLOCK(edfs_context);
                     edfs_context->block_timestamp = time(NULL);
                 }
                 block_free(newblock);
@@ -4530,9 +4530,9 @@ one_loop:
                             requested_block = htonll(previous_block->index);
                         else
                             requested_block = htonll(1);
-                        EDFS_THREAD_LOCK(edfs_context);
+                        // EDFS_THREAD_LOCK(edfs_context);
                         notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                        EDFS_THREAD_UNLOCK(edfs_context);
+                        // EDFS_THREAD_UNLOCK(edfs_context);
                     }
                     block_free(topblock);
                 }
@@ -4555,17 +4555,17 @@ one_loop:
         if ((!edfs_context->chain) && (topblock->index)) {
             // request all chain
             uint64_t requested_block = htonll(1);
-            EDFS_THREAD_LOCK(edfs_context);
+            // EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            EDFS_THREAD_UNLOCK(edfs_context);
+            // EDFS_THREAD_UNLOCK(edfs_context);
         }
         if ((edfs_context->chain) && (topblock->index != edfs_context->chain->index + 1)) {
             log_warn("invalid block index");
 
             uint64_t requested_block = htonll(edfs_context->chain->index + 2);
-            EDFS_THREAD_LOCK(edfs_context);
+            // EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            EDFS_THREAD_UNLOCK(edfs_context);
+            // EDFS_THREAD_UNLOCK(edfs_context);
             block_free(topblock);
             return;
         }
@@ -4860,9 +4860,9 @@ int edwork_thread(void *userdata) {
     while (!edfs_context->network_done) {
         if ((edfs_context->resync) && (time(NULL) - startup >= EDWORK_INIT_INTERVAL)) {
             uint64_t ack = htonll(1);
-            EDFS_THREAD_LOCK(edfs_context);
+            // EDFS_THREAD_LOCK(edfs_context);
             notify_io(edfs_context, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            EDFS_THREAD_UNLOCK(edfs_context);
+            // EDFS_THREAD_UNLOCK(edfs_context);
             edfs_context->resync = 0;
         }
         if ((edfs_context->force_rebroadcast) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
