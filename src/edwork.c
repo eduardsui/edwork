@@ -403,9 +403,7 @@ static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, v
                 // it is important for data to be null-terminated!!!
                 memcpy(data_copy, data, datalen);
                 data_copy[datalen] = 0;
-                thread_mutex_lock(&edwork->sctp_lock);
                 edwork_dispatch_data(edwork, edwork->callback, (unsigned char *)data_copy, datalen, addrs, sizeof(struct sockaddr_in), edwork->userdata, 1, sock == edwork->sctp_socket);
-                thread_mutex_unlock(&edwork->sctp_lock);
                 free(data_copy);
             }
             SCTP_freepaddrs(addrs);
@@ -1143,7 +1141,20 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
 #else
                             log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #endif
-                            if ((!data->clients[i].is_sctp) || (errno != 11))
+#ifdef WITH_SCTP
+                            if (data->clients[i].is_sctp) {
+                                if ((errno != 11) && (errno != 35)) {
+                                    data->clients[i].is_sctp = 0;
+                                    if (data->clients[i].socket) {
+                                        SCTP_close(data->clients[i].socket);
+                                        data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen);
+                                        if (data->clients[i].socket)
+                                            log_trace("reconnecting SCTP socket");
+                                    }
+                                }
+                            } else
+                            if (errno != 11)
+#endif
                                 data->clients[i].last_seen = threshold - 1;
                         } else {
                             send_to ++;
@@ -1196,7 +1207,21 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
 #else
                             log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #endif
-                            data->clients[i].last_seen = threshold - 1;
+#ifdef WITH_SCTP
+                            if (data->clients[i].is_sctp) {
+                                if ((errno != 11) && (errno != 35)) {
+                                    data->clients[i].is_sctp = 0;
+                                    if (data->clients[i].socket) {
+                                        SCTP_close(data->clients[i].socket);
+                                        data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen);
+                                        if (data->clients[i].socket)
+                                            log_trace("reconnecting SCTP socket");
+                                    }
+                                }
+                            } else
+                            if (errno != 11)
+#endif
+                                data->clients[i].last_seen = threshold - 1;
                         }
                     }
 #ifdef WITH_SCTP
@@ -1505,7 +1530,13 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
     if (callback) {
         // ensure json is 0 terminated
         buffer[n] = 0;
+#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+        thread_mutex_lock(&data->sctp_lock);
+#endif
         callback(data, sequence, timestamp, type, payload, size, clientaddr, clientaddrlen, who_am_i, blockhash, userdata, is_sctp, is_listen_socket);
+#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
+        thread_mutex_unlock(&data->sctp_lock);        
+#endif
     }
 
     return 1;

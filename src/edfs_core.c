@@ -1715,7 +1715,11 @@ int request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int 
 
     struct sockaddr_in *use_clientaddr = NULL;
     int clientaddr_size = 0;
+#ifdef WITH_SCTP
     int is_sctp = edfs_context->force_sctp;
+#else
+    int is_sctp = 0;
+#endif
     struct sockaddr_in addrbuffer;
     if (use_cached_addr) {
         if (edfs_context->mutex_initialized)
@@ -3030,7 +3034,7 @@ int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint
         uint64_t requested_block = htonll(edfs_context->chain->index + 2);
         notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
-        if (time(NULL) - edfs_context->block_timestamp >= 10)
+        if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 10))
             return 1;
     }
     return 0;
@@ -4783,8 +4787,7 @@ int edwork_thread(void *userdata) {
         edfs_context->top_broadcast_timestamp = 0;
     }
 
-    if (edfs_context->resync)
-        edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0);
+    edfs_schedule(edfs_context, edfs_blockchain_request, edfs_context->resync ? 100000 : 1000000, 0, 0, 0);
 
     char *host_and_port = edfs_context->host_and_port;
     if ((host_and_port) && (host_and_port[0])) {
