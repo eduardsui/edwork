@@ -209,6 +209,7 @@ struct edfs_event {
     uint64_t userdata_b;
     uint64_t when;
     uint64_t timestamp;
+    uint64_t timeout;
 };
 
 struct edfs {
@@ -1007,25 +1008,45 @@ int edfs_write_file(struct edfs *edfs_context, const char *base_path, const char
     return written;
 }
 
-int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t userdata_a, uint64_t userdata_b, int run_now) {
+int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t expires, uint64_t userdata_a, uint64_t userdata_b, int run_now, int update) {
     if ((!callback) || (!edfs_context))
         return 0;
 
-    edfs_context->events = (struct edfs_event *)realloc(edfs_context->events, sizeof(struct edfs_event) * (edfs_context->events_len + 1));
-    if (!edfs_context->events) {
-        edfs_context->events_len = 0;
-        return 0;
+    int i;
+    int index = edfs_context->events_len;
+    int found = 0;
+    if (update) {
+        for (i = 0; i < edfs_context->events_len; i ++) {
+            if ((edfs_context->events[i].callback == callback) && (edfs_context->events[i].userdata_a == userdata_a) && (edfs_context->events[i].userdata_b == userdata_b)) {
+                index = i;
+                found = 1;
+                break;
+            }
+        }
     }
-    edfs_context->events[edfs_context->events_len].callback = callback;
-    edfs_context->events[edfs_context->events_len].userdata_a = userdata_a;
-    edfs_context->events[edfs_context->events_len].userdata_b = userdata_b;
-    edfs_context->events[edfs_context->events_len].when = when;
+
+    if (!found) {
+        edfs_context->events_len++;
+        edfs_context->events = (struct edfs_event *)realloc(edfs_context->events, sizeof(struct edfs_event) * (edfs_context->events_len + 1));
+        if (!edfs_context->events) {
+            edfs_context->events_len = 0;
+            return 0;
+        }
+    }
+    edfs_context->events[index].callback = callback;
+    edfs_context->events[index].userdata_a = userdata_a;
+    edfs_context->events[index].userdata_b = userdata_b;
+    edfs_context->events[index].when = when;
     if ((run_now) && (when))
-        edfs_context->events[edfs_context->events_len].timestamp = microseconds() - when;
+        edfs_context->events[index].timestamp = microseconds() - when;
     else
-        edfs_context->events[edfs_context->events_len].timestamp = microseconds();
+        edfs_context->events[index].timestamp = microseconds();
     
-    edfs_context->events_len++;
+    if (expires)
+        edfs_context->events[index].timeout = microseconds() + expires;
+    else
+        edfs_context->events[index].timeout = 0;
+
     return edfs_context->events_len;
 }
 
@@ -1062,12 +1083,19 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
     int deleted = 0;
     uint64_t now = microseconds();
     while (i < edfs_context->events_len) {
-        if ((edfs_context->events[i].callback) && ((!edfs_context->events[i].when) || (edfs_context->events[i].timestamp + edfs_context->events[i].when <= now))) {
-            if (edfs_context->events[i].callback(edfs_context, edfs_context->events[i].userdata_a, edfs_context->events[i].userdata_b)) {
+        if (edfs_context->events[i].callback) {
+            if ((!edfs_context->events[i].when) || (edfs_context->events[i].timestamp + edfs_context->events[i].when <= now)) {
+                if (edfs_context->events[i].callback(edfs_context, edfs_context->events[i].userdata_a, edfs_context->events[i].userdata_b)) {
+                    deleted ++;
+                    edfs_context->events[i].callback = NULL;
+                }
+                edfs_context->events[i].timestamp = now;
+            }
+            // callback may be set to null in previous step
+            if ((edfs_context->events[i].timeout) && (edfs_context->events[i].timeout > now) && (edfs_context->events[i].callback)) {
                 deleted ++;
                 edfs_context->events[i].callback = NULL;
             }
-            edfs_context->events[i].timestamp = now;
         }
         i++;
     }
@@ -3036,6 +3064,9 @@ int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint
 
         if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 10))
             return 1;
+    } else {
+        uint64_t requested_block = htonll(1);
+        notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     }
     return 0;
 }
@@ -3107,7 +3138,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             EDFS_THREAD_UNLOCK(edfs_context);
         }
         if (try_update_hash) {
-            edfs_schedule(edfs_context, edfs_shard_data_request, 250000, inode, chunk, 1);
+            edfs_schedule(edfs_context, edfs_shard_data_request, 250000, 3600000000UL, inode, chunk, 1, 1);
         } else {
             // use cached addresses for 90% of requests, 10% are broadcasts
             request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
@@ -4787,7 +4818,7 @@ int edwork_thread(void *userdata) {
         edfs_context->top_broadcast_timestamp = 0;
     }
 
-    edfs_schedule(edfs_context, edfs_blockchain_request, edfs_context->resync ? 100000 : 1000000, 0, 0, 0);
+    edfs_schedule(edfs_context, edfs_blockchain_request, edfs_context->resync ? 100000 : 1000000, 0, 0, 0, 0, 0);
 
     char *host_and_port = edfs_context->host_and_port;
     if ((host_and_port) && (host_and_port[0])) {
@@ -4823,6 +4854,9 @@ int edwork_thread(void *userdata) {
     time_t last_chain_request = time(NULL);
     int broadcast_offset = 0;
     int initial_chain_request = 1;
+    if (!edfs_context->resync)
+        edfs_context->block_timestamp = startup + 20;
+
     while (!edfs_context->network_done) {
         if ((edfs_context->resync) && (time(NULL) - startup >= EDWORK_INIT_INTERVAL)) {
             uint64_t ack = htonll(1);
@@ -4830,15 +4864,6 @@ int edwork_thread(void *userdata) {
             notify_io(edfs_context, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, edwork, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             EDFS_THREAD_UNLOCK(edfs_context);
             edfs_context->resync = 0;
-        }
-        if (((!edfs_context->chain) || (initial_chain_request)) && (time(NULL) - last_chain_request >= EDWORK_INIT_INTERVAL)) {
-            uint64_t top_block = 0;
-            top_block = htonll(0);
-            EDFS_THREAD_LOCK(edfs_context);
-            notify_io(edfs_context, "hblk", (const unsigned char *)&top_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            EDFS_THREAD_UNLOCK(edfs_context);
-            last_chain_request = time(NULL);
-            initial_chain_request = 0;
         }
         if ((edfs_context->force_rebroadcast) && (time(NULL) - startup > EDWORK_INIT_INTERVAL)) {
             edwork_resync(edfs_context, NULL, 0, 0);
