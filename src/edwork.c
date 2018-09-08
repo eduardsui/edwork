@@ -1131,6 +1131,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
             lan_broadcast = 0;
         if ((data->clients_count < max_nodes) || (max_nodes <= 0)) {
             i = rand % data->clients_count;
+            unsigned int start_i = i;
             unsigned int send_to = 0;
             while (send_to < data->clients_count) {
                 if ((i) || (lan_broadcast)) {
@@ -1184,10 +1185,13 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                         break;
                     wrapped_to_first = 1;
                 }
+                if (i == start_i)
+                    break;
             }
         } else {
             int sent_to = 0;
             i = (unsigned int)rand;
+            unsigned int start_i = i;
             do {
                 if ((i) || (lan_broadcast)) {
 #ifdef WITH_SCTP
@@ -1243,6 +1247,8 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                         break;
                     wrapped_to_first = 1;
                 }
+                if (i == start_i)
+                    break;
             } while (sent_to < max_nodes);
         }
     }
