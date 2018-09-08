@@ -1,6 +1,6 @@
 CC = gcc
 RM = rm
-USRSCTP_CFLAGS = -DHAVE_NETINET_IP_ICMP_H -DHAVE_SA_LEN -DHAVE_SCONN_LEN -DHAVE_SIN6_LEN -DHAVE_SIN_LEN -DHAVE_STDATOMIC_H -DHAVE_SYS_QUEUE_H -DINET -DINET6 -DSCTP_PROCESS_LEVEL_LOCKS -DSCTP_SIMPLE_ALLOCATOR -D__APPLE_USE_RFC_2292 -D__Userspace__ -D__Userspace_os_Darwin -I/Users/eduard/Downloads/usrsctp-master/usrsctplib     -std=c99 -pedantic -g -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.13.sdk   -U__APPLE__
+USRSCTP_CFLAGS = -DHAVE_NETINET_IP_ICMP_H -DHAVE_SA_LEN -DHAVE_SCONN_LEN -DHAVE_SIN6_LEN -DHAVE_SIN_LEN -DHAVE_STDATOMIC_H -DHAVE_SYS_QUEUE_H -DINET -DINET6 -DSCTP_PROCESS_LEVEL_LOCKS -DSCTP_SIMPLE_ALLOCATOR -D__APPLE_USE_RFC_2292 -D__Userspace__ -D__Userspace_os_Darwin -Isrc/usrsctp -U__APPLE__ -Wno-deprecated-declarations
 CFLAGS = -O3 -I/usr/local/include/osxfuse -D_FILE_OFFSET_BITS=64 -DEDFS_DEFAULT_HOST=\"discovery.gyrogears.com:4848\" -DEDFS_MULTITHREADED -DWITH_SCTP -DWITH_USRSCTP $(USRSCTP_CFLAGS)
 LIBS = -L/usr/local/lib -losxfuse
 BUILDFLAGS= -o edfs_mount
