@@ -1078,6 +1078,9 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port, int i
     sin.sin_addr.s_addr = ((struct in_addr *)(hp->h_addr))->s_addr;
     sin.sin_family      = AF_INET;
     sin.sin_port        = htons((int)port);
+#ifdef HAVE_SIN_LEN
+    sin.sin_len         = sizeof(sin);
+#endif
 
     if (add_node(data, &sin, sizeof(sin), 0, 0, 0, is_listen_socket))
         log_info("added node %s:%i", node, port);
