@@ -2135,6 +2135,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             uint64_t max_chunks;
             uint64_t i;
             uint64_t start = microseconds();
+            void *hash_error = (struct edfs_ino_cache *)avl_search(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
             do {
                 if (blockchain_error) {
                     blockchain_error = 0;
@@ -2160,8 +2161,15 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                     notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                     // EDFS_THREAD_UNLOCK(edfs_context);
                 }
+
+
                 if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                     log_error("hash read timed out");
+                    avl_insert(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino, (void *)1);
+                    break;
+                }
+                if (hash_error) {
+                    log_warn("file hash still mismatched, using last known version (not waiting for timeout)");
                     break;
                 }
 #ifdef _WIN32
@@ -2175,6 +2183,8 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             if (valid_hash) {
                 check_hash = 1;
                 log_trace("hash is valid");
+                if (hash_error)
+                    avl_remove(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
             } else {
                 log_warn("invalid file hash");
                 // if no valid hash available, allow read-only access
@@ -3059,6 +3069,11 @@ int edfs_create_key(struct edfs *edfs_context) {
 
 int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b) {
     if (edfs_context->chain) {
+        if ((userdata_b) && (microseconds() - userdata_b <= 1000000)) {
+            uint64_t requested_block = 0;
+            notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        }
+
         uint64_t requested_block = htonll(edfs_context->chain->index + 2 - userdata_a);
         notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
@@ -3729,21 +3744,19 @@ int edfs_check_blockhash(struct edfs *edfs_context, const unsigned char *blockha
         return 0;
 
     struct block *block2 = edfs_context->chain;
-    int verified = 0;
     do {
-        if (memcmp(block2->hash, blockhash, 32)) {
-            if (!edfs_context->hblk_scheduled) {
-                edfs_context->block_timestamp = time(NULL);
-                edfs_context->hblk_scheduled = 1;
-                edfs_schedule(edfs_context, edfs_blockchain_request, 250000, 0, 1, 0, 0, 0);
-            }
-            return 0;
-        } else
-            verified = 1;
+        if (!memcmp(block2->hash, blockhash, 32))
+            return 1;
 
         block2 = (struct block *)block2->previous_block;
     } while ((block2) && (maxlevel-- > 0));
-    return verified;
+    if (!edfs_context->hblk_scheduled) {
+        edfs_context->block_timestamp = time(NULL);
+        edfs_context->hblk_scheduled = 1;
+        edfs_schedule(edfs_context, edfs_blockchain_request, 500000, 0, 1, microseconds(), 0, 0);
+    }
+
+    return 0;
 }
 
 void edfs_new_chain_request_descriptors(struct edfs *edfs_context, int level) {
@@ -3884,6 +3897,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
 
         if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
             return;
         }
 
@@ -4036,6 +4050,7 @@ one_loop:
         log_info("DATA received (%s)", edwork_addr_ipv4(clientaddr));
         if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
             return;
         }
         int err;
@@ -4074,6 +4089,7 @@ one_loop:
         log_info("DAT2 received (%s)", edwork_addr_ipv4(clientaddr));
         if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
             return;
         }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
@@ -4086,6 +4102,7 @@ one_loop:
         log_info("DAT3 received (%s)", edwork_addr_ipv4(clientaddr));
         if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
             return;
         }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
@@ -4103,6 +4120,7 @@ one_loop:
         }
         if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
             return;
         }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
@@ -4246,6 +4264,7 @@ one_loop:
             if (size > 0) {
                 if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
                     log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+                    edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
                     return;
                 }
 
@@ -4323,6 +4342,7 @@ one_loop:
         }
         if (!edfs_check_blockhash(edfs_context, blockhash, 1)) {
             log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
+            edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
             return;
         }
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);

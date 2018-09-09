@@ -81,7 +81,7 @@
 #define EDWORK_REBROADCAST          200
 #define EDWORK_PORT                 4848
 #define EDWORK_PACKET_SIZE          BLOCK_SIZE + 0x200
-#define EDWORK_MAX_RETRY_TIMEOUT    5000
+#define EDWORK_MAX_RETRY_TIMEOUT    3000
 #define EDWORK_MAX_DIR_RETRY_TIMEOUT 2000
 
 // new block every 2 minutes

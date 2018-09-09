@@ -1129,127 +1129,63 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
         // exclude data and large packages from broadcast
         if ((len > EDWOR_MAX_LAN_BROADCAST_SIZE) || ((type[0] == 'd') && (type[1] == 'a') && (type[2] == 't')))
             lan_broadcast = 0;
-        if ((data->clients_count < max_nodes) || (max_nodes <= 0)) {
-            i = rand % data->clients_count;
-            unsigned int start_i = i;
-            unsigned int send_to = 0;
-            while (send_to < data->clients_count) {
-                if ((i) || (lan_broadcast)) {
+        i = rand % data->clients_count;
+        unsigned int start_i = i;
+        unsigned int send_to = 0;
+        while (send_to < max_nodes) {
+            if ((i) || (lan_broadcast)) {
 #ifdef WITH_SCTP
-                    if ((!data->force_sctp) || (data->clients[i].is_sctp)) {
+                if ((!data->force_sctp) || (data->clients[i].is_sctp)) {
 #endif
-                    if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
-                        log_debug("not broadcasting to same client");
-                    } else
-                    if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
-                        if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) <= 0) {
+                if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
+                    log_debug("not broadcasting to same client");
+                } else
+                if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
+                    if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) <= 0) {
 #ifdef _WIN32
-                            log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+                        log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #else
-                            log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
+                        log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #endif
 #ifdef WITH_SCTP
-                            if (data->clients[i].is_sctp) {
-                                if ((errno != 11) && (errno != 35)) {
-                                    data->clients[i].is_sctp = 0;
-                                    if (data->clients[i].socket) {
-                                        SCTP_close(data->clients[i].socket);
-                                        data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen);
-                                        if (data->clients[i].socket)
-                                            log_trace("reconnecting SCTP socket");
-                                    }
+                        if (data->clients[i].is_sctp) {
+                            if ((errno != 11) && (errno != 35)) {
+                                data->clients[i].is_sctp = 0;
+                                if (data->clients[i].socket) {
+                                    SCTP_close(data->clients[i].socket);
+                                    data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen);
+                                    if (data->clients[i].socket)
+                                        log_trace("reconnecting SCTP socket");
                                 }
-                            } else
-                            if (errno != 11)
+                            }
+                        } else
+                        if (errno != 11)
 #endif
-                                data->clients[i].last_seen = threshold - 1;
-                        } else {
-                            send_to ++;
+                            data->clients[i].last_seen = threshold - 1;
+                    } else {
+                        send_to ++;
 #ifdef WITH_SCTP
-                            if ((sleep_us > 0) && (!data->clients[i].is_sctp))
-                                usleep(sleep_us);
+                        if ((sleep_us > 0) && (!data->clients[i].is_sctp))
+                            usleep(sleep_us);
 #else
-                            if (sleep_us > 0)
-                                usleep(sleep_us);
+                        if (sleep_us > 0)
+                            usleep(sleep_us);
 #endif
-                        }
                     }
+                }
 #ifdef WITH_SCTP
-                    }
+                }
 #endif
-                }
-                i ++;
-                if (i >= data->clients_count) {
-                    i = 0;
-                    if (wrapped_to_first)
-                        break;
-                    wrapped_to_first = 1;
-                }
-                if (i == start_i)
-                    break;
             }
-        } else {
-            int sent_to = 0;
-            i = (unsigned int)rand;
-            unsigned int start_i = i;
-            do {
-                if ((i) || (lan_broadcast)) {
-#ifdef WITH_SCTP
-                    if ((!data->force_sctp) || (data->clients[i].is_sctp)) {
-#endif
-                    if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
-                        sent_to ++;
-                        log_debug("not broadcasting to same client");
-                    } else
-                    if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
-                        if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen) > 0) {
-                            sent_to ++;
-#ifdef WITH_SCTP
-                            if ((sleep_us > 0) && (!data->clients[i].is_sctp))
-                                usleep(sleep_us);
-#else
-                            if (sleep_us > 0)
-                                usleep(sleep_us);
-#endif
-                        } else {
-#ifdef _WIN32
-                            log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
-#else
-                            log_trace("error %i in sendto (client #%i: %s)", (int)errno, i, edwork_addr_ipv4(&data->clients[i].clientaddr));
-#endif
-#ifdef WITH_SCTP
-                            if (data->clients[i].is_sctp) {
-                                if ((errno != 11) && (errno != 35)) {
-                                    data->clients[i].is_sctp = 0;
-                                    if (data->clients[i].socket) {
-                                        SCTP_close(data->clients[i].socket);
-                                        data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen);
-                                        if (data->clients[i].socket)
-                                            log_trace("reconnecting SCTP socket");
-                                    }
-                                }
-                            } else
-                            if (errno != 11)
-#endif
-                                data->clients[i].last_seen = threshold - 1;
-                        }
-                    }
-#ifdef WITH_SCTP
-                    }
-#endif
-                }
-
-                i ++;
-                if (i >= data->clients_count) {
-                    i = 0;
-                    // already sent to first one
-                    if (wrapped_to_first)
-                        break;
-                    wrapped_to_first = 1;
-                }
-                if (i == start_i)
+            i ++;
+            if (i >= data->clients_count) {
+                i = 0;
+                if (wrapped_to_first)
                     break;
-            } while (sent_to < max_nodes);
+                wrapped_to_first = 1;
+            }
+            if (i == start_i)
+                break;
         }
     }
     thread_mutex_unlock(&data->clients_lock);
