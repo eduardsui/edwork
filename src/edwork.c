@@ -1614,7 +1614,8 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     unsigned int i;
     // active in last 72 hours
     thread_mutex_lock(&data->clients_lock);
-    for (i = offset; i < data->clients_count; i++) {
+    int found = 0;
+    for (i = 0; i < data->clients_count; i++) {
         if (*buf_size < 7)
             break;
 #if defined(WITH_SCTP) && defined(SCTP_UDP_ENCAPSULATION)
@@ -1622,13 +1623,16 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
             continue;
 #endif
         if ((!data->clients[i].is_listen_socket) && (data->clients[i].last_seen >= threshold)) {
-            *buf ++ = 6;
-            memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
-            buf += 4;
-            memcpy(buf, &data->clients[i].clientaddr.sin_port, 2);
-            buf += 2;
-            *buf_size -= 7;
-            records ++;
+            if (found >= offset) {
+                records ++;
+                *buf ++ = 6;
+                memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
+                buf += 4;
+                memcpy(buf, &data->clients[i].clientaddr.sin_port, 2);
+                buf += 2;
+                *buf_size -= 7;
+            }
+            found ++;
         }
     }
     thread_mutex_unlock(&data->clients_lock);

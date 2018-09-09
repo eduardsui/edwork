@@ -219,7 +219,6 @@ struct edfs {
     int resync;
     int force_rebroadcast;
     char *host_and_port;
-    unsigned int list_offset;
     time_t list_timestamp;
     uint64_t start_timestamp;
 
@@ -285,6 +284,7 @@ struct edfs {
     int force_sctp;
 #endif
     int block_timestamp;
+    int hblk_scheduled;
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -3062,8 +3062,10 @@ int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint
         uint64_t requested_block = htonll(edfs_context->chain->index + 2);
         notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
-        if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 10))
+        if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 10)) {
+            edfs_context->hblk_scheduled = 0;
             return 1;
+        }
     } else {
         uint64_t requested_block = htonll(1);
         notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
@@ -3727,13 +3729,21 @@ int edfs_check_blockhash(struct edfs *edfs_context, const unsigned char *blockha
         return 0;
 
     struct block *block2 = edfs_context->chain;
+    int verified = 0;
     do {
-        if (!memcmp(block2->hash, blockhash, 32))
-            return 1;
+        if (memcmp(block2->hash, blockhash, 32)) {
+            if (!edfs_context->hblk_scheduled) {
+                edfs_context->block_timestamp = time(NULL);
+                edfs_context->hblk_scheduled = 1;
+                edfs_schedule(edfs_context, edfs_blockchain_request, 250000, 0, 0, 0, 0, 0);
+            }
+            return 0;
+        } else
+            verified = 1;
 
         block2 = (struct block *)block2->previous_block;
     } while ((block2) && (maxlevel-- > 0));
-    return 0;
+    return verified;
 }
 
 void edfs_new_chain_request_descriptors(struct edfs *edfs_context, int level) {
@@ -3807,11 +3817,14 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("dropping non-requested ADDR");
             return;
         }
-        int records = edwork_add_node_list(edwork, payload, payload_size);
+        if (payload_size < 8) {
+            log_warn("ADDR packet too small");
+            return;
+        }
+        int records = edwork_add_node_list(edwork, payload + 8, payload_size - 8);
         if (records > 0) {
-            edfs_context->list_offset += records;
-            uint32_t offset = htonl(edfs_context->list_offset);
-            notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            uint32_t offset = htonl(ntohl(*(uint32_t *)payload) + records);
+            notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, clientaddr, clientaddrlen, NULL, NULL);
             edfs_context->list_timestamp = time(NULL);
         }
         return;
@@ -3979,8 +3992,10 @@ one_loop:
 
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
 
-        int size = BLOCK_SIZE;
-        int records = edwork_get_node_list(edwork, buffer, &size, (unsigned int)offset, time(NULL) - 3600);
+        // add offset
+        int size = BLOCK_SIZE - 4;
+        memcpy(buffer, payload, 4);
+        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 3600);
         if (records > 0) {
             if (edwork_send_to_peer(edwork, "addr", buffer, size, clientaddr, clientaddrlen, is_sctp) <= 0) {
                 log_warn("error sending address list");
@@ -4660,7 +4675,7 @@ void edwork_load_nodes(struct edfs *edfs_context) {
         }
         fclose(in);
     }
-    uint32_t offset = htonl(edfs_context->list_offset);
+    uint32_t offset = 0;
     notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     edfs_context->list_timestamp = time(NULL);
 }
@@ -4818,6 +4833,7 @@ int edwork_thread(void *userdata) {
         edfs_context->top_broadcast_timestamp = 0;
     }
 
+    edfs_context->hblk_scheduled = 1;
     edfs_schedule(edfs_context, edfs_blockchain_request, edfs_context->resync ? 100000 : 1000000, 0, 0, 0, 0, 0);
 
     char *host_and_port = edfs_context->host_and_port;
@@ -4875,8 +4891,7 @@ int edwork_thread(void *userdata) {
         }
 
         if (time(NULL) - edfs_context->list_timestamp > EDWORK_LIST_INTERVAL) {
-            edfs_context->list_offset = 0;
-            uint32_t offset = htonl(edfs_context->list_offset);
+            uint32_t offset = htonl(0);
             notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             edfs_context->list_timestamp = time(NULL);
         }
