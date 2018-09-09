@@ -1941,6 +1941,10 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             while ((!chunk_exists(path, chunk)) && (microseconds() - start < wait_count))
                 usleep(1000);
         } else {
+#ifdef EDFS_FORWARD_REQUEST
+            if ((!chunk_exists(path, forward_chunk)) && (forward_chunk <= last_file_chunk))
+                request_data(edfs_context, ino, forward_chunk, 1, 1, NULL, NULL);
+#endif
             if ((filebuf) && (read_size > 0)) {
                 filebuf->last_read_chunk = chunk;
                 filebuf->last_read_size = read_size;
@@ -3158,7 +3162,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             EDFS_THREAD_UNLOCK(edfs_context);
         }
         if (try_update_hash) {
-            edfs_schedule(edfs_context, edfs_shard_data_request, 250000, 3600000000UL, inode, chunk, 1, 1);
+            edfs_schedule(edfs_context, edfs_shard_data_request, 250000, 7 * 24 * 3600000000UL, inode, chunk, 1, 1);
         } else {
             // use cached addresses for 90% of requests, 10% are broadcasts
             request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
