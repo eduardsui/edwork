@@ -561,6 +561,8 @@ ssize_t safe_sendto(struct edwork_data *data, struct client_data *peer_data, con
                 }
             }
         }
+        if (data->force_sctp)
+            is_sctp = 1;
         if ((socket) && (is_sctp))
             return safe_sctp_sendto(data, socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen, EDWORK_SCTP_TTL);
         else
@@ -700,6 +702,14 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
 
             for (i = 0; i < sizeof(event_types) / sizeof(uint16_t); i++)
                 SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_EVENT, &evt, sizeof(evt));
+
+            struct sctp_udpencaps encaps;
+            memset(&encaps, 0, sizeof(struct sctp_udpencaps));
+            encaps.sue_address.ss_family = AF_INET;
+            encaps.sue_port = htons(EDWORK_SCTP_UDP_TUNNELING_PORT);
+
+            if (SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, sizeof(struct sctp_udpencaps)))
+                log_error("error in SCTP_setsockopt %i", errno);
         #endif
 #endif
 

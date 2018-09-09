@@ -1755,12 +1755,15 @@ int request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int 
         struct edfs_ino_cache *avl_cache = (struct edfs_ino_cache *)avl_search(&edfs_context->ino_cache, (void *)(uintptr_t)ino);
         // at least 2 nodes
         if ((avl_cache) && (avl_cache->len >= 1)) {
-            memcpy(&addrbuffer, &avl_cache->clientaddr[edwork_random() % avl_cache->len], avl_cache->clientaddr_size);
-            use_clientaddr = &addrbuffer;
-            clientaddr_size = avl_cache->clientaddr_size;
+            if ((avl_cache->len >= 2) || (edwork_random() % 10 != 0)) {
+                memcpy(&addrbuffer, &avl_cache->clientaddr[edwork_random() % avl_cache->len], avl_cache->clientaddr_size);
+                use_clientaddr = &addrbuffer;
+                clientaddr_size = avl_cache->clientaddr_size;
 #ifdef WITH_SCTP
-            is_sctp = edwork_is_sctp(edfs_context->edwork, use_clientaddr);
+                if (!edfs_context->force_sctp)
+                    is_sctp = edwork_is_sctp(edfs_context->edwork, use_clientaddr);
 #endif
+            }
         }
         if (edfs_context->mutex_initialized)
             thread_mutex_unlock(&edfs_context->ino_cache_lock);
@@ -1887,11 +1890,11 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             }
             if (microseconds() - start >= 1000000) {
                 use_addr_cache = 0;
+                is_sctp = 0;
             }
             if (microseconds() - proof_timestamp >= 150000) {
                 // new proof every 150ms
                 proof_size = 0;
-                is_sctp = 0;
             }
             // end of file, no more quries
             // this is made to avoid an unnecessary edwork query
@@ -2173,9 +2176,9 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                     break;
                 }
 #ifdef _WIN32
-                Sleep(10);
+                Sleep(50);
 #else
-                usleep(10000);
+                usleep(50000);
 #endif
                 read_file_json(edfs_context, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
             } while (!valid_hash);
@@ -2833,9 +2836,9 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
                     break;
                 }
 #ifdef _WIN32
-                Sleep(10);
+                Sleep(50);
 #else
-                usleep(10000);
+                usleep(50000);
 #endif
                 if (microseconds() - start >= EDWORK_MAX_DIR_RETRY_TIMEOUT * 1000) {
                     log_warn("directory read timeout, using last known version");
