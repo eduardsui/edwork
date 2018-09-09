@@ -3963,7 +3963,7 @@ one_loop:
                     } else {
                         log_info("DAT4 sent");
 #ifndef EDFS_DISABLE_FORWARD_BLOCK_SEND
-                        if ((is_sctp) && (loop_count < 2)) {
+                        if ((is_sctp) && (loop_count < 1)) {
                             if (loop_count == 0)
                                 chunk += 10;
                             else
@@ -3971,8 +3971,8 @@ one_loop:
                             loop_count ++;
                             goto one_loop;
                         }
-                    }
 #endif
+                    }
                 } else
                 if (!memcmp(type, "wan3", 4)) {
                     unsigned char buf2[BLOCK_SIZE_MAX];
