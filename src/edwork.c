@@ -1614,7 +1614,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     unsigned int i;
     // active in last 72 hours
     thread_mutex_lock(&data->clients_lock);
-    int found = 0;
+    unsigned int found = 0;
     for (i = 0; i < data->clients_count; i++) {
         if (*buf_size < 7)
             break;

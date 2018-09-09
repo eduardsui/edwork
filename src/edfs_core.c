@@ -3059,7 +3059,7 @@ int edfs_create_key(struct edfs *edfs_context) {
 
 int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b) {
     if (edfs_context->chain) {
-        uint64_t requested_block = htonll(edfs_context->chain->index + 2);
+        uint64_t requested_block = htonll(edfs_context->chain->index + 2 - userdata_a);
         notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
         if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 10)) {
@@ -3735,7 +3735,7 @@ int edfs_check_blockhash(struct edfs *edfs_context, const unsigned char *blockha
             if (!edfs_context->hblk_scheduled) {
                 edfs_context->block_timestamp = time(NULL);
                 edfs_context->hblk_scheduled = 1;
-                edfs_schedule(edfs_context, edfs_blockchain_request, 250000, 0, 0, 0, 0, 0);
+                edfs_schedule(edfs_context, edfs_blockchain_request, 250000, 0, 1, 0, 0, 0);
             }
             return 0;
         } else
@@ -3995,7 +3995,7 @@ one_loop:
         // add offset
         int size = BLOCK_SIZE - 4;
         memcpy(buffer, payload, 4);
-        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 3600);
+        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 24 * 3600);
         if (records > 0) {
             if (edwork_send_to_peer(edwork, "addr", buffer, size, clientaddr, clientaddrlen, is_sctp) <= 0) {
                 log_warn("error sending address list");
