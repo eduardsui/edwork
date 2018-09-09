@@ -1895,6 +1895,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             if (microseconds() - proof_timestamp >= 150000) {
                 // new proof every 150ms
                 proof_size = 0;
+                proof_timestamp = microseconds();
             }
             // end of file, no more quries
             // this is made to avoid an unnecessary edwork query
@@ -3963,7 +3964,7 @@ one_loop:
                     } else {
                         log_info("DAT4 sent");
 #ifndef EDFS_DISABLE_FORWARD_BLOCK_SEND
-                        if ((is_sctp) && (loop_count < 1)) {
+                        if ((is_sctp) && (loop_count < 2)) {
                             if (loop_count == 0)
                                 chunk += 10;
                             else
