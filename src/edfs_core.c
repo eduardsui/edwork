@@ -732,8 +732,10 @@ int signature_allows_write(struct edfs *edfs_context) {
     return len;
 }
 
-size_t base64_decode_no_padding(const BYTE in[], BYTE out[], size_t len) {
+size_t base64_decode_no_padding(const BYTE in[], BYTE out[], size_t max_len) {
     int in_len = strlen((const char *)in);
+    if (in_len > max_len)
+        in_len = max_len;
     if (in_len % 3) {
         char buf[BLOCK_SIZE];
         memcpy(buf, in, in_len);
@@ -745,7 +747,7 @@ size_t base64_decode_no_padding(const BYTE in[], BYTE out[], size_t len) {
             decoded_size --;
         return decoded_size;
     }
-    return base64_decode(in, out, len);
+    return base64_decode(in, out, in_len);
 }
 
 int read_signature(const char *sig, unsigned char *sigdata, int verify, int *key_type, unsigned char *pubdata) {
@@ -831,7 +833,7 @@ int read_signature(const char *sig, unsigned char *sigdata, int verify, int *key
                     json_value_free(root_value);
                     return 0;
                 }
-                base64_decode_no_padding((const BYTE *)k, (BYTE *)pubdata, MAX_KEY_SIZE);
+                base64_decode_no_padding((const BYTE *)k, (BYTE *)pubdata, MAX_KEY_SIZE * 4);
             }
         }
     }
@@ -901,7 +903,7 @@ int verify(struct edfs *edfs_context, const char *str, int len, const unsigned c
             break;
         case KEY_EDD25519:
             if ((hash_size != 64) || (edfs_context->pub_len != 32)) {
-                log_error("verify error (invalid hash or public key)");
+                log_error("verify error (invalid hash or public key) %i/%i", hash_size, edfs_context->pub_len);
                 return 0;
             }
             edfs_context->pub_loaded = 1;
@@ -1229,6 +1231,7 @@ int edfs_read_file(struct edfs *edfs_context, const char *base_path, const char 
             }
             return bytes_read;
         }
+        log_error("signature verify failed");
         return -EIO;
     }
 
@@ -1326,9 +1329,10 @@ JSON_Value *read_json(struct edfs *edfs_context, const char *base_path, uint64_t
     int data_size = edfs_read_file(edfs_context, base_path, b64name, (unsigned char *)data, MAX_INODE_DESCRIPTOR_SIZE - 1, ".json", 1, 1, 0, NULL, 0);
     if (edfs_context->mutex_initialized)
         thread_mutex_unlock(&edfs_context->io_lock);
-    if (data_size <= 0)
+    if (data_size <= 0) {
+        log_trace("invalid file %s/%s.json", base_path, b64name);
         return 0;
-
+    }
     // signature is ok, proceed to processing
     JSON_Value *root_value = json_parse_string(data);
     if (json_value_get_type(root_value) != JSONObject) {
@@ -1383,8 +1387,10 @@ int read_file_json(struct edfs *edfs_context, uint64_t inode, uint64_t *parent, 
             write_json(edfs_context, edfs_context->working_directory, ".", 0, inode, 0, S_IFDIR | 0755, NULL, 0, 0, 0, 0);
             root_value = read_json(edfs_context, edfs_context->working_directory, inode);
         }
-        if (!root_value)
+        if (!root_value) {
+            log_trace("invalid JSON file");
             return 0;
+        }
     }
     JSON_Object *root_object = json_value_get_object(root_value);
 
