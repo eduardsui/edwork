@@ -3516,6 +3516,7 @@ int edwork_process_data(struct edfs *edfs_context, const unsigned char *payload,
             edfs_ensure_data(edfs_context, inode, (uint64_t)0, 1, 0, 0);
 
         if (written_bytes == datasize) {
+            log_trace("written chunk %" PRIu64, chunk);
             written = 1;
         } else {
             if (written_bytes == -1)
@@ -4088,7 +4089,7 @@ one_loop:
                             if (loop_count == 0)
                                 chunk += 10;
                             else
-                                chunk ++;
+                                chunk += 2;
                             loop_count ++;
                             goto one_loop;
                         }
@@ -4969,9 +4970,20 @@ int edwork_queue(void *userdata) {
     }
 }
 
+void edfs_log_lock(void *userdata, int lock) {
+    thread_mutex_t *log_lock = (thread_mutex_t *)userdata;
+    if (log_lock) {
+        if (lock)
+            thread_mutex_lock(log_lock);
+        else
+            thread_mutex_unlock(log_lock);
+    }
+}
+
 int edwork_thread(void *userdata) {
     struct edfs *edfs_context = (struct edfs *)userdata;
     edwork_init();
+
     if (edfs_context->port <= 0)
         edfs_context->port = EDWORK_PORT;
 
@@ -4987,6 +4999,12 @@ int edwork_thread(void *userdata) {
         edfs_context->network_done = 1;
         return 0;
     }
+
+    thread_mutex_t log_lock;
+    thread_mutex_init(&log_lock);
+    log_set_udata(&log_lock);
+    log_set_lock(edfs_log_lock);
+
 
     edfs_context->edwork = edwork;
 #ifdef WITH_SCTP
@@ -5083,6 +5101,9 @@ int edwork_thread(void *userdata) {
         edfs_try_new_block(edfs_context);
     }
 
+    log_set_lock(NULL);
+    log_set_udata(NULL);
+    thread_mutex_term(&log_lock);
 
     flush_queue(edfs_context);
     edwork_save_nodes(edfs_context);
