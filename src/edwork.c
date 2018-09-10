@@ -469,6 +469,14 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
         // todo
     #endif
 #endif
+    int optval = EDWORK_SOCKET_BUFFER;
+    if (SCTP_setsockopt(data->sctp_socket, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval)))
+        log_warn("error setting send buffer to %i bytes", optval);
+
+    optval = EDWORK_SOCKET_BUFFER;
+    if (SCTP_setsockopt(data->sctp_socket, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval)))
+        log_warn("error setting recv buffer to %i bytes", optval);
+
     struct sctp_initmsg initmsg;
     memset(&initmsg, 0, sizeof(struct sctp_initmsg));
     initmsg.sinit_num_ostreams = 2;
@@ -711,6 +719,14 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
             if (SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, sizeof(struct sctp_udpencaps)))
                 log_error("error in SCTP_setsockopt %i", errno);
         #endif
+
+        optval = EDWORK_SOCKET_BUFFER;
+        if (SCTP_setsockopt(data->sctp_socket, SOL_SOCKET, SO_SNDBUF, (const char *)&optval, sizeof(optval)))
+            log_warn("error setting send buffer to %i bytes", optval);
+
+        optval = EDWORK_SOCKET_BUFFER;
+        if (SCTP_setsockopt(data->sctp_socket, SOL_SOCKET, SO_RCVBUF, (const char *)&optval, sizeof(optval)))
+            log_warn("error setting recv buffer to %i bytes", optval);
 #endif
 
         struct sctp_initmsg initmsg;
