@@ -25,6 +25,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <time.h>
+#include <stdint.h>
 
 #include "log.h"
 
@@ -40,6 +41,8 @@ static struct {
   int colors;
 #endif
 } L;
+
+uint64_t microseconds();
 
 static const char *level_names[] = {
   "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"
@@ -105,7 +108,8 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
   lock();
 
   /* Get current time */
-  time_t t = time(NULL);
+  uint64_t now = microseconds();
+  time_t t = (time_t)(now/1000000);
   struct tm *lt = localtime(&t);
 
   /* Log to stderr */
@@ -115,7 +119,7 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
     buf[strftime(buf, sizeof(buf), "%H:%M:%S", lt)] = '\0';
 #ifdef LOG_USE_COLOR
     if (L.colors)
-        fprintf(stderr, "%s %s%-5s\x1b[0m \x1b[90m%s:%d:\x1b[0m ", buf, level_colors[level], level_names[level], file, line);
+        fprintf(stderr, "%s.%03d %s%-5s\x1b[0m \x1b[90m%s:%d:\x1b[0m ", buf, (int)(now % 1000), level_colors[level], level_names[level], file, line);
     else
 #endif
     fprintf(stderr, "%s %-5s %s:%d: ", buf, level_names[level], file, line);

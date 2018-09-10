@@ -1005,8 +1005,8 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             peer->last_seen = time(NULL);
         // opt in or out sctp
 #ifdef WITH_SCTP
-        if ((is_sctp) && (data_index != 1))
-            peer->is_sctp = 1;
+        if (data_index != 1)
+            peer->is_sctp = is_sctp;
 #endif
         thread_mutex_unlock(&data->clients_lock);
         if (return_old_peer)

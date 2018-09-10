@@ -235,8 +235,11 @@ struct edfs {
     struct edwork_io *queue;
 
     struct edfs_event *events;
+    thread_mutex_t events_lock;
 
     thread_ptr_t network_thread;
+    thread_ptr_t queue_thread;
+
     thread_mutex_t lock;
     thread_mutex_t io_lock;
 #ifdef EDFS_MULTITHREADED
@@ -1015,6 +1018,7 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
     if ((!callback) || (!edfs_context))
         return 0;
 
+    thread_mutex_lock(&edfs_context->events_lock);
     int i;
     struct edfs_event *updated_event = NULL;
     if (update) {
@@ -1030,8 +1034,10 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
 
     if (!updated_event) {
         updated_event = (struct edfs_event *)malloc(sizeof(struct edfs_event));
-        if (!updated_event)
+        if (!updated_event) {
+            thread_mutex_unlock(&edfs_context->events_lock);
             return 0;
+        }
         updated_event->next = edfs_context->events;
         edfs_context->events = updated_event;
     }
@@ -1048,7 +1054,7 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
         updated_event->timeout = microseconds() + expires;
     else
         updated_event->timeout = 0;
-
+    thread_mutex_unlock(&edfs_context->events_lock);
     return 1;
 }
 
@@ -1056,6 +1062,7 @@ int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callb
     if ((!callback) || (!edfs_context))
         return 0;
 
+    thread_mutex_lock(&edfs_context->events_lock);
     struct edfs_event *root = edfs_context->events;
     struct edfs_event *prev = NULL;
     while (root) {
@@ -1065,11 +1072,13 @@ int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callb
             else
                 edfs_context->events = (struct edfs_event *)root->next;
             free(root);
+            thread_mutex_unlock(&edfs_context->events_lock);
             return 1;
         }
         prev = root;
         root = (struct edfs_event *)root->next;
     }
+    thread_mutex_unlock(&edfs_context->events_lock);
     return 0;
 }
 
@@ -1084,31 +1093,32 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
     struct edfs_event *prev = NULL;
     struct edfs_event *next = NULL;
 
+    int deleted = 0;
+    thread_mutex_lock(&edfs_context->events_lock);
     while (root) {
         i++;
-        struct edfs_event *next = (struct edfs_event *)root->next;
+        next = (struct edfs_event *)root->next;
         if (edfs_context->network_done)
             return 0;
         if (root->callback) {
             if ((!root->when) || (root->timestamp + root->when <= now)) {
-                if (root->callback(edfs_context, root->userdata_a, root->userdata_b)) {
-                    if (prev)
-                        prev->next = root->next;
-                    else
-                        edfs_context->events = (struct edfs_event *)root->next;
-                    free(root);
-                    root = next;
-                    continue;
+                thread_mutex_unlock(&edfs_context->events_lock);
+                int no_reschedule = root->callback(edfs_context, root->userdata_a, root->userdata_b);
+                thread_mutex_lock(&edfs_context->events_lock);
+                if (no_reschedule) {
+                    root->callback = NULL;
+                    deleted ++;
                 }
                 root->timestamp = now;
             }
-            if ((root) && (root->timeout) && (root->timeout > now)) {
+            if ((root) && (root->timeout) && (now > root->timeout)) {
                 if (prev)
-                    prev->next = root->next;
+                    prev->next = next;
                 else
-                    edfs_context->events = (struct edfs_event *)root->next;
+                    edfs_context->events = next;
                 free(root);
                 root = next;
+                log_trace("deleted scheduled event (timed out)");
                 continue;
             }
         }
@@ -1116,6 +1126,27 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
         root = next;
     }
 
+    if (deleted) {
+        prev = NULL;
+        root = edfs_context->events;
+        while ((root) && (deleted > 0)) {
+            next = (struct edfs_event *)root->next;
+            if (!root->callback) {
+                if (prev)
+                    prev->next = root->next;
+                else
+                    edfs_context->events = (struct edfs_event *)root->next;
+                free(root);
+                root = next;
+                deleted --;
+                log_trace("deleted scheduled event");
+                continue;
+            }
+            prev = root;
+            root = next;
+        }
+    }
+    thread_mutex_unlock(&edfs_context->events_lock);
     return i;
 }
 
@@ -1824,6 +1855,15 @@ int chunk_exists(const char *path, uint64_t chunk) {
     return (stat(name, &statbuf) == 0);
 }
 
+int chunk_exists2(struct edfs *edfs_context, uint64_t inode, uint64_t chunk) {
+    char fullpath[MAX_PATH_LEN];
+    char b64name[MAX_B64_HASH_LEN];
+    adjustpath2(edfs_context, fullpath, computename(inode, b64name), chunk);
+
+    struct stat statbuf;   
+    return (stat(fullpath, &statbuf) == 0);
+}
+
 uint32_t edfs_get_hash(struct edfs *edfs_context, const char *path, edfs_ino_t ino, uint64_t chunk) {
     uint32_t hash = 0;
     char hash_file[0x100];
@@ -1967,7 +2007,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             return read_size;
         }
         i++;
-    } while (1);
+    } while (!edfs_context->network_done);
     return -EIO;
 }
 
@@ -2194,6 +2234,8 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                     log_warn("file hash still mismatched, using last known version (not waiting for timeout)");
                     break;
                 }
+                if (edfs_context->network_done)
+                    break;
 #ifdef _WIN32
                 Sleep(50);
 #else
@@ -2869,7 +2911,7 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
                     avl_insert(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino, (void *)1);
                     break;
                 }
-            } while (1);
+            } while (!edfs_context->network_done);
         }
 
         memset(buf, 0, sizeof(struct dirbuf));
@@ -3171,13 +3213,13 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         last_file_chunk --;
     if (chunk <= last_file_chunk) {
         log_trace("requesting shard chunk %s:%" PRIu64 "/%" PRIu64, fullpath, chunk, last_file_chunk);
-        if (edwork_random() % 5 == 0) {
+        if (edwork_random() % 100 == 0) {
             EDFS_THREAD_LOCK(edfs_context);
             edfs_make_key(edfs_context);
             EDFS_THREAD_UNLOCK(edfs_context);
         }
         if (try_update_hash) {
-            edfs_schedule(edfs_context, edfs_shard_data_request, 250000, 7 * 24 * 3600000000UL, inode, chunk, 1, 1);
+            edfs_schedule(edfs_context, edfs_shard_data_request, 250000, 7ULL * 24ULL * 3600000000ULL, inode, chunk, 1, 1);
         } else {
             // use cached addresses for 90% of requests, 10% are broadcasts
             request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
@@ -3819,36 +3861,54 @@ void edfs_new_chain_request_descriptors(struct edfs *edfs_context, int level) {
 void edfs_chain_ensure_descriptors(struct edfs *edfs_context, uint64_t min_timestamp) {
     struct block *blockchain = edfs_context->chain;
     unsigned char hash[32];
-
-    if (!blockchain)
+    if ((!blockchain) || (edfs_context->network_done))
         return;
 
     uint64_t generation = 0;
-   
     int i;
     int record_size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32;
     do {
+        if (blockchain->timestamp < min_timestamp)
+            break;
         int len = blockchain->data_len - 72;
-        if ((len >= record_size) && (blockchain->timestamp >= min_timestamp)) {
+        if (len >= record_size) {
             unsigned char *ptr = blockchain->data;
             for (i = 0; i < len; i += record_size) {
                 uint64_t inode = ntohll(*(uint64_t *)ptr);
                 uint64_t inode_version = 0;
                 int64_t file_size = 0;
+
                 int type = read_file_json(edfs_context, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash);
                 memcpy(&generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
                 generation = ntohll(generation);
                 if (generation > inode_version)
                     notify_io(edfs_context, "wand", ptr, 8, NULL, 0, 0, 0, inode, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
-                if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id) && (type) && (file_size))
-                    edfs_ensure_data(edfs_context, inode, file_size, 1, 0, generation + 1);
-
+#ifdef EDFS_RESTART_SHARD
+                if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id) && (type) && (file_size)) {
+                    uint64_t last_file_chunk = file_size / BLOCK_SIZE;
+                    if ((last_file_chunk % BLOCK_SIZE == 0) && (last_file_chunk))
+                        last_file_chunk --;
+                    if (!chunk_exists2(edfs_context, inode, last_file_chunk)) {
+                        uint64_t chunk = 0;
+                        for (chunk = 0; chunk <= last_file_chunk; chunk ++) {
+                            if (!chunk_exists2(edfs_context, inode, chunk)) {
+                                edfs_schedule(edfs_context, edfs_shard_data_request, 1000000, 7ULL * 24ULL * 3600000000ULL, inode, chunk, 1, 1);
+                                break;
+                            }
+                        }
+                    }
+                }
+#endif
+                if (edfs_context->network_done)
+                    return;
                 ptr += record_size;
             }
         }
+        if (edfs_context->network_done)
+            break;
         blockchain = (struct block *)blockchain->previous_block;
-    } while ((blockchain) && (blockchain->timestamp >= min_timestamp));
+    } while (blockchain);
 }
 
 void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, const unsigned char *blockhash, void *userdata, int is_sctp, int is_listen_socket) {
@@ -4887,8 +4947,20 @@ unsigned int edwork_resync_dir_desc(struct edfs *edfs_context, uint64_t inode, v
 }
 
 int edfs_check_descriptors(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b) {
-    edfs_chain_ensure_descriptors(edfs_context, microseconds() - 7 * 24 * 3600000000UL);
+    edfs_chain_ensure_descriptors(edfs_context, microseconds() - 24ULL * 3600000000ULL);
     return 1;
+}
+
+int edwork_queue(void *userdata) {
+    struct edfs *edfs_context = (struct edfs *)userdata;
+    while (!edfs_context->network_done) {
+        edfs_schedule_iterate(edfs_context);
+#ifdef _WIN32
+        Sleep(50);
+#else
+        usleep(50000);
+#endif
+    }
 }
 
 int edwork_thread(void *userdata) {
@@ -5001,8 +5073,6 @@ int edwork_thread(void *userdata) {
         }
         flush_queue(edfs_context);
         edwork_dispatch(edwork, edwork_callback, 100, edfs_context);
-        edfs_schedule_iterate(edfs_context);
-
         // check if a new block is due for creation
         edfs_try_new_block(edfs_context);
     }
@@ -5075,6 +5145,7 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
     if (!edfs_context->mutex_initialized) {
         edfs_context->port = port;
         thread_mutex_init(&edfs_context->lock);
+        thread_mutex_init(&edfs_context->events_lock);
         thread_mutex_lock(&edfs_context->lock);
 
         thread_mutex_init(&edfs_context->io_lock);
@@ -5086,6 +5157,7 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
 
         edfs_context->mutex_initialized = 1;
         edfs_context->network_thread = thread_create(edwork_thread, (void *)edfs_context, "edwork", 8192 * 1024);
+        edfs_context->queue_thread = thread_create(edwork_queue, (void *)edfs_context, "edwork q", 8192 * 1024);
 
         thread_mutex_unlock(&edfs_context->io_lock);
         thread_mutex_unlock(&edfs_context->lock);
@@ -5103,6 +5175,13 @@ void edfs_edwork_done(struct edfs *edfs_context) {
         log_error("edwork not initialized");
         return;
     }
+    if (edfs_context->queue_thread) {
+        log_info("waiting for queue thread to finish ...");
+        edfs_context->network_done = 1;
+        thread_join(edfs_context->queue_thread);
+        thread_destroy(edfs_context->queue_thread);
+        log_info("edwork queue done");
+    }
     if (edfs_context->network_thread) {
         log_info("waiting for edwork thread to finish ...");
         edfs_context->network_done = 1;
@@ -5113,6 +5192,7 @@ void edfs_edwork_done(struct edfs *edfs_context) {
     edfs_context->mutex_initialized = 0;
     thread_mutex_term(&edfs_context->io_lock);
     thread_mutex_term(&edfs_context->lock);
+    thread_mutex_init(&edfs_context->events_lock);
 #ifdef EDFS_MULTITHREADED
     thread_mutex_term(&edfs_context->thread_lock);
 #endif
