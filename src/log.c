@@ -108,8 +108,8 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
   lock();
 
   /* Get current time */
-  uint64_t now = microseconds();
-  time_t t = (time_t)(now/1000000);
+  uint64_t now = microseconds()/1000;
+  time_t t = (time_t)(now/1000);
   struct tm *lt = localtime(&t);
 
   /* Log to stderr */
