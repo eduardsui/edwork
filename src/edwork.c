@@ -280,7 +280,7 @@ void edwork_init() {
     usrsctp_sysctl_set_sctp_rto_max_default(100);
     usrsctp_sysctl_set_sctp_rto_min_default(50);
     usrsctp_sysctl_set_sctp_rto_initial_default(50);
-    usrsctp_sysctl_set_sctp_init_rto_max_default(30000);
+    usrsctp_sysctl_set_sctp_init_rto_max_default(5000);
     usrsctp_sysctl_set_sctp_sack_freq_default(1);
     usrsctp_sysctl_set_sctp_delayed_sack_time_default(50);
     usrsctp_sysctl_set_sctp_max_burst_default(1);
