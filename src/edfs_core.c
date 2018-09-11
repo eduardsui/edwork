@@ -1804,7 +1804,7 @@ int request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int 
         struct edfs_ino_cache *avl_cache = (struct edfs_ino_cache *)avl_search(&edfs_context->ino_cache, (void *)(uintptr_t)ino);
         // at least 2 nodes
         if ((avl_cache) && (avl_cache->len >= 1)) {
-            if ((avl_cache->len >= 2) || (edwork_random() % 10 != 0)) {
+            if ((avl_cache->len >= 2) || (edwork_random() % 20 != 0)) {
                 memcpy(&addrbuffer, &avl_cache->clientaddr[edwork_random() % avl_cache->len], avl_cache->clientaddr_size);
                 use_clientaddr = &addrbuffer;
                 clientaddr_size = avl_cache->clientaddr_size;

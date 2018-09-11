@@ -1156,6 +1156,9 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
     uint64_t rand = edwork_random() % data->clients_count;
     int wrapped_to_first = 0;
     time_t threshold = time(NULL) - 180;
+#ifdef WITH_SCTP
+    time_t sctp_threshold = time(NULL) - 10;
+#endif
     if ((ptr) && (len > 0)) {
         unsigned int i;
         if ((clientaddr) && (clientaddr_len > 0)) {
@@ -1182,7 +1185,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
         while (send_to < max_nodes) {
             if ((i) || (lan_broadcast)) {
 #ifdef WITH_SCTP
-                if ((!data->force_sctp) || ((data->clients[i].is_sctp) /*&& ((!data->sctp_timestamp) || ((data->sctp_timestamp) && (data->clients[i].sctp_timestamp)))*/)) {
+                if ((!data->force_sctp) || ((data->clients[i].is_sctp) && ((data->sctp_timestamp < sctp_threshold) || (data->clients[i].sctp_timestamp >= sctp_threshold)))) {
 #endif
                 if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
                     log_debug("not broadcasting to same client");
