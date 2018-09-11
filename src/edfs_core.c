@@ -4966,6 +4966,7 @@ int edwork_queue(void *userdata) {
         usleep(50000);
 #endif
     }
+    return 0;
 }
 
 void edfs_log_lock(void *userdata, int lock) {
