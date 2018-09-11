@@ -147,6 +147,8 @@ struct client_data {
 
     unsigned char is_listen_socket;
 #ifdef WITH_SCTP
+    time_t sctp_timestamp;
+    time_t sctp_reconnect_timestamp;
     unsigned char is_sctp;
 #endif
 };
@@ -186,6 +188,7 @@ struct edwork_data {
 
 #ifdef WITH_SCTP
     thread_mutex_t sctp_lock;
+    time_t sctp_timestamp;
     #ifdef WITH_USRSCTP
         edwork_dispatch_callback callback;
         void *userdata;
@@ -373,6 +376,9 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                 SCTP_close(edwork->clients[i].socket);
                 edwork->clients[i].socket = 0;
                 edwork->clients[i].is_sctp = 0;
+                if (edwork->clients[i].sctp_timestamp == edwork->sctp_timestamp)
+                    edwork->sctp_timestamp = 0;
+                edwork->clients[i].sctp_timestamp = 0;
                 break;
             }
         }
@@ -1024,6 +1030,10 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         if (data_index != 1) {
             if (data->force_sctp)
                 peer->is_sctp = 1;
+            if (is_sctp) {
+                peer->sctp_timestamp = time(NULL);
+                data->sctp_timestamp = peer->sctp_timestamp;
+            }
         }
 #endif
         thread_mutex_unlock(&data->clients_lock);
@@ -1055,6 +1065,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     if ((is_sctp) || (data->clients_count == 0)) {
         // is remote socket
         data->clients[data->clients_count].socket = 0;
+        data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
     } else {
         struct sockaddr addr2;
         memcpy(&addr2, sin, client_len);
@@ -1062,14 +1073,22 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             ((struct sockaddr_in *)&addr2)->sin_port = htons(ntohs(((struct sockaddr_in *)&addr2)->sin_port) + 1);
 
         data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len);
-        if (data->clients[data->clients_count].socket)
+        if (data->clients[data->clients_count].socket) {
+            data->clients[data->clients_count].sctp_reconnect_timestamp = time(NULL);
             edwork_send_to_sctp_socket(data, data->clients[data->clients_count].socket, "helo", NULL, 0, &addr2, client_len, 0);
+        } else
+            data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
     }
 
     if ((data->force_sctp) && (data->clients_count))
         data->clients[data->clients_count].is_sctp = 1;
     else
         data->clients[data->clients_count].is_sctp = is_sctp;
+    if (is_sctp) {
+        data->clients[data->clients_count].sctp_timestamp = time(NULL);
+        data->sctp_timestamp = data->clients[data->clients_count].sctp_timestamp;
+    } else
+        data->clients[data->clients_count].sctp_timestamp = 0;
 #endif
 
     data->clients_count ++;
@@ -1163,7 +1182,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
         while (send_to < max_nodes) {
             if ((i) || (lan_broadcast)) {
 #ifdef WITH_SCTP
-                if ((!data->force_sctp) || (data->clients[i].is_sctp)) {
+                if ((!data->force_sctp) || ((data->clients[i].is_sctp) /*&& ((!data->sctp_timestamp) || ((data->sctp_timestamp) && (data->clients[i].sctp_timestamp)))*/)) {
 #endif
                 if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
                     log_debug("not broadcasting to same client");
@@ -1336,10 +1355,10 @@ int edworks_data_pending(struct edwork_data *data, int timeout_ms) {
         return -1;
 
 #if defined(WITH_SCTP) && defined(WITH_USRSCTP)
-      if (data->force_sctp) {
-          usleep(timeout_ms * 1000);
-          return 0;
-      }
+    if (data->force_sctp) {
+        usleep(timeout_ms * 1000);
+        return 0;
+    }
 #endif
 #ifdef _WIN32
     struct timeval timeout;

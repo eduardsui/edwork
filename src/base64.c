@@ -1,124 +1,91 @@
-/*********************************************************************
-* Filename:   base64.c
-* Author:     Brad Conte (brad AT bradconte.com)
-* Copyright:
-* Disclaimer: This code is presented "as is" without any guarantees.
-* Details:    Implementation of the Base64 encoding algorithm.
-*********************************************************************/
-
-/*************************** HEADER FILES ***************************/
+/* base64.c : base-64 / MIME encode/decode */
+/* PUBLIC DOMAIN - Jon Mayo - November 13, 2003 */
+/* $Id: base64.c 156 2007-07-12 23:29:10Z orange $ */
+#include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include "base64.h"
 
-/****************************** MACROS ******************************/
-#define NEWLINE_INVL 76
+static const uint8_t base64enc_tab[]= "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-/**************************** VARIABLES *****************************/
-static const BYTE charset[]={"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"};
-/*********************** FUNCTION DEFINITIONS ***********************/
-BYTE revchar(char ch)
-{
-	if (ch >= 'A' && ch <= 'Z')
-		ch -= 'A';
-	else if (ch >= 'a' && ch <='z')
-		ch = ch - 'a' + 26;
-	else if (ch >= '0' && ch <='9')
-		ch = ch - '0' + 52;
-	else if (ch == '-')
-		ch = 62;
-	else if (ch == '_')
-		ch = 63;
+static const uint8_t base64dec_tab[256]= {
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255, 62,255,255,
+	 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,255,255,255,  0,255,255,
+	255,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
+	 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,255,255,255,255, 63,
+	255, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+	 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+	255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,
+};
 
-	return(ch);
+/* decode a base64 string in one shot */
+int base64_decode(size_t in_len, const char *in, size_t out_len, unsigned char *out) {
+	unsigned ii, io;
+	uint_least32_t v;
+	unsigned rem;
+
+	for (io = 0, ii = 0,v = 0, rem = 0; ii < in_len; ii ++) {
+		unsigned char ch;
+		if (isspace(in[ii]))
+            continue;
+		if ((in[ii]=='=') || (!in[ii]))
+            break; /* stop at = or null character*/
+		ch = base64dec_tab[(unsigned)in[ii]];
+		if (ch == 255)
+            break; /* stop at a parse error */
+		v = (v<<6) | ch;
+		rem += 6;
+		if (rem >= 8) {
+			rem -= 8;
+			if (io >= out_len)
+                return -1; /* truncation is failure */
+			out[io ++] = (v >> rem) & 255;
+		}
+	}
+	if (rem >= 8) {
+		rem -= 8;
+		if (io >= out_len)
+            return -1; /* truncation is failure */
+		out[io ++] = (v >> rem) & 255;
+	}
+	return io;
 }
 
-size_t base64_encode(const BYTE in[], BYTE out[], size_t len, int newline_flag)
-{
-	size_t idx, idx2, blks, blk_ceiling, left_over, newline_count = 0;
+int base64_encode(size_t in_len, const unsigned char *in, size_t out_len, char *out) {
+	unsigned ii, io;
+	uint_least32_t v;
+	unsigned rem;
 
-	blks = (len / 3);
-	left_over = len % 3;
-
-	if (out == NULL) {
-		idx2 = blks * 4 ;
-		if (left_over)
-			idx2 += 4;
-		if (newline_flag)
-			idx2 += len / 57;   // (NEWLINE_INVL / 4) * 3 = 57. One newline per 57 input bytes.
-	}
-	else {
-		// Since 3 input bytes = 4 output bytes, determine out how many even sets of
-		// 3 bytes the input has.
-		blk_ceiling = blks * 3;
-		for (idx = 0, idx2 = 0; idx < blk_ceiling; idx += 3, idx2 += 4) {
-			out[idx2]     = charset[in[idx] >> 2];
-			out[idx2 + 1] = charset[((in[idx] & 0x03) << 4) | (in[idx + 1] >> 4)];
-			out[idx2 + 2] = charset[((in[idx + 1] & 0x0f) << 2) | (in[idx + 2] >> 6)];
-			out[idx2 + 3] = charset[in[idx + 2] & 0x3F];
-			// The offical standard requires a newline every 76 characters.
-			// (Eg, first newline is character 77 of the output.)
-			if (((idx2 - newline_count + 4) % NEWLINE_INVL == 0) && newline_flag) {
-				out[idx2 + 4] = '\n';
-				idx2++;
-				newline_count++;
-			}
-		}
-
-		if (left_over == 1) {
-			out[idx2]     = charset[in[idx] >> 2];
-			out[idx2 + 1] = charset[(in[idx] & 0x03) << 4];
-			idx2 += 2;
-		}
-		else if (left_over == 2) {
-			out[idx2]     = charset[in[idx] >> 2];
-			out[idx2 + 1] = charset[((in[idx] & 0x03) << 4) | (in[idx + 1] >> 4)];
-			out[idx2 + 2] = charset[(in[idx + 1] & 0x0F) << 2];
-			idx2 += 3;
+	for(io = 0, ii = 0, v = 0, rem = 0; ii < in_len; ii ++) {
+		unsigned char ch;
+		ch = in[ii];
+		v = (v << 8) | ch;
+		rem += 8;
+		while (rem >= 6) {
+			rem -= 6;
+			if (io >= out_len)
+                return -1; /* truncation is failure */
+			out[io ++] = base64enc_tab[(v >> rem) & 63];
 		}
 	}
-
-	return(idx2);
-}
-
-size_t base64_decode(const BYTE in[], BYTE out[], size_t len)
-{
-	size_t idx, idx2, blks, blk_ceiling, left_over;
-
-	blks = len / 4;
-	left_over = len % 4;
-
-	if (out == NULL) {
-		if (len >= 77 && in[NEWLINE_INVL] == '\n')   // Verify that newlines where used.
-			len -= len / (NEWLINE_INVL + 1);
-		blks = len / 4;
-		left_over = len % 4;
-
-		idx = blks * 3;
-		if (left_over == 2)
-			idx ++;
-		else if (left_over == 3)
-			idx += 2;
+	if (rem) {
+		v <<= (6 - rem);
+		if (io >= out_len)
+            return -1; /* truncation is failure */
+		out[io ++] = base64enc_tab[v & 63];
 	}
-	else {
-		blk_ceiling = blks * 4;
-		for (idx = 0, idx2 = 0; idx2 < blk_ceiling; idx += 3, idx2 += 4) {
-			if (in[idx2] == '\n')
-				idx2++;
-			out[idx]     = (revchar(in[idx2]) << 2) | ((revchar(in[idx2 + 1]) & 0x30) >> 4);
-			out[idx + 1] = (revchar(in[idx2 + 1]) << 4) | (revchar(in[idx2 + 2]) >> 2);
-			out[idx + 2] = (revchar(in[idx2 + 2]) << 6) | revchar(in[idx2 + 3]);
-		}
+	if (io < out_len)
+	    out[io] = 0;
 
-		if (left_over == 2) {
-			out[idx]     = (revchar(in[idx2]) << 2) | ((revchar(in[idx2 + 1]) & 0x30) >> 4);
-			idx++;
-		}
-		else if (left_over == 3) {
-			out[idx]     = (revchar(in[idx2]) << 2) | ((revchar(in[idx2 + 1]) & 0x30) >> 4);
-			out[idx + 1] = (revchar(in[idx2 + 1]) << 4) | (revchar(in[idx2 + 2]) >> 2);
-			idx += 2;
-		}
-	}
-
-	return(idx);
+	return io;
 }

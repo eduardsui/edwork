@@ -92,7 +92,7 @@ int block_mine(struct block *newblock, int zero_bits) {
 
         uint64_t counter_be = htonll(counter);
 #ifdef BLOCKCHAIN_HASHCASH_ASCII_STRING
-        const BYTE *counter_ptr = (const BYTE *)&counter_be;
+        const unsigned char *counter_ptr = (const unsigned char *)&counter_be;
         int offset = 0;
         do {
             if (counter_ptr[offset])
@@ -100,7 +100,7 @@ int block_mine(struct block *newblock, int zero_bits) {
             offset ++;
         } while (offset < 7);
 
-        len = base64_encode(counter_ptr + offset, (BYTE *)ptr, 8 - offset, 0);
+        len = base64_decode(8 - offset, (const char *)counter_ptr + offset, sizeof(proof_of_work) - proof_len, (char *)ptr);
         sha3_Update(&ctx, proof_of_work, proof_len + len);
 #else
         len = 8;
@@ -147,7 +147,7 @@ int block_verify(struct block *newblock, int zero_bits) {
 
     uint64_t counter_be = ntohll(newblock->nonce);
 #ifdef BLOCKCHAIN_HASHCASH_ASCII_STRING
-    const BYTE *counter_ptr = (const BYTE *)&counter_be;
+    const unsigned char *counter_ptr = (const unsigned char *)&counter_be;
     int offset = 0;
     do {
         if (counter_ptr[offset])
@@ -155,7 +155,8 @@ int block_verify(struct block *newblock, int zero_bits) {
         offset ++;
     } while (offset < 7);
 
-    len = base64_encode(counter_ptr + offset, (BYTE *)ptr, 8 - offset, 0);
+    unsigned char *ptr = (unsigned char *)proof_of_work + proof_len;
+    len = base64_encode(8 - offset, counter_ptr + offset, sizeof(proof_of_work) - proof_len, (char *)ptr);
     sha3_Update(&ctx, proof_of_work, proof_len + len);
 #else
     len = 8;
@@ -210,7 +211,7 @@ int block_save(struct block *newblock, const char *path) {
 
     uint64_t index = htonll(newblock->index);
 
-    size_t len = base64_encode((const BYTE *)&index, (BYTE *)out, sizeof(uint64_t), 0);
+    size_t len = base64_encode(sizeof(uint64_t), (const unsigned char *)&index, sizeof(out) - 1, (char *)out);
     out[len] = 0;
 
     snprintf(fullpath, sizeof(fullpath), "%s/%s", path, out);
@@ -313,7 +314,7 @@ struct block *block_load(const char *path, uint64_t index) {
 
     uint64_t index_be = htonll(index);
 
-    size_t len = base64_encode((const BYTE *)&index_be, (BYTE *)out, sizeof(uint64_t), 0);
+    size_t len = base64_encode(sizeof(uint64_t), (const unsigned char *)&index_be, sizeof(out) - 1, (char *)out);
     out[len] = 0;
 
     snprintf(fullpath, sizeof(fullpath), "%s/%s", path, out);

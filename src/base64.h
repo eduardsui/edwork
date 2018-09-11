@@ -1,24 +1,12 @@
-/*********************************************************************
-* Filename:   base64.h
-* Author:     Brad Conte (brad AT bradconte.com)
-* Copyright:
-* Disclaimer: This code is presented "as is" without any guarantees.
-* Details:    Defines the API for the corresponding Base64 implementation.
-*********************************************************************/
-
+/* base64.h : base-64 / MIME encode/decode */
+/* PUBLIC DOMAIN - Jon Mayo - November 13, 2003 */
+/* $Id: base64.h 128 2007-04-20 08:20:40Z orange $ */
 #ifndef BASE64_H
 #define BASE64_H
-
-/*************************** HEADER FILES ***************************/
 #include <stddef.h>
-#include "edfs_types.h"
-/*********************** FUNCTION DECLARATIONS **********************/
-// Returns the size of the output. If called with out = NULL, will just return
-// the size of what the output would have been (without a terminating NULL).
-size_t base64_encode(const BYTE in[], BYTE out[], size_t len, int newline_flag);
 
-// Returns the size of the output. If called with out = NULL, will just return
-// the size of what the output would have been (without a terminating NULL).
-size_t base64_decode(const BYTE in[], BYTE out[], size_t len);
 
-#endif   // BASE64_H
+int base64_encode(size_t in_len, const unsigned char *in, size_t out_len, char *out);
+int base64_decode(size_t in_len, const char *in, size_t out_len, unsigned char *out);
+
+#endif /* BASE64_H */

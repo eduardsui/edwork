@@ -309,6 +309,7 @@ int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int s
 void edfs_block_save(struct edfs *edfs_context, struct block *chain);
 void edfs_update_proof_inode(struct edfs *edfs_context, uint64_t ino);
 int edfs_lookup_blockchain(struct edfs *edfs_context, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char *blockchainhash, uint64_t *generation, uint64_t *timestamp);
+size_t base64_encode_no_padding(const unsigned char *in, int in_size, unsigned char *out, int out_size);
 
 uint64_t microseconds() {
     struct timeval tv;
@@ -352,7 +353,7 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
     char out[32];
     edwork_random_bytes((unsigned char *)in, 16);
 
-    int len = base64_encode((const BYTE *)&in, (BYTE *)out, 16, 0);
+    int len = base64_encode_no_padding((const BYTE *)&in, 16, (BYTE *)out, 32);
     out[len] = 0;
 
 #ifdef USE_HASHCASH_FORMAT
@@ -395,7 +396,7 @@ int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource
             offset ++;
         } while (offset < 7);
 
-        len = base64_encode(counter_ptr + offset, (BYTE *)ptr, 8 - offset, 0);
+        len = base64_encode_no_padding(counter_ptr + offset, 8 - offset, (BYTE *)ptr, max_proof_len - proof_len);
         sha3_Update(&ctx, proof_str, proof_len + len);
 #else
         len = 8;
@@ -559,7 +560,7 @@ void notify_io(struct edfs *edfs_context, const char type[4], const unsigned cha
                 sha3_Update(&ctx, ioblock->buffer + offset, buffer_size);
                 if (edwork)
                     sha3_Update(&ctx, edwork_who_i_am(edwork), 32);
-                int encode_len = base64_encode((const unsigned char *)sha3_Finalize(&ctx), out, 32, 0);
+                int encode_len = base64_encode_no_padding((const unsigned char *)sha3_Finalize(&ctx), 32, out, 64);
 
                 int proof_of_work_size = edfs_proof_of_work(proof_of_work, time(NULL), out, encode_len, ioblock->buffer + buffer_size, EDWORK_PACKET_SIZE - buffer_size, NULL);
                 if ((proof_of_work_cache) && (proof_of_work_size_cache)) {
@@ -650,7 +651,7 @@ uint64_t computeinode(uint64_t parent_inode, const char *name) {
 
 const char *computename(uint64_t inode, char *out) {
     inode = htonll(inode);
-    size_t len = base64_encode((const BYTE *)&inode, (BYTE *)out, sizeof(inode), 0);
+    size_t len = base64_encode_no_padding((const BYTE *)&inode, sizeof(uint64_t), (BYTE *)out, MAX_B64_HASH_LEN);
     out[len] = 0;
     return (const char *)out;
 }
@@ -732,22 +733,19 @@ int signature_allows_write(struct edfs *edfs_context) {
     return len;
 }
 
-size_t base64_decode_no_padding(const BYTE in[], BYTE out[], size_t max_len) {
+size_t base64_decode_no_padding(const unsigned char *in, unsigned char *out, int max_len) {
     int in_len = strlen((const char *)in);
-    if (in_len > max_len)
-        in_len = max_len;
-    if (in_len % 3) {
-        char buf[BLOCK_SIZE];
-        memcpy(buf, in, in_len);
-        while (in_len % 3)
-            buf[in_len++] = '=';
-        buf[in_len] = 0;
-        size_t decoded_size = base64_decode((const BYTE *)buf, out, in_len);
-        if (decoded_size > 0)
-            decoded_size --;
-        return decoded_size;
-    }
-    return base64_decode(in, out, in_len);
+    int decoded_size = base64_decode(in_len, (char *)in, max_len, out);
+    if (decoded_size < 0)
+        decoded_size = 0;
+    return decoded_size;
+}
+
+size_t base64_encode_no_padding(const unsigned char *in, int in_size, unsigned char *out, int out_size) {
+    int encode_size = base64_encode(in_size, in, out_size, (char *)out);
+    if (encode_size < 0)
+        encode_size = 0;
+    return encode_size;
 }
 
 int read_signature(const char *sig, unsigned char *sigdata, int verify, int *key_type, unsigned char *pubdata) {
@@ -787,7 +785,7 @@ int read_signature(const char *sig, unsigned char *sigdata, int verify, int *key
             json_value_free(root_value);
             return 0;
         }
-        len = base64_decode_no_padding((const BYTE *)k, (BYTE *)sigdata, key_len);
+        len = base64_decode_no_padding((const BYTE *)k, (BYTE *)sigdata, MAX_KEY_SIZE);
         if (len < 0)
             len = 0;
         else
@@ -816,7 +814,7 @@ int read_signature(const char *sig, unsigned char *sigdata, int verify, int *key
             json_value_free(root_value);
             return 0;
         }
-        len = base64_decode_no_padding((const BYTE *)k, (BYTE *)sigdata, key_len);
+        len = base64_decode_no_padding((const BYTE *)k, (BYTE *)sigdata, MAX_KEY_SIZE);
         if (len < 0)
             len = 0;
         else
@@ -1252,7 +1250,7 @@ uint64_t unpacked_ino(const char *data) {
     uint64_t ino = 0;
     if ((data) && (data[0])) {
         unsigned char buf[MAX_B64_HASH_LEN];
-        if (base64_decode_no_padding((const BYTE *)data, (BYTE *)buf, strlen(data)) == 8)
+        if (base64_decode_no_padding((const BYTE *)data, (BYTE *)buf, MAX_B64_HASH_LEN) == 8)
             ino = ntohll((*(uint64_t *)buf));
     }
     return ino;
@@ -1286,7 +1284,7 @@ void write_json(struct edfs *edfs_context, const char *base_path, const char *na
     json_object_set_number(root_object, "modified", modified);
     if (last_hash) {
         char buffer[64];
-        int len = base64_encode((const BYTE *)last_hash, (BYTE *)buffer, 32, 0);
+        int len = base64_encode_no_padding((const BYTE *)last_hash, 32, (BYTE *)buffer, 64);
         if (len < 0)
             len = 0;
         buffer[len] = 0;
@@ -1436,7 +1434,7 @@ int read_file_json(struct edfs *edfs_context, uint64_t inode, uint64_t *parent, 
             int mime_len = strlen(iohash_mime);
             if (mime_len > 43)
                 mime_len = 43;
-            int len = base64_decode_no_padding((const BYTE *)iohash_mime, (BYTE *)iohash, mime_len);
+            int len = base64_decode_no_padding((const BYTE *)iohash_mime, (BYTE *)iohash, 32);
             if (len <= 0)
                 memset(iohash, 0, 32);
         } else
@@ -1463,7 +1461,7 @@ int edfs_update_json(struct edfs *edfs_context, uint64_t inode, const char **key
 
         if (!strcmp(key, "iostamp")) {
             char buffer[64];
-            int len = base64_encode((const BYTE *)value, (BYTE *)buffer, 32, 0);
+            int len = base64_encode_no_padding((const BYTE *)value, 32, (BYTE *)buffer, 64);
             if (len < 0)
                 len = 0;
             buffer[len] = 0;
@@ -3119,14 +3117,14 @@ int edfs_create_key(struct edfs *edfs_context) {
     json_object_set_string(root_object, "kty", "EDD25519");
     
     b64buffer[0] = 0;
-    size_t len = base64_encode((const BYTE *)private_key, (BYTE *)b64buffer, 64, 0);
+    size_t len = base64_encode_no_padding((const BYTE *)private_key, 64, (BYTE *)b64buffer, sizeof(b64buffer) - 1);
     if (len > 0) {
         b64buffer[len] = 0;
         json_object_set_string(root_object, "k", b64buffer);
     }
 
     b64buffer[0] = 0;
-    len = base64_encode((const BYTE *)public_key, (BYTE *)b64buffer, 32, 0);
+    len = base64_encode_no_padding((const BYTE *)public_key, 32, (BYTE *)b64buffer, sizeof(b64buffer) - 1);
     if (len > 0) {
         b64buffer[len] = 0;
         json_object_set_string(root_object, "pk", b64buffer);
@@ -3677,7 +3675,7 @@ int edwork_check_proof_of_work(struct edwork_data *edwork, const unsigned char *
     if (who_am_i)
         sha3_Update(&ctx, who_am_i, 32);
 
-    int encode_len = base64_encode((const unsigned char *)sha3_Finalize(&ctx), want_hash, 32, 0);
+    int encode_len = base64_encode_no_padding((const unsigned char *)sha3_Finalize(&ctx), 32, want_hash, 64);
     int proof_timestamp = edfs_proof_of_work_verify(work_level, proof_of_work, proof_of_work_size, want_hash, encode_len, (const unsigned char *)work_prefix, strlen(work_prefix));
     if (!proof_timestamp) {
         log_warn("proof of work validation failed");
@@ -4778,8 +4776,8 @@ void edwork_save_nodes(struct edfs *edfs_context) {
                 if (records > 0)
                     offset += records;
             } while (records);
+            fclose(out);
         }
-        fclose(out);
     }
 }
 
