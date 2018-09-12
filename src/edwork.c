@@ -182,12 +182,12 @@ struct edwork_data {
     thread_mutex_t sock_lock;
     thread_mutex_t clients_lock;
     thread_mutex_t lock;
+    thread_mutex_t callback_lock;
 #ifdef EDFS_MULTITHREADED
     thread_mutex_t thread_lock;
 #endif
 
 #ifdef WITH_SCTP
-    thread_mutex_t sctp_lock;
     time_t sctp_timestamp;
     #ifdef WITH_USRSCTP
         edwork_dispatch_callback callback;
@@ -808,9 +808,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
 #ifdef EDFS_MULTITHREADED
     thread_mutex_init(&data->thread_lock);
 #endif
-#ifdef WITH_SCTP
-    thread_mutex_init(&data->sctp_lock);
-#endif
+    thread_mutex_init(&data->callback_lock);
     edwork_add_node(data, "255.255.255.255", port, 0);
 
     return data;
@@ -1528,13 +1526,9 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
     if (callback) {
         // ensure json is 0 terminated
         buffer[n] = 0;
-#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
-        thread_mutex_lock(&data->sctp_lock);
-#endif
+        thread_mutex_lock(&data->callback_lock);
         callback(data, sequence, timestamp, type, payload, size, clientaddr, clientaddrlen, who_am_i, blockhash, userdata, is_sctp, is_listen_socket);
-#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
-        thread_mutex_unlock(&data->sctp_lock);        
-#endif
+        thread_mutex_unlock(&data->callback_lock);        
     }
 
     return 1;
@@ -1689,6 +1683,13 @@ void edwork_force_sctp(struct edwork_data *data, int force_sctp) {
 }
 #endif
 
+void edwork_callback_lock(struct edwork_data *data, int lock) {
+    if (lock)
+        thread_mutex_lock(&data->callback_lock);
+    else
+        thread_mutex_unlock(&data->callback_lock);
+}
+
 void edwork_close(struct edwork_data *data) {
     if (!data)
         return;
@@ -1705,13 +1706,13 @@ void edwork_close(struct edwork_data *data) {
     }
 
 #ifdef WITH_SCTP
-    thread_mutex_lock(&data->sctp_lock);
     if (data->sctp_socket) {
         SCTP_shutdown(data->sctp_socket, SHUT_RDWR);
+        thread_mutex_lock(&data->callback_lock);
         SCTP_close(data->sctp_socket);
         data->sctp_socket = 0;
+        thread_mutex_unlock(&data->callback_lock);
     }
-    thread_mutex_unlock(&data->sctp_lock);
     int i;
     thread_mutex_lock(&data->clients_lock);
     for (i = 0; i < data->clients_count; i++) {
@@ -1738,10 +1739,7 @@ void edwork_destroy(struct edwork_data *data) {
 #ifdef EDFS_MULTITHREADED
     thread_mutex_term(&data->thread_lock);
 #endif
-
-#ifdef WITH_USRSCTP
-    thread_mutex_term(&data->sctp_lock);
-#endif
+    thread_mutex_term(&data->callback_lock);
 
     free(data->log_dir);
     free(data->clients);

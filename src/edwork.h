@@ -50,6 +50,7 @@ void edwork_force_sctp(struct edwork_data *data, int force_sctp);
 const char *edwork_addr_ipv4(const void *clientaddr_ptr);
 void edwork_close(struct edwork_data *data);
 void edwork_destroy(struct edwork_data *data);
+void edwork_callback_lock(struct edwork_data *data, int lock);
 
 void edwork_done();
 

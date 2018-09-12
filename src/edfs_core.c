@@ -3786,6 +3786,7 @@ void edfs_try_new_block(struct edfs *edfs_context) {
 
 
         if (((microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) && (microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT)) {
+            edwork_callback_lock(edfs_context->edwork, 1);
             edfs_sort(edfs_context->proof_inodes, edfs_context->proof_inodes_len);
             int block_data_size = edfs_context->proof_inodes_len * (sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32) + 72;
             unsigned char *block_data = (unsigned char *)malloc(block_data_size);
@@ -3812,17 +3813,24 @@ void edfs_try_new_block(struct edfs *edfs_context) {
             ptr += 32;
             memcpy(ptr, edfs_context->proof_of_time, 40);
             ptr += 40;
+            edwork_callback_lock(edfs_context->edwork, 0);
 
             struct block *newblock = block_new(edfs_context->chain, block_data, block_data_size);
             if (newblock) {
                 block_mine(newblock, BLOCKCHAIN_COMPLEXITY);
-                memset(edfs_context->proof_of_time, 0, 40);
-                edfs_context->proof_inodes_len = 0;
-                edfs_context->chain = newblock;
-                edfs_block_save(edfs_context, edfs_context->chain);
-                edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
-                // TODO: update all directory hashes
-                edfs_broadcast_top(edfs_context, NULL, 0);
+                edwork_callback_lock(edfs_context->edwork, 1);
+                // check if someone finished faster
+                if (edfs_context->chain->index == newblock->index - 1) {
+                    memset(edfs_context->proof_of_time, 0, 40);
+                    edfs_context->proof_inodes_len = 0;
+                    edfs_context->chain = newblock;
+                    edfs_block_save(edfs_context, edfs_context->chain);
+                    edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
+                    // TODO: update all directory hashes
+                    edfs_broadcast_top(edfs_context, NULL, 0);
+                } else
+                    block_free(newblock);
+                edwork_callback_lock(edfs_context->edwork, 0);
             }
         }
     }
@@ -5021,6 +5029,8 @@ int edwork_queue(void *userdata) {
     struct edfs *edfs_context = (struct edfs *)userdata;
     while (!edfs_context->network_done) {
         edfs_schedule_iterate(edfs_context);
+        // check if a new block is due for creation
+        edfs_try_new_block(edfs_context);
 #ifdef _WIN32
         Sleep(50);
 #else
@@ -5156,8 +5166,6 @@ int edwork_thread(void *userdata) {
         }
         flush_queue(edfs_context);
         edwork_dispatch(edwork, edwork_callback, 100, edfs_context);
-        // check if a new block is due for creation
-        edfs_try_new_block(edfs_context);
     }
 
     log_set_lock(NULL);
