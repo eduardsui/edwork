@@ -1554,6 +1554,28 @@ int edfs_update_json_number(struct edfs *edfs_context, uint64_t inode, const cha
     return 1;
 }
 
+int edfs_update_json_number_if_less(struct edfs *edfs_context, uint64_t inode, const char *key, double value) {
+    if ((!key) || (!key[0]))
+        return 0;
+
+    JSON_Value *root_value = read_json(edfs_context, edfs_context->working_directory, inode);
+    if (!root_value)
+        return 0;
+
+    JSON_Object *root_object = json_value_get_object(root_value);
+
+    double old_value = json_object_get_number(root_object, key);
+    if (old_value < value) {
+        json_object_set_number(root_object, key, value);
+        json_object_set_number(root_object, "version", json_object_get_number(root_object, "version") + 1);
+        json_object_set_number(root_object, "timestamp", microseconds());
+        write_json2(edfs_context, edfs_context->working_directory, inode, root_value);
+    }
+    json_value_free(root_value);
+
+    return 1;
+}
+
 void truncate_inode(struct edfs *edfs_context, const char *b64name, int64_t new_size, int64_t old_size) {
     int64_t start_offset = new_size / BLOCK_SIZE;
     int64_t end_offset = old_size / BLOCK_SIZE;
@@ -2845,6 +2867,7 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
 #endif
         }
 
+        uint64_t max_size = fbuf->offset + fbuf->size;
         edfs_flush_chunk(edfs_context, fbuf->ino, fbuf);
         if (fbuf->written_data) {
             unsigned char hash[32];
@@ -2859,6 +2882,8 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
                 edfs_update_json(edfs_context, fbuf->ino, update_data);
             } else
                 log_error("error updating chain");
+            if (max_size > 0)
+                edfs_update_json_number_if_less(edfs_context, fbuf->ino, "size", max_size);
         }
         if (edfs_context->mutex_initialized)
             thread_mutex_lock(&edfs_context->ino_cache_lock);
