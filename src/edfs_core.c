@@ -4026,7 +4026,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("dropping non-requested ADDR");
             return;
         }
-        if (payload_size < 8) {
+        if (payload_size < 4) {
             log_warn("ADDR packet too small");
             return;
         }
@@ -4207,6 +4207,7 @@ one_loop:
         memcpy(buffer, payload, 4);
         int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 24 * 3600);
         if (records > 0) {
+            size += 4;
             if (edwork_send_to_peer(edwork, "addr", buffer, size, clientaddr, clientaddrlen, is_sctp) <= 0) {
                 log_warn("error sending address list");
             }
