@@ -4030,7 +4030,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             log_warn("ADDR packet too small");
             return;
         }
-        int records = edwork_add_node_list(edwork, payload + 8, payload_size - 8);
+        int records = edwork_add_node_list(edwork, payload + 4, payload_size - 4);
         if (records > 0) {
             uint32_t offset = htonl(ntohl(*(uint32_t *)payload) + records);
             notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, clientaddr, clientaddrlen, NULL, NULL);
@@ -5037,6 +5037,7 @@ int edwork_queue(void *userdata) {
         usleep(50000);
 #endif
     }
+    return 0;
 }
 
 void edfs_log_lock(void *userdata, int lock) {
