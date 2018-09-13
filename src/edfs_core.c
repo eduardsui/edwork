@@ -2006,6 +2006,12 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
             if (microseconds() - start >= 1000000) {
                 use_addr_cache = 0;
                 is_sctp = 0;
+                // reset inode cache tree
+                if (edfs_context->mutex_initialized)
+                    thread_mutex_lock(&edfs_context->ino_cache_lock);
+                avl_remove(&edfs_context->ino_cache, (void *)(uintptr_t)ino);
+                if (edfs_context->mutex_initialized)
+                    thread_mutex_unlock(&edfs_context->ino_cache_lock);
             }
             if ((microseconds() - proof_timestamp >= 500000)/* && (!is_sctp)*/) {
                 // new proof every 500ms
