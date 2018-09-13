@@ -2259,7 +2259,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
         if ((size > 0) && (memcmp(hash, null_hash, 32))) {
             // file hash hash
             int valid_hash = 0;
-            uint64_t max_chunks;
+            uint64_t max_chunks = 1;
             uint64_t i;
             uint64_t start = microseconds();
             void *hash_error = (struct edfs_ino_cache *)avl_search(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
