@@ -181,6 +181,16 @@ struct filewritebuf {
     struct edfs_hash_buffer *hash_buffer;
 };
 
+struct edwork_shard_io {
+    uint64_t inode;
+    uint64_t file_size;
+    int try_update_hash;
+    uint64_t start_chunk;
+    uint64_t json_version;
+
+    void *next;
+};
+
 struct edwork_io {
     uint64_t ino;
     char type[4];
@@ -249,6 +259,10 @@ struct edfs {
 
     thread_ptr_t network_thread;
     thread_ptr_t queue_thread;
+
+    thread_mutex_t shard_lock;
+    struct edwork_shard_io *shard_io;
+    thread_ptr_t shard_thread;
 
     thread_mutex_t lock;
     // thread_mutex_t io_lock;
@@ -3461,6 +3475,35 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
     log_trace("ensure data done");
 }
 
+void edfs_queue_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_size, int try_update_hash, uint64_t start_chunk, uint64_t json_version) {
+    struct edwork_shard_io *io = (struct edwork_shard_io *)malloc(sizeof(struct edwork_shard_io));
+    if (!io)
+        return;
+
+    io->inode = inode;
+    io->file_size = file_size;
+    io->try_update_hash = try_update_hash;
+    io->start_chunk = start_chunk;
+    io->json_version = json_version;
+
+    thread_mutex_lock(&edfs_context->shard_lock);
+    if (edfs_context->shard_io) {
+        struct edwork_shard_io *last = edfs_context->shard_io;
+        if (last)
+        while (last) {
+            if (!last->next) {
+                last->next = io;
+                break;
+            }
+            last = (struct edwork_shard_io *)last->next;
+        }
+    } else {
+        io->next = NULL;
+        edfs_context->shard_io = io;
+    }
+    thread_mutex_unlock(&edfs_context->shard_lock);
+}
+
 int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload, int size, uint64_t *ino) {
     if (size <= 64)
         return -1;
@@ -5224,6 +5267,35 @@ int edfs_check_descriptors(struct edfs *edfs_context, uint64_t userdata_a, uint6
     return 1;
 }
 
+int edwork_shard_queue(void *userdata) {
+    struct edfs *edfs_context = (struct edfs *)userdata;
+    while (!edfs_context->network_done) {
+        thread_mutex_lock(&edfs_context->shard_lock);
+        struct edwork_shard_io *io = edfs_context->shard_io;
+        if (io)
+            edfs_context->shard_io = (struct edwork_shard_io *)io->next;
+        thread_mutex_unlock(&edfs_context->shard_lock);
+        if (io) {
+            edfs_ensure_data(edfs_context, io->inode, io->file_size, io->try_update_hash, io->start_chunk, io->json_version);
+            free(io);
+        }
+#ifdef _WIN32
+        Sleep(50);
+#else
+        usleep(50000);
+#endif
+    }
+    thread_mutex_lock(&edfs_context->shard_lock);
+    struct edwork_shard_io *io = edfs_context->shard_io;
+    while (io) {
+        struct edwork_shard_io *io_next_shard = (struct edwork_shard_io *)io->next;
+        free(io);
+        io = io_next_shard;
+    }
+    thread_mutex_unlock(&edfs_context->shard_lock);
+    return 0;
+}
+
 int edwork_queue(void *userdata) {
     struct edfs *edfs_context = (struct edfs *)userdata;
     while (!edfs_context->network_done) {
@@ -5454,8 +5526,7 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
         thread_mutex_init(&edfs_context->events_lock);
         thread_mutex_lock(&edfs_context->lock);
 
-        // thread_mutex_init(&edfs_context->io_lock);
-        // thread_mutex_lock(&edfs_context->io_lock);
+        thread_mutex_init(&edfs_context->shard_lock);
 #ifdef EDFS_MULTITHREADED
         thread_mutex_init(&edfs_context->thread_lock);
 #endif
@@ -5464,8 +5535,8 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
         edfs_context->mutex_initialized = 1;
         edfs_context->network_thread = thread_create(edwork_thread, (void *)edfs_context, "edwork", 8192 * 1024);
         edfs_context->queue_thread = thread_create(edwork_queue, (void *)edfs_context, "edwork q", 8192 * 1024);
+        edfs_context->shard_thread = thread_create(edwork_shard_queue, (void *)edfs_context, "edwork shard", 8192 * 1024);
 
-        // thread_mutex_unlock(&edfs_context->io_lock);
         thread_mutex_unlock(&edfs_context->lock);
 
         edfs_context->start_timestamp = microseconds();
@@ -5488,6 +5559,13 @@ void edfs_edwork_done(struct edfs *edfs_context) {
         thread_destroy(edfs_context->queue_thread);
         log_info("edwork queue done");
     }
+    if (edfs_context->shard_thread) {
+        log_info("waiting for shard thread to finish ...");
+        edfs_context->network_done = 1;
+        thread_join(edfs_context->shard_thread);
+        thread_destroy(edfs_context->shard_thread);
+        log_info("edwork shard done");
+    }
     if (edfs_context->network_thread) {
         log_info("waiting for edwork thread to finish ...");
         edfs_context->network_done = 1;
@@ -5496,9 +5574,9 @@ void edfs_edwork_done(struct edfs *edfs_context) {
         log_info("edwork done");
     }
     edfs_context->mutex_initialized = 0;
-    // thread_mutex_term(&edfs_context->io_lock);
     thread_mutex_term(&edfs_context->lock);
     thread_mutex_init(&edfs_context->events_lock);
+    thread_mutex_term(&edfs_context->shard_lock);
 #ifdef EDFS_MULTITHREADED
     thread_mutex_term(&edfs_context->thread_lock);
 #endif
