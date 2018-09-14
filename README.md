@@ -11,7 +11,9 @@ The nodes discover each other by using 3 strategies:
 2. hardcoding a node (by defining EDFS_DEFAULT_HOST at compile time)
 3. exchanging lists of addresses between them
 
-Note that for now, the content is randomly encrypted (about 25% of all the packages). In the early tests, I've noticed that some hops refused to forward some explicit UDP datagrams (I guess firewalls or other middleboxes). This was solved by randomly encrypting some packages using chacha20.
+~~Note that for now, the content is randomly encrypted (about 25% of all the packages). In the early tests, I've noticed that some hops refused to forward some explicit UDP datagrams (I guess firewalls or other middleboxes). This was solved by randomly encrypting some packages using chacha20.~~
+
+All data traffic is encrypted using chacha20.
 
 Every file has an unique 64-bit id, computed as:
 ```
