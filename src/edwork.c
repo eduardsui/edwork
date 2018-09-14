@@ -302,7 +302,7 @@ void edwork_done() {
     WSACleanup();
 #endif
 #if defined(WITH_SCTP) && defined(WITH_USRSCTP)
-    int max_loop = 100;
+    int max_loop = 50;
     while (usrsctp_finish() != 0) {
         usleep(100000);
         if (--max_loop <= 0) {
@@ -1500,8 +1500,15 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
     unsigned char hmac[32];
     hmac_sha256(data->key_id, 32, buffer, 92, payload, size, hmac);
     if (memcmp(hmac, buffer + 92, 32)) {
-        log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
-        return 0;
+        // invalid hmac
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+        if ((memcmp(type, "disc", 4)) && (memcmp(type, "add2", 4))) {
+#endif
+            log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
+            return 0;
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+        }
+#endif
     }
 
     if ((callback) && (!memcmp(type, "jmbo", 4))) {

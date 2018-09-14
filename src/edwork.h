@@ -8,6 +8,7 @@
 #define EDWORK_SCTP_TTL                 1000
 #define SCTP_UDP_ENCAPSULATION
 #define EDWORK_SCTP_UDP_TUNNELING_PORT  4884
+#define EDWORK_PEER_DISCOVERY_SERVICE
 
 struct edwork_data;
 

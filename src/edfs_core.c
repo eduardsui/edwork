@@ -215,6 +215,15 @@ struct edfs_event {
     void *next;
 };
 
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+#define EDFS_MAX_PEER_DISCOVERY_ADDR_COUNT 10
+
+struct edfs_peer_discovery_data {
+    struct sockaddr addr[EDFS_MAX_PEER_DISCOVERY_ADDR_COUNT];
+    unsigned short len;
+};
+#endif
+
 struct edfs {
     int read_only_fs;
     int ping_received;
@@ -269,6 +278,12 @@ struct edfs {
 
     avl_tree_t ino_checksum_mismatch;
     avl_tree_t ino_sync_file;
+
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+    avl_tree_t peer_discovery;
+    time_t disc_timestamp;
+    unsigned char key_hash[32];
+#endif
 
     int forward_chunks;
 
@@ -655,6 +670,59 @@ void notify_io(struct edfs *edfs_context, const char type[4], const unsigned cha
     if (edfs_context->mutex_initialized)
         thread_mutex_unlock(&edfs_context->lock);
 }
+
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+int edfs_add_to_peer_discovery(struct edfs_peer_discovery_data *peers, void *clientaddr, int clientaddrlen) {
+    if ((!peers) || (!clientaddr) || (!clientaddrlen))
+        return 0;
+    int i;
+    int found = 0;
+    for (i = 0; i < peers->len; i++) {
+        if (!memcmp(peers->addr, clientaddr, clientaddrlen))
+            found = 1;
+    }
+    if (!found) {
+        if (peers->len < EDFS_MAX_PEER_DISCOVERY_ADDR_COUNT) {
+            memcpy(&peers->addr[peers->len], clientaddr, clientaddrlen);
+            peers->len ++;
+        } else {
+            memmove(&peers->addr[0], &peers->addr[1], (EDFS_MAX_PEER_DISCOVERY_ADDR_COUNT - 1) * sizeof(struct sockaddr));
+            memset(&peers->addr[peers->len - 1], 0, sizeof(struct sockaddr));
+            memcpy(&peers->addr[peers->len - 1], clientaddr, clientaddrlen);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+int edfs_get_peer_list(struct edfs_peer_discovery_data *peers, unsigned char *buf, int *buf_size) {
+    if (!peers)
+        return -1;
+
+    int records = 0;
+    unsigned int i;
+    unsigned int found = 0;
+    for (i = 0; i < peers->len; i++) {
+        if (*buf_size < 7)
+            break;
+        records ++;
+        *buf ++ = 6;
+        memcpy(buf, &((struct sockaddr_in *)&peers->addr[i])->sin_addr, 4);
+        buf += 4;
+        memcpy(buf, &((struct sockaddr_in *)&peers->addr[i])->sin_port, 2);
+        buf += 2;
+        *buf_size -= 7;
+    }
+    *buf_size = records * 7;
+    return records;
+}
+
+
+void edwork_broadcast_discovery(struct edfs *edfs_context) {
+    notify_io(edfs_context, "disc", edfs_context->key_hash, 32, NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+    edfs_context->disc_timestamp = time(NULL);
+}
+#endif
 
 char *adjustpath(struct edfs *edfs_context, char *fullpath, const char *name) {
     fullpath[0] = 0;
@@ -4863,6 +4931,62 @@ one_loop:
         }
         return;
     }
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+    if (!memcmp(type, "disc", 4)) {
+        log_info("DISC received (%s)", edwork_addr_ipv4(clientaddr));
+
+        if (payload_size < 32) {
+            log_warn("DISC packet too small");
+            return;
+        }
+
+        if (!edwork_check_proof_of_work(edwork, payload, payload_size, 32, timestamp, EDWORK_LIST_WORK_LEVEL, EDWORK_LIST_WORK_PREFIX, who_am_i)) {
+            log_warn("no valid proof of work");
+            return;
+        }
+
+        uint64_t key_checksum = XXH64(payload, 32, 0);
+        if (XXH64(edfs_context->key_hash, 32, 0) == key_checksum) {
+            log_trace("ignoring discovery request for own key");
+            return;
+        }
+
+        struct edfs_peer_discovery_data *peers = (struct edfs_peer_discovery_data *)avl_search(&edfs_context->peer_discovery, (void *)(uintptr_t)key_checksum);
+        if (!peers) {
+            peers = (struct edfs_peer_discovery_data *)malloc(sizeof(struct edfs_peer_discovery_data));
+            if (peers)
+                memset(peers, 0, sizeof(struct edfs_peer_discovery_data));
+        }
+
+        if (!peers)
+            return;
+
+        int size = BLOCK_SIZE;       
+        int records = edfs_get_peer_list(peers, buffer, &size);
+        if (records > 0) {
+            if (edwork_send_to_peer(edwork, "add2", buffer, size, clientaddr, clientaddrlen, is_sctp) <= 0) {
+                log_warn("error sending address list");
+            }
+        }
+
+        edfs_add_to_peer_discovery(peers, clientaddr, clientaddrlen);
+        return;
+    }
+    if (!memcmp(type, "add2", 4)) {
+        log_info("ADD2 list received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
+        if (time(NULL) - edfs_context->disc_timestamp > 10) {
+            log_warn("dropping non-requested ADD2");
+            return;
+        }
+        if (payload_size < 7) {
+            log_warn("ADDR packet too small");
+            return;
+        }
+        // offset is ignore
+        edwork_add_node_list(edwork, payload, payload_size);
+        return;
+    }
+#endif
     log_error("unsupported message type received: %s", type);
 }
 
@@ -4933,6 +5057,10 @@ void edwork_load_nodes(struct edfs *edfs_context) {
     uint32_t offset = 0;
     notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     edfs_context->list_timestamp = time(NULL);
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+    usleep(50000);
+    edwork_broadcast_discovery(edfs_context);
+#endif
 }
 
 void flush_queue(struct edfs *edfs_context) {
@@ -5101,6 +5229,13 @@ int edwork_thread(void *userdata) {
         edfs_context->pub_len = read_signature(edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
         EDFS_THREAD_UNLOCK(edfs_context);
     }
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+    if (edfs_context->pub_len > 0) {
+        unsigned char key_hash[32];
+        sha256(edfs_context->pubkey, edfs_context->pub_len, key_hash);
+        hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)edfs_context->key_hash);
+    }
+#endif
 
     struct edwork_data *edwork = edwork_create(edfs_context->port, edfs_context->cache_directory, edfs_context->pubkey);
     if (!edwork) {
@@ -5188,6 +5323,11 @@ int edwork_thread(void *userdata) {
             uint32_t offset = htonl(0);
             notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             edfs_context->list_timestamp = time(NULL);
+
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+            if (!edfs_context->ping_received)
+                edwork_broadcast_discovery(edfs_context);
+#endif
         }
 
         if (time(NULL) - write_nodes > EDWORK_NODE_WRITE_INTERVAL) {
@@ -5468,6 +5608,9 @@ struct edfs *edfs_create_context(const char *use_working_directory) {
         avl_initialize(&edfs_context->ino_cache, ino_compare, avl_ino_destructor);
         avl_initialize(&edfs_context->ino_checksum_mismatch, ino_compare, avl_ino_destructor);
         avl_initialize(&edfs_context->ino_sync_file, ino_compare, avl_ino_destructor);
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+        avl_initialize(&edfs_context->peer_discovery, ino_compare, avl_ino_destructor);
+#endif
     }
     return edfs_context;
 }
@@ -5479,6 +5622,10 @@ void edfs_destroy_context(struct edfs *edfs_context) {
     avl_destroy(&edfs_context->ino_cache, avl_ino_key_data_destructor);
     avl_destroy(&edfs_context->ino_checksum_mismatch, avl_ino_key_cache_destructor);
     avl_destroy(&edfs_context->ino_sync_file, avl_ino_key_cache_destructor);
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+    avl_destroy(&edfs_context->peer_discovery, avl_ino_key_data_destructor);
+#endif
+
 
     blockchain_free(edfs_context->chain);
 
