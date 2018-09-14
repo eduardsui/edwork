@@ -1156,7 +1156,7 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
         log_trace("scheduling as new event");
         updated_event = (struct edfs_event *)malloc(sizeof(struct edfs_event));
         if (!updated_event) {
-            thread_mutex_unlock(&edfs_context->steop);
+            thread_mutex_unlock(&edfs_context->events_lock);
             return 0;
         }
         updated_event->next = edfs_context->events;
