@@ -1156,7 +1156,7 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
         log_trace("scheduling as new event");
         updated_event = (struct edfs_event *)malloc(sizeof(struct edfs_event));
         if (!updated_event) {
-            thread_mutex_unlock(&edfs_context->events_lock);
+            thread_mutex_unlock(&edfs_context->steop);
             return 0;
         }
         updated_event->next = edfs_context->events;
@@ -1220,8 +1220,10 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
     while (root) {
         i++;
         next = (struct edfs_event *)root->next;
-        if (edfs_context->network_done)
+        if (edfs_context->network_done) {
+            thread_mutex_unlock(&edfs_context->events_lock);
             return 0;
+        }
         if (root->callback) {
             if ((!root->when) || (root->timestamp + root->when <= now)) {
                 thread_mutex_unlock(&edfs_context->events_lock);
