@@ -2138,13 +2138,7 @@ int read_chunk(struct edfs *edfs_context, const char *path, int64_t chunk, char 
     return size;
 }
 
-int edfs_update_chain(struct edfs *edfs_context, uint64_t ino, int64_t file_size, unsigned char *hash, uint64_t *hash_chunks) {
-    char fullpath[MAX_PATH_LEN];
-    char fullpath2[MAX_PATH_LEN];
-    char b64name[MAX_B64_HASH_LEN];
-    unsigned char signature_data[64];
-    uint64_t i;
-
+uint64_t edfs_get_max_chunk(uint64_t ino, int64_t file_size) {
     uint64_t file_chunks = file_size / BLOCK_SIZE;
 
     if (file_size % BLOCK_SIZE)
@@ -2155,6 +2149,18 @@ int edfs_update_chain(struct edfs *edfs_context, uint64_t ino, int64_t file_size
 
     if (file_chunks % chunks_per_hash)
         max_chunk ++;
+
+    return max_chunk;
+}
+
+int edfs_update_chain(struct edfs *edfs_context, uint64_t ino, int64_t file_size, unsigned char *hash, uint64_t *hash_chunks) {
+    char fullpath[MAX_PATH_LEN];
+    char fullpath2[MAX_PATH_LEN];
+    char b64name[MAX_B64_HASH_LEN];
+    unsigned char signature_data[64];
+    uint64_t i;
+
+    uint64_t max_chunk = edfs_get_max_chunk(ino, file_size);
 
     if (hash_chunks)
         *hash_chunks = max_chunk;
@@ -2281,7 +2287,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
         if ((size > 0) && (memcmp(hash, null_hash, 32))) {
             // file hash hash
             int valid_hash = 0;
-            uint64_t max_chunks = 1;
+            uint64_t max_chunks = edfs_get_max_chunk(ino, size);
             uint64_t i;
             uint64_t start = microseconds();
             void *hash_error = (struct edfs_ino_cache *)avl_search(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
@@ -2308,7 +2314,6 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                     *(uint64_t *)(additional_data + 8)= htonll(i);
                     // EDFS_THREAD_LOCK(edfs_context);
                     notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                    usleep(1000);
                     // EDFS_THREAD_UNLOCK(edfs_context);
                 }
 
