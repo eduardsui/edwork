@@ -19,6 +19,7 @@ struct block {
 
 struct block *block_new(struct block *previous_block, const unsigned char *data, unsigned int data_len);
 void block_free(struct block *block);
+int block_mine_with_copy(struct block *newblock, int zero_bits, unsigned char previous_hash[32]);
 int block_mine(struct block *newblock, int zero_bits);
 int block_verify(struct block *newblock, int zero_bits);
 int blockchain_verify(struct block *newblock, int zero_bits);

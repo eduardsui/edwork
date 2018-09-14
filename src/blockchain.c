@@ -56,11 +56,11 @@ void block_free(struct block *block) {
     free(block);
 }
 
-int block_mine(struct block *newblock, int zero_bits) {
+int block_mine_with_copy(struct block *newblock, int zero_bits, unsigned char *previous_hash) {
     sha3_context ctx;
+    static unsigned char ref_hash[32];
     const unsigned char *hash;
     char proof_of_work[0x100];
-    static unsigned char ref_hash[32];
     char in[16];
     char out[32];
     int len;
@@ -70,6 +70,9 @@ int block_mine(struct block *newblock, int zero_bits) {
 
     if ((zero_bits < 0) || (zero_bits > 64))
         return 0;
+
+    if (!previous_hash)
+        previous_hash = ref_hash;
 
     proof_of_work[0] = 0;
 
@@ -107,10 +110,7 @@ int block_mine(struct block *newblock, int zero_bits) {
         sha3_Update(&ctx, proof_of_work, proof_len);
         sha3_Update(&ctx, (unsigned char *)&counter_be, 8);
 #endif
-        if (newblock->previous_block)
-            sha3_Update(&ctx, ((struct block *)newblock->previous_block)->hash, 32);
-        else
-            sha3_Update(&ctx, ref_hash, 32);
+        sha3_Update(&ctx, previous_hash, 32);
 
         hash = (const unsigned char *)sha3_Finalize(&ctx);
 
@@ -128,6 +128,13 @@ int block_mine(struct block *newblock, int zero_bits) {
             return 0;
     }
     return 0;
+}
+
+int block_mine(struct block *newblock, int zero_bits) {
+    if (!newblock)
+        return 0;
+
+    return block_mine_with_copy(newblock, zero_bits, newblock->previous_block ? ((struct block *)newblock->previous_block)->hash : NULL);
 }
 
 int block_verify(struct block *newblock, int zero_bits) {

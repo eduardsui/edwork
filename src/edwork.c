@@ -1412,7 +1412,8 @@ int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsi
             sent = safe_sendto(data, NULL, (const char *)packet, len, 0, (struct sockaddr *)clientaddr, clientaddrlen);
         if (sent < 0)
             log_error("error in sendto (peer)");
-    }
+    } else
+        log_error("invalid packet");
     free(packet);
     return sent;
 }

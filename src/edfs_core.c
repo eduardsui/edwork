@@ -1137,6 +1137,7 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
     if ((!callback) || (!edfs_context))
         return 0;
 
+    log_trace("scheduling event");
     thread_mutex_lock(&edfs_context->events_lock);
     int i;
     struct edfs_event *updated_event = NULL;
@@ -1152,6 +1153,7 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
     }
 
     if (!updated_event) {
+        log_trace("scheduling as new event");
         updated_event = (struct edfs_event *)malloc(sizeof(struct edfs_event));
         if (!updated_event) {
             thread_mutex_unlock(&edfs_context->events_lock);
@@ -1174,6 +1176,7 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
     else
         updated_event->timeout = 0;
     thread_mutex_unlock(&edfs_context->events_lock);
+    log_trace("scheduling done");
     return 1;
 }
 
@@ -3311,7 +3314,7 @@ int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint
         uint64_t requested_block = htonll(edfs_context->chain->index + 2 - userdata_a);
         notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
-        if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 10)) {
+        if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 30)) {
             edfs_context->hblk_scheduled = 0;
             return 1;
         }
@@ -3345,6 +3348,8 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
     char chunk_path[MAX_PATH_LEN];
     unsigned char sig_buffer[64];
 
+    log_trace("ensure data");
+
     if ((!try_update_hash) && (json_version)) {
         uint64_t version = (uint64_t)(uintptr_t)avl_search(&edfs_context->ino_sync_file, (void *)(uintptr_t)inode);
         // already up to date
@@ -3375,8 +3380,10 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
     if (!file_size)
         file_size = get_size_json(edfs_context, inode);
 
-    if (!file_size)
+    if (!file_size) {
+        log_trace("file size is 0");
         return;
+    }
 
     uint64_t last_file_chunk = file_size / BLOCK_SIZE;
     if ((last_file_chunk % BLOCK_SIZE == 0) && (last_file_chunk))
@@ -3396,11 +3403,9 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         }
     } else {
         if ((try_update_hash) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
-            unsigned char computed_hash[32];
             unsigned char additional_data[16];
-            uint64_t max_chunks;
+            uint64_t max_chunks = edfs_get_max_chunk(inode, file_size);
 
-            edfs_update_chain(edfs_context, inode, file_size, computed_hash, &max_chunks);
             *(uint64_t *)additional_data = htonll(inode);
             int i;
             for (i = 0; i < max_chunks; i ++) {
@@ -3420,6 +3425,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         avl_insert(&edfs_context->ino_sync_file, (void *)(uintptr_t)inode, (void *)avl_data);
 
     }
+    log_trace("ensure data done");
 }
 
 int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload, int size, uint64_t *ino) {
@@ -3892,6 +3898,7 @@ void edfs_try_new_block(struct edfs *edfs_context) {
 
 
         if (((microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) && (microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT)) {
+            log_info("mining new block");
             edwork_callback_lock(edfs_context->edwork, 1);
             edfs_sort(edfs_context->proof_inodes, edfs_context->proof_inodes_len);
             int block_data_size = edfs_context->proof_inodes_len * (sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32) + 72;
@@ -3919,14 +3926,21 @@ void edfs_try_new_block(struct edfs *edfs_context) {
             ptr += 32;
             memcpy(ptr, edfs_context->proof_of_time, 40);
             ptr += 40;
-            edwork_callback_lock(edfs_context->edwork, 0);
 
+            struct block *old_chain = edfs_context->chain;
             struct block *newblock = block_new(edfs_context->chain, block_data, block_data_size);
             if (newblock) {
-                block_mine(newblock, BLOCKCHAIN_COMPLEXITY);
+                unsigned char previous_hash[32];
+                unsigned char *previous_hash_ptr = previous_hash;
+                if (edfs_context->chain)
+                    memcpy(previous_hash, edfs_context->chain->hash, 32);
+                else
+                    previous_hash_ptr = NULL;
+                edwork_callback_lock(edfs_context->edwork, 0);
+                block_mine_with_copy(newblock, BLOCKCHAIN_COMPLEXITY, previous_hash_ptr);
                 edwork_callback_lock(edfs_context->edwork, 1);
                 // check if someone finished faster
-                if (edfs_context->chain->index == newblock->index - 1) {
+                if ((edfs_context->chain->index == newblock->index - 1) && (edfs_context->chain == old_chain)) {
                     memset(edfs_context->proof_of_time, 0, 40);
                     edfs_context->proof_inodes_len = 0;
                     edfs_context->chain = newblock;
@@ -3937,7 +3951,8 @@ void edfs_try_new_block(struct edfs *edfs_context) {
                 } else
                     block_free(newblock);
                 edwork_callback_lock(edfs_context->edwork, 0);
-            }
+            } else
+                edwork_callback_lock(edfs_context->edwork, 0);
         }
     }
 }
@@ -3997,7 +4012,7 @@ int edfs_check_blockhash(struct edfs *edfs_context, const unsigned char *blockha
     if (!edfs_context->hblk_scheduled) {
         edfs_context->block_timestamp = time(NULL);
         edfs_context->hblk_scheduled = 1;
-        edfs_schedule(edfs_context, edfs_blockchain_request, 500000, 0, 1, microseconds(), 0, 0);
+        edfs_schedule(edfs_context, edfs_blockchain_request, 500000, 0, 1, microseconds(), 0, 1);
     }
 
     return 0;
@@ -4742,13 +4757,7 @@ one_loop:
                     struct block *previous_block = (struct block *)edfs_context->chain->previous_block;
                     block_free(edfs_context->chain);
                     edfs_context->chain = previous_block;
-                    if ((previous_block) && (previous_block->index))
-                        requested_block = htonll(previous_block->index);
-                    else
-                        requested_block = htonll(1);
-                    // EDFS_THREAD_LOCK(edfs_context);
-                    notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                    // EDFS_THREAD_UNLOCK(edfs_context);
+                    edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 1);
                     edfs_context->block_timestamp = time(NULL);
                 }
                 block_free(newblock);
@@ -4863,14 +4872,8 @@ one_loop:
                             EDFS_THREAD_UNLOCK(edfs_context);
                             edfs_context->chain_errors = 0;
                         }
-                        uint64_t requested_block;
-                        if ((previous_block) && (previous_block->index))
-                            requested_block = htonll(previous_block->index);
-                        else
-                            requested_block = htonll(1);
-                        // EDFS_THREAD_LOCK(edfs_context);
-                        notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                        // EDFS_THREAD_UNLOCK(edfs_context);
+                        edfs_context->block_timestamp = time(NULL);
+                        edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 1);
                     }
                     block_free(topblock);
                 }
@@ -4892,18 +4895,14 @@ one_loop:
         }
         if ((!edfs_context->chain) && (topblock->index)) {
             // request all chain
-            uint64_t requested_block = htonll(1);
-            // EDFS_THREAD_LOCK(edfs_context);
-            notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            // EDFS_THREAD_UNLOCK(edfs_context);
+            edfs_context->block_timestamp = time(NULL);
+            edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 1);
         }
         if ((edfs_context->chain) && (topblock->index != edfs_context->chain->index + 1)) {
             log_warn("invalid block index");
 
-            uint64_t requested_block = htonll(edfs_context->chain->index + 2);
-            // EDFS_THREAD_LOCK(edfs_context);
-            notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            // EDFS_THREAD_UNLOCK(edfs_context);
+            edfs_context->block_timestamp = time(NULL);
+            edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 1);
             block_free(topblock);
             return;
         }
@@ -5261,7 +5260,7 @@ int edwork_thread(void *userdata) {
     }
 
     edfs_context->hblk_scheduled = 1;
-    edfs_schedule(edfs_context, edfs_blockchain_request, edfs_context->resync ? 100000 : 1000000, 0, 0, 0, 0, 0);
+    edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 0);
 
     char *host_and_port = edfs_context->host_and_port;
     if ((host_and_port) && (host_and_port[0])) {
@@ -5555,9 +5554,33 @@ int edfs_init(struct edfs *edfs_context) {
             log_info("blockchain verified, head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
         } else {
             log_error("blockchain is invalid, head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
-            blockchain_free(edfs_context->chain);
-            edfs_context->chain = NULL;
+            while (edfs_context->chain) {
+                struct block *chain = edfs_context->chain;
+                struct block *top_chain = chain;
+                while (chain) {
+                    if (!block_verify(chain, BLOCKCHAIN_COMPLEXITY)) {
+                        edfs_context->chain = (struct block *)chain->previous_block;
+                        chain->previous_block = NULL;
+                        // free invalid chain
+                        blockchain_free(top_chain);
+                        break;
+                    }
+                    chain = (struct block *)chain->previous_block;
+                }
+                // found a valid chain?
+                if (!chain)
+                    break;
+            }
+            if (edfs_context->chain)
+                log_info("blockchain is invalid, new head is %" PRIu64 ", UTC: %s", edfs_context->chain->index, asctime(tstamp));
+
             recursive_rmdir(edfs_context->blockchain_directory);
+            recursive_mkdir(edfs_context->blockchain_directory);
+            struct block *chain = edfs_context->chain;
+            while (chain) {
+                edfs_block_save(edfs_context, chain);
+                chain = (struct block *)chain->previous_block;
+            }
         }
     }
     recursive_mkdir(edfs_context->blockchain_directory);
