@@ -3604,7 +3604,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id) && (current_generation == generation) && (!deleted)) {
                         uint64_t file_size = (uint64_t)json_object_get_number(root_object, "size");
                         if (file_size)
-                            edfs_ensure_data(edfs_context, inode, file_size, 0, 0, generation + 1);
+                            edfs_queue_ensure_data(edfs_context, inode, file_size, 0, 0, generation + 1);
                     }
                 } else
                 if (current_type) {
@@ -3646,7 +3646,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                 if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id)) {
                     uint64_t file_size = (uint64_t)json_object_get_number(root_object, "size");
                     if (file_size)
-                        edfs_ensure_data(edfs_context, inode, file_size, 0, 0, generation + 1);
+                        edfs_queue_ensure_data(edfs_context, inode, file_size, 0, 0, generation + 1);
                 }
             } else
             if (!deleted) {
@@ -3790,7 +3790,7 @@ int edwork_process_data(struct edfs *edfs_context, const unsigned char *payload,
         edwork_cache_addr(edfs_context, inode, clientaddr, clientaddrlen);
 
         if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id))
-            edfs_ensure_data(edfs_context, inode, (uint64_t)0, 1, 0, 0);
+            edfs_queue_ensure_data(edfs_context, inode, (uint64_t)0, 1, 0, 0);
 
         if (written_bytes == datasize) {
             log_trace("written chunk %" PRIu64, chunk);
@@ -4155,8 +4155,8 @@ void edfs_new_chain_request_descriptors(struct edfs *edfs_context, int level) {
                 if ((generation != inode_version) || (memcmp(hash, ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), 32)))
                     notify_io(edfs_context, "wand", ptr, 8, NULL, 0, 0, 0, inode, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
-                if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id) && (type) && (file_size))
-                    edfs_ensure_data(edfs_context, inode, file_size, 1, 0, generation + 1);
+                if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id) && (type) && (file_size) && (blockchain->timestamp >= microseconds() - 7ULL * 24ULL * 3600000000ULL))
+                    edfs_queue_ensure_data(edfs_context, inode, file_size, 1, 0, generation + 1);
 
                 ptr += record_size;
             }
