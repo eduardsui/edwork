@@ -17,6 +17,7 @@
 
 #include "sha256.h"
 #include "base64.h"
+#include "base32.h"
 #include "parson.h"
 #include "xxhash.h"
 #ifdef _WIN32
@@ -576,7 +577,13 @@ int edfs_file_unlock(struct edfs *edfs_context, FILE *f) {
     HANDLE f2 = (HANDLE)_get_osfhandle(fileno(f));
     if (!f2)
         return -1;
-    if (!UnlockFile(f2, 0, 0, MAXDWORD, MAXDWORD))
+
+    OVERLAPPED sOverlapped;
+    memset(&sOverlapped, 0, sizeof(OVERLAPPED));
+    sOverlapped.Offset = 0;
+    sOverlapped.OffsetHigh = 0;
+
+    if (!UnlockFileEx(f2, 0, MAXDWORD, MAXDWORD, &sOverlapped))
         return -1;
     return 0;
 #else
@@ -779,9 +786,26 @@ uint64_t computeinode(uint64_t parent_inode, const char *name) {
 
 const char *computename(uint64_t inode, char *out) {
     inode = htonll(inode);
+#ifdef EDFS_CASE_INSENSITIVE_ENCODING
+    size_t len = base32_encode((const BYTE *)&inode, sizeof(uint64_t), (BYTE *)out, MAX_B64_HASH_LEN);
+#else
     size_t len = base64_encode_no_padding((const BYTE *)&inode, sizeof(uint64_t), (BYTE *)out, MAX_B64_HASH_LEN);
+#endif
     out[len] = 0;
     return (const char *)out;
+}
+
+const char *computeblockname(uint64_t inode, char *out) {
+#ifdef EDFS_BASE64_BLOCKNAME
+    return computename(inode, out);
+#else
+    inode = htonll(inode);
+    size_t len = base32_encode((const BYTE *)&inode, sizeof(uint64_t), (BYTE *)out, MAX_B64_HASH_LEN);
+    if (len < 0)
+        len = 0;
+    out[len] = 0;
+    return (const char *)out;
+#endif
 }
 
 int signature_allows_write(struct edfs *edfs_context) {
@@ -1391,8 +1415,13 @@ uint64_t unpacked_ino(const char *data) {
     uint64_t ino = 0;
     if ((data) && (data[0])) {
         unsigned char buf[MAX_B64_HASH_LEN];
+#ifdef EDFS_CASE_INSENSITIVE_ENCODING
+        if (base32_decode((const BYTE *)data, (BYTE *)buf, MAX_B64_HASH_LEN) == 8)
+            ino = ntohll((*(uint64_t *)buf));
+#else
         if (base64_decode_no_padding((const BYTE *)data, (BYTE *)buf, MAX_B64_HASH_LEN) == 8)
             ino = ntohll((*(uint64_t *)buf));
+#endif
     }
     return ino;
 }
@@ -3958,7 +3987,7 @@ void edfs_broadcast_top(struct edfs *edfs_context, void *use_clientaddr, int cli
 
     char b64name[MAX_B64_HASH_LEN];
     unsigned char buffer[EDWORK_PACKET_SIZE];
-    int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computename(edfs_context->chain->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+    int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computeblockname(edfs_context->chain->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
     if (len > 0) {
         notify_io(edfs_context, "topb", (const unsigned char *)buffer, len, NULL, 0, 0, 0, 0, edfs_context->edwork, 0, 0, use_clientaddr, clientaddr_len, NULL, NULL);
         log_info("broadcasting chain block");
@@ -4777,7 +4806,7 @@ one_loop:
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
 
         char b64name[MAX_B64_HASH_LEN];
-        computename(index, b64name);
+        computeblockname(index, b64name);
         int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
         if (len > 0) {
             if (edwork_send_to_peer(edfs_context->edwork, is_top ? "topb" : "blkd", buffer, len, clientaddr, clientaddrlen, is_sctp) <= 0)
@@ -4806,7 +4835,7 @@ one_loop:
         uint64_t requested_block = htonll(newblock->index + 2);
         char b64name[MAX_B64_HASH_LEN];
         if ((!edfs_context->chain) && (!newblock->index)) {
-            edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+            edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
             edfs_context->chain = newblock;
             edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
             edfs_new_chain_request_descriptors(edfs_context, 0);
@@ -4819,13 +4848,14 @@ one_loop:
             newblock->previous_block = edfs_context->chain;
             if (block_verify(newblock, BLOCKCHAIN_COMPLEXITY)) {
                 notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+                edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
                 edfs_context->chain = newblock;
                 edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
                 edfs_new_chain_request_descriptors(edfs_context, 0);
                 edfs_context->top_broadcast_timestamp = 0;
                 edfs_try_reset_proof(edfs_context);
                 edfs_context->block_timestamp = time(NULL);
+                edfs_context->chain_errors = 0;
             } else {
                 log_error("block verify error");
                 // fork? resync chain
@@ -4840,7 +4870,7 @@ one_loop:
             }
         } else {
             char b64name[MAX_B64_HASH_LEN];
-            computename(newblock->index, b64name);
+            computeblockname(newblock->index, b64name);
             int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
             if (len > 64) {
                 struct block *temp_block = block_load_buffer(buffer + 64, len - 64);
@@ -4848,23 +4878,38 @@ one_loop:
                     if (edwork_send_to_peer(edfs_context->edwork, "blkd", buffer, len, clientaddr, clientaddrlen, is_sctp) <= 0)
                         log_error("error sending chain block");
                     log_warn("invalid block received (%i)", (int)newblock->index);
-                } else
+                    edfs_context->chain_errors ++;
+                } else {
                     log_trace("already owned received block (%i)", (int)newblock->index);
+                    edfs_context->chain_errors = 0;
+                }
 
                 block_free(temp_block);
                 block_free(newblock);
                 newblock = NULL;
-            } else
+            } else {
+                edfs_context->chain_errors ++;
                 log_warn("invalid block received (%i)", (int)newblock->index);
+            }
 
             if (newblock) {
-                computename(newblock->index  + 1, b64name);
+                computeblockname(newblock->index  + 1, b64name);
                 len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
                 if (len > 64) {
                     if (edwork_send_to_peer(edfs_context->edwork, "blkd", buffer, len, clientaddr, clientaddrlen, is_sctp) <= 0)
                         log_error("error sending chain block");
                 }
                 block_free(newblock);
+            }
+
+            if (edfs_context->chain_errors >= 10000) {
+                EDFS_THREAD_LOCK(edfs_context);
+                blockchain_free(edfs_context->chain);
+                edfs_context->chain = NULL;
+                EDFS_THREAD_UNLOCK(edfs_context);
+                edfs_context->chain_errors = 0;
+                edfs_context->block_timestamp = time(NULL);
+                edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 1);
             }
         }
         return;
@@ -4920,7 +4965,7 @@ one_loop:
                 if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
                     block_free(edfs_context->chain);
                     edfs_context->chain = topblock;
-                    edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+                    edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
                     edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
                     edfs_new_chain_request_descriptors(edfs_context, 0);
                     edfs_context->top_broadcast_timestamp = 0;
@@ -4933,7 +4978,7 @@ one_loop:
                     log_warn("cannot mediate received block (block verify failed)");
                     // fork? resync chain
                     if (edfs_context->chain) {
-                        edfs_context->chain_errors++;
+                        edfs_context->chain_errors ++;
                         struct block *previous_block = NULL;
                         if (edfs_context->chain_errors < 10000) {
                             EDFS_THREAD_LOCK(edfs_context);
@@ -4987,7 +5032,7 @@ one_loop:
             block_free(topblock);
             return;
         }
-        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
         topblock->previous_block = edfs_context->chain;
         edfs_context->chain = topblock;
         if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
@@ -5611,7 +5656,7 @@ void edfs_block_save(struct edfs *edfs_context, struct block *chain) {
     char b64name[MAX_B64_HASH_LEN];
     unsigned char *buffer = block_save_buffer(chain, &size);
     if (buffer) {
-        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computename(chain->index, b64name), buffer, size, NULL, 1, NULL, NULL, NULL, NULL);
+        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(chain->index, b64name), buffer, size, NULL, 1, NULL, NULL, NULL, NULL);
         free(buffer);
     }
 }
@@ -5625,7 +5670,7 @@ struct block *edfs_blockchain_load(struct edfs *edfs_context) {
 
         char b64name[MAX_B64_HASH_LEN];
         unsigned char buffer[BLOCK_SIZE_MAX];
-        int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computename(i ++, b64name), buffer, BLOCK_SIZE_MAX, NULL, 0, 1, 0, NULL, 0);
+        int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computeblockname(i ++, b64name), buffer, BLOCK_SIZE_MAX, NULL, 0, 1, 0, NULL, 0);
         if (len <= 0)
             break;
 
