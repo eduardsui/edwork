@@ -5005,6 +5005,7 @@ one_loop:
                 if (edfs_context->chain->index > topblock->index)
                     log_warn("owned chain index is newer");
                 // force rebroadcast top
+                edfs_context->chain_errors ++;
                 edfs_broadcast_top(edfs_context, clientaddr, clientaddrlen);
                 if ((edfs_context->chain->index == topblock->index) && (microseconds() - edfs_context->top_broadcast_timestamp >= EDFS_BLOCKCHAIN_MIN_TIMEOUT / 2)) {
                     edfs_context->top_broadcast_timestamp = microseconds();
@@ -5021,7 +5022,7 @@ one_loop:
         }
         if ((edfs_context->chain) && (topblock->index != edfs_context->chain->index + 1)) {
             log_warn("invalid block index");
-
+            edfs_context->chain_errors ++;
             edfs_context->block_timestamp = time(NULL);
             edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 1);
             block_free(topblock);
@@ -5046,8 +5047,18 @@ one_loop:
             edfs_context->block_timestamp = time(NULL);
         } else {
             log_error("block verify error");
+            edfs_context->chain_errors ++;
             edfs_context->chain = (struct block *)edfs_context->chain->previous_block;
             block_free(topblock);
+        }
+        if (edfs_context->chain_errors >= 10000) {
+            EDFS_THREAD_LOCK(edfs_context);
+            blockchain_free(edfs_context->chain);
+            edfs_context->chain = NULL;
+            EDFS_THREAD_UNLOCK(edfs_context);
+            edfs_context->chain_errors = 0;
+            edfs_context->block_timestamp = time(NULL);
+            edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 1);
         }
         return;
     }
