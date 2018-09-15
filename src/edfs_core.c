@@ -3515,11 +3515,11 @@ void edfs_queue_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t 
     io->try_update_hash = try_update_hash;
     io->start_chunk = start_chunk;
     io->json_version = json_version;
+    io->next = NULL;
 
     thread_mutex_lock(&edfs_context->shard_lock);
     if (edfs_context->shard_io) {
         struct edwork_shard_io *last = edfs_context->shard_io;
-        if (last)
         while (last) {
             if (!last->next) {
                 last->next = io;
@@ -3528,7 +3528,6 @@ void edfs_queue_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t 
             last = (struct edwork_shard_io *)last->next;
         }
     } else {
-        io->next = NULL;
         edfs_context->shard_io = io;
     }
     thread_mutex_unlock(&edfs_context->shard_lock);
