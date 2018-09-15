@@ -310,6 +310,7 @@ struct edfs {
     int proxy;
     uint64_t proxy_timestamp;
     uint64_t top_broadcast_timestamp;
+    uint64_t client_top_broadcast_timestamp;
 
     uint32_t chain_errors;
 
@@ -3985,12 +3986,18 @@ void edfs_broadcast_top(struct edfs *edfs_context, void *use_clientaddr, int cli
     if ((!edfs_context) || (!edfs_context->chain))
         return;
 
+    if ((use_clientaddr) && (clientaddr_len)) {
+        if (microseconds() - edfs_context->client_top_broadcast_timestamp < 1000000)
+            return;
+    }
     char b64name[MAX_B64_HASH_LEN];
     unsigned char buffer[EDWORK_PACKET_SIZE];
     int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computeblockname(edfs_context->chain->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
     if (len > 0) {
         notify_io(edfs_context, "topb", (const unsigned char *)buffer, len, NULL, 0, 0, 0, 0, edfs_context->edwork, 0, 0, use_clientaddr, clientaddr_len, NULL, NULL);
         log_info("broadcasting chain block");
+        if ((use_clientaddr) && (clientaddr_len))
+            edfs_context->client_top_broadcast_timestamp = microseconds();
     }
 }
 
