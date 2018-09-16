@@ -208,6 +208,12 @@ struct edwork_data {
     #define EDWORK_THREAD_UNLOCK(data)
 #endif
 
+#ifdef WITH_SCTP
+int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int ttl);
+#endif
+int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len);
+
+
 const char *edwork_addr_ipv4(const void *clientaddr_ptr) {
     struct sockaddr_in *clientaddr = (struct sockaddr_in *)clientaddr_ptr;
     static char str_addr[sizeof("255.255.255.255:65535")];
