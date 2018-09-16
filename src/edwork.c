@@ -283,7 +283,7 @@ void edwork_init() {
     usrsctp_sysctl_set_sctp_rto_max_default(100);
     usrsctp_sysctl_set_sctp_rto_min_default(50);
     usrsctp_sysctl_set_sctp_rto_initial_default(50);
-    usrsctp_sysctl_set_sctp_init_rto_max_default(5000);
+    usrsctp_sysctl_set_sctp_init_rto_max_default(30000);
     usrsctp_sysctl_set_sctp_sack_freq_default(1);
     usrsctp_sysctl_set_sctp_delayed_sack_time_default(50);
     usrsctp_sysctl_set_sctp_max_burst_default(1);
@@ -316,14 +316,82 @@ void edwork_done() {
 #ifdef WITH_SCTP
 
 #ifdef WITH_USRSCTP
-static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *sock, union sctp_notification *notif, size_t n) {
-    if (notif->sn_header.sn_length != (uint32_t)n)
+static void edwork_sctp_update_socket(struct edwork_data *edwork, struct socket *sock) {
+    if ((!edwork) || (!sock) || (sock == edwork->sctp_socket))
         return;
 
+    int i;
+    thread_mutex_lock(&edwork->clients_lock);
+    for (i = 0; i < edwork->clients_count; i++) {
+        if ((edwork->clients[i].socket) && (edwork->clients[i].socket == sock)) {
+            edwork->clients[i].is_sctp = 1;
+            edwork->clients[i].sctp_timestamp = time(NULL);
+            edwork->sctp_timestamp = edwork->clients[i].sctp_timestamp;
+            break;
+        }
+    }
+    thread_mutex_unlock(&edwork->clients_lock);
+}
+
+static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *sock, union sctp_notification *notif, size_t n, struct sctp_rcvinfo *rcvinfo) {
+    if (notif->sn_header.sn_length != (uint32_t)n) {
+        log_error("sctp notification error");
+        return;
+    }
+    int i;
     int reset = 0;
     switch (notif->sn_header.sn_type) {
         case SCTP_ASSOC_CHANGE:
-            log_trace("SCTP_ASSOC_CHANGE");
+            switch (notif->sn_assoc_change.sac_state) {
+                case SCTP_COMM_UP:
+                    {
+                        log_trace("SCTP_COMM_UP");
+                        struct sockaddr *addrs = NULL;
+                        int n = SCTP_getpaddrs(sock, rcvinfo->rcv_assoc_id, &addrs);
+                        if ((n <= 0) || (!addrs)) {
+                            log_error("error in sctp_getpaddrs (%i)", errno);
+                        } else {
+                            if (addrs->sa_family == AF_INET6)
+                                edwork_send_to_sctp_socket(edwork, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in6), 0);
+                            else
+                            if (addrs->sa_family == AF_INET) {
+                                log_trace("SCTP_COMM_UP (%s)", edwork_addr_ipv4(addrs));
+                                edwork_send_to_sctp_socket(edwork, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in), 0);
+                            }
+
+                            edwork_sctp_update_socket(edwork, sock);
+                        }
+                    }
+                    break;
+                
+                case SCTP_RESTART:
+                    log_trace("SCTP_RESTART");
+                    reset = 1;
+                    break;
+
+                case SCTP_COMM_LOST:
+                    log_trace("SCTP_COMM_LOST");
+                    reset = 1;
+                    break;
+
+                case SCTP_SHUTDOWN_COMP:
+                    log_trace("SCTP_SHUTDOWN_COMP");
+                    reset = 1;
+                    break;
+
+                case SCTP_CANT_STR_ASSOC:
+                    if ((notif->sn_assoc_change.sac_state != SCTP_COMM_UP) && (notif->sn_assoc_change.sac_state != SCTP_RESTART)) {
+                        if (edwork->sctp_timestamp) {
+                            log_trace("SCTP_CANT_STR_ASSOC, STATE: %i", (int)notif->sn_assoc_change.sac_state);
+                            reset = 1;
+                        }
+                    }
+                    break;
+
+                default:
+                    log_trace("SCTP_ASSOC_CHANGE, STATE: %i", (int)notif->sn_assoc_change.sac_state);
+                    break;
+            }
             break;
         case SCTP_PEER_ADDR_CHANGE:
             log_trace("SCTP_PEER_ADDR_CHANGE");
@@ -353,7 +421,6 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             break;
         case SCTP_SEND_FAILED_EVENT:
             log_trace("SCTP_SEND_FAILED_EVENT");
-            reset = 1;
             break;
         case SCTP_STREAM_RESET_EVENT:
             log_trace("SCTP_STREAM_RESET_EVENT");
@@ -368,21 +435,37 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             log_trace("SCTP: unknown event");
             break;
     }
-    if ((reset) && (sock != edwork->sctp_socket)) {
-        int i;
-        thread_mutex_lock(&edwork->clients_lock);
-        for (i = 0; i < edwork->clients_count; i++) {
-            if ((edwork->clients[i].socket) && (edwork->clients[i].socket == sock)) {
-                SCTP_close(edwork->clients[i].socket);
-                edwork->clients[i].socket = 0;
-                edwork->clients[i].is_sctp = 0;
-                if (edwork->clients[i].sctp_timestamp == edwork->sctp_timestamp)
-                    edwork->sctp_timestamp = 0;
-                edwork->clients[i].sctp_timestamp = 0;
-                break;
+    if (reset) {
+        struct sockaddr *addrs = NULL;
+        int n = SCTP_getpaddrs(sock, rcvinfo->rcv_assoc_id, &addrs);
+        if ((n > 0) && (addrs))
+            log_trace("SCTP connection reset %s", edwork_addr_ipv4(addrs));
+        if (sock != edwork->sctp_socket) {
+            thread_mutex_lock(&edwork->clients_lock);
+            for (i = 0; i < edwork->clients_count; i++) {
+                if ((edwork->clients[i].socket) && (edwork->clients[i].socket == sock)) {
+                    SCTP_close(edwork->clients[i].socket);
+                    edwork->clients[i].socket = 0;
+                    edwork->clients[i].is_sctp = 0;
+                    edwork->clients[i].is_listen_socket = 0;
+                    if (edwork->clients[i].sctp_timestamp == edwork->sctp_timestamp)
+                        edwork->sctp_timestamp = 0;
+                    edwork->clients[i].sctp_timestamp = 0;
+                    break;
+                }
+            }
+            thread_mutex_unlock(&edwork->clients_lock);
+        } else {
+            struct sockaddr *addrs = NULL;
+            int n = SCTP_getpaddrs(sock, rcvinfo->rcv_assoc_id, &addrs);
+            if (n > 0) {
+                if (addrs->sa_family == AF_INET6)
+                    edwork_remove_addr(edwork, addrs, sizeof(struct sockaddr_in6));
+                else
+                if (addrs->sa_family == AF_INET)
+                    edwork_remove_addr(edwork, addrs, sizeof(struct sockaddr_in));
             }
         }
-        thread_mutex_unlock(&edwork->clients_lock);
     }
 }
 
@@ -390,7 +473,7 @@ static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, v
     struct edwork_data *edwork = (struct edwork_data *)ulp_info;
     if ((flags & MSG_NOTIFICATION) || (!data) || (!edwork)) {
         if (flags & MSG_NOTIFICATION)
-            edwork_sctp_notification(edwork, sock, (union sctp_notification *)data, datalen);
+            edwork_sctp_notification(edwork, sock, (union sctp_notification *)data, datalen, &rcvinfo);
         free(data);
         return 1;
     }
@@ -461,8 +544,10 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
 	    evt.se_assoc_id = SCTP_ALL_ASSOC;
 	    evt.se_on = 1;
 
-        for (i = 0; i < sizeof(event_types) / sizeof(uint16_t); i++)
+        for (i = 0; i < sizeof(event_types) / sizeof(uint16_t); i++) {
+            evt.se_type = event_types[i];
             SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_EVENT, &evt, sizeof(evt));
+        }
 
         struct sctp_udpencaps encaps;
 	    memset(&encaps, 0, sizeof(struct sctp_udpencaps));
@@ -491,6 +576,7 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
 
     SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_INITMSG, (const char *)&initmsg, sizeof(struct sctp_initmsg));
 
+    log_trace("connecting to %s", edwork_addr_ipv4(addr));
     int err = SCTP_connect(peer_socket, addr, addr_len);
     if (!err)
         return peer_socket;
@@ -714,8 +800,10 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
 	        evt.se_assoc_id = SCTP_ALL_ASSOC;
 	        evt.se_on = 1;
 
-            for (i = 0; i < sizeof(event_types) / sizeof(uint16_t); i++)
+            for (i = 0; i < sizeof(event_types) / sizeof(uint16_t); i++) {
+                evt.se_type = event_types[i];
                 SCTP_setsockopt(data->sctp_socket, IPPROTO_SCTP, SCTP_EVENT, &evt, sizeof(evt));
+            }
 
             struct sctp_udpencaps encaps;
             memset(&encaps, 0, sizeof(struct sctp_udpencaps));
@@ -1071,10 +1159,9 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             ((struct sockaddr_in *)&addr2)->sin_port = htons(ntohs(((struct sockaddr_in *)&addr2)->sin_port) + 1);
 
         data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len);
-        if (data->clients[data->clients_count].socket) {
+        if (data->clients[data->clients_count].socket)
             data->clients[data->clients_count].sctp_reconnect_timestamp = time(NULL);
-            edwork_send_to_sctp_socket(data, data->clients[data->clients_count].socket, "helo", NULL, 0, &addr2, client_len, 0);
-        } else
+        else
             data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
     }
 
