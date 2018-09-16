@@ -110,6 +110,7 @@
 #include "avl.h"
 #include "log.h"
 
+
 uint64_t microseconds();
 uint64_t switchorder(uint64_t input);
 
@@ -133,6 +134,8 @@ uint64_t switchorder(uint64_t input);
 
 // max 128 bytes
 #define EDWOR_MAX_LAN_BROADCAST_SIZE    128
+
+#define EDWORK_SCTP_EVENTS              { SCTP_ASSOC_CHANGE }
 
 struct client_data {
     struct sockaddr_in clientaddr;
@@ -289,7 +292,7 @@ void edwork_init() {
     usrsctp_sysctl_set_sctp_recvspace(0x2000000);
     usrsctp_sysctl_set_sctp_rto_max_default(100);
     usrsctp_sysctl_set_sctp_rto_min_default(50);
-    usrsctp_sysctl_set_sctp_rto_initial_default(500);
+    usrsctp_sysctl_set_sctp_rto_initial_default(50);
     usrsctp_sysctl_set_sctp_init_rto_max_default(30000);
     usrsctp_sysctl_set_sctp_sack_freq_default(1);
     usrsctp_sysctl_set_sctp_delayed_sack_time_default(50);
@@ -346,6 +349,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
         log_error("sctp notification error");
         return;
     }
+    return;
     int i;
     int reset = 0;
     struct sockaddr *addrs = NULL;
@@ -371,7 +375,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                     }
                     break;
 
-                case SCTP_COMM_LOST:
+                /* case SCTP_COMM_LOST:
                     log_trace("SCTP_COMM_LOST");
                     reset = 2;
                     break;
@@ -390,7 +394,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
 
                 default:
                     log_trace("SCTP_ASSOC_CHANGE, STATE: %i", (int)notif->sn_assoc_change.sac_state);
-                    break;
+                    break; */
             }
             break;
         case SCTP_PEER_ADDR_CHANGE:
@@ -447,6 +451,9 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             break;
         case SCTP_SEND_FAILED_EVENT:
             log_trace("SCTP_SEND_FAILED_EVENT");
+            break;
+        case SCTP_SEND_FAILED:
+            log_trace("SCTP_SEND_FAILED");
             break;
         case SCTP_STREAM_RESET_EVENT:
             log_trace("SCTP_STREAM_RESET_EVENT");
@@ -584,7 +591,7 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
     SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_NODELAY, (const char *)&opt, sizeof(opt));
 #ifdef SCTP_UDP_ENCAPSULATION
     #ifdef WITH_USRSCTP
-	    uint16_t event_types[] = {SCTP_ASSOC_CHANGE, SCTP_PEER_ADDR_CHANGE, SCTP_REMOTE_ERROR, SCTP_SEND_FAILED, SCTP_SEND_FAILED_EVENT, SCTP_NOTIFICATIONS_STOPPED_EVENT, SCTP_SHUTDOWN_EVENT, SCTP_STREAM_RESET_EVENT};
+	    uint16_t event_types[] = EDWORK_SCTP_EVENTS;
         struct sctp_event evt;
         int i;
 
@@ -624,7 +631,6 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
 
     SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_INITMSG, (const char *)&initmsg, sizeof(struct sctp_initmsg));
 
-    log_trace("connecting to %s", edwork_addr_ipv4(addr));
     int err = SCTP_connect(peer_socket, addr, addr_len);
     if (!err)
         return peer_socket;
@@ -840,7 +846,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
 
 #ifdef SCTP_UDP_ENCAPSULATION
         #ifdef WITH_USRSCTP
-	        uint16_t event_types[] = {SCTP_ASSOC_CHANGE, SCTP_PEER_ADDR_CHANGE, SCTP_REMOTE_ERROR, SCTP_SEND_FAILED, SCTP_SEND_FAILED_EVENT, SCTP_NOTIFICATIONS_STOPPED_EVENT};
+	        uint16_t event_types[] = EDWORK_SCTP_EVENTS;
             struct sctp_event evt;
             int i;
 
@@ -1377,7 +1383,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
 }
 
 int edwork_broadcast(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino) {
-    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, NULL, 0, 500);
+    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, NULL, 0, 0);
 }
 
 int edwork_broadcast_client(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, const void *clientaddr, int clientaddr_len) {
@@ -1385,7 +1391,7 @@ int edwork_broadcast_client(struct edwork_data *data, const char type[4], const 
 }
 
 int edwork_broadcast_except(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino) {
-    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 500);
+    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 0);
 }
 
 unsigned int edwork_jumbo(struct edwork_data *data, unsigned char *jumbo_buf, unsigned int max_jumbo_size, unsigned int jumbo_size, unsigned char *buf, int buf_size) {
