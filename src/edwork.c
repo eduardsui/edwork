@@ -766,7 +766,7 @@ ssize_t safe_sendto(struct edwork_data *data, struct client_data *peer_data, con
         if ((socket) && (is_sctp))
             return safe_sctp_sendto(data, socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen, EDWORK_SCTP_TTL);
         else
-        if (((peer_data) && (peer_data->is_sctp)) || (data->sctp_last_addr == dest_addr) || (SCTP_getassocid(data->sctp_socket, dest_addr) > 0))
+        if ((peer_data) && (peer_data->is_sctp))
             return safe_sctp_sendto(data, data->sctp_socket, buf, len, flags | SCTP_UNORDERED, dest_addr, addrlen, EDWORK_SCTP_TTL);
     }
 #endif
@@ -1272,7 +1272,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     if ((data->force_sctp) && (data->clients_count))
         data->clients[data->clients_count].is_sctp = 1;
     else
-        data->clients[data->clients_count].is_sctp = is_sctp & 1;
+        data->clients[data->clients_count].is_sctp = is_listen_socket ? is_sctp : 0;
     if ((is_sctp & 1) && (is_listen_socket)) {
         data->clients[data->clients_count].sctp_timestamp = time(NULL);
         data->sctp_timestamp = data->clients[data->clients_count].sctp_timestamp;
