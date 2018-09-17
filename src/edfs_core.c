@@ -5151,6 +5151,12 @@ void edwork_save_nodes(struct edfs *edfs_context) {
     }
 }
 
+int edfs_list_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b) {
+    uint32_t offset = 0;
+    notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+    return 0;
+}
+
 void edwork_load_nodes(struct edfs *edfs_context) {
     JSON_Value *root_value = json_parse_file_with_comments(edfs_context->default_nodes);
     if (root_value) {
@@ -5193,8 +5199,7 @@ void edwork_load_nodes(struct edfs *edfs_context) {
         }
         fclose(in);
     }
-    uint32_t offset = 0;
-    notify_io(edfs_context, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+    edfs_schedule(edfs_context, edfs_list_request, 1000000, 10000000, 0, 0, 0, 0);
     edfs_context->list_timestamp = time(NULL);
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
     usleep(50000);
