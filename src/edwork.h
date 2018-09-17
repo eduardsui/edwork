@@ -26,7 +26,7 @@ int edwork_random_bytes(unsigned char *destination, int len);
 struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned char *key);
 void edwork_confirm_seq(struct edwork_data *data, uint64_t sequence, int acks);
 void edwork_update_chain(struct edwork_data *data, unsigned char *hash);
-void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket);
+void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp);
 int edworks_data_pending(struct edwork_data* data, int timeout_ms);
 int edwork_dispatch(struct edwork_data* data, edwork_dispatch_callback callback, int timeout_ms, void *userdata);
 int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback callback, unsigned char *buffer, int n, void *clientaddr, int clientaddrlen, void *userdata, int is_sctp, int is_listen_socket);

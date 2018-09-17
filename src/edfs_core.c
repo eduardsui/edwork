@@ -5162,10 +5162,11 @@ void edwork_load_nodes(struct edfs *edfs_context) {
                 if (obj) {
                     const char *host = json_object_get_string(obj, "host");
                     int port = (int)json_object_get_number(obj, "port");
+                    int sctp = (int)json_object_get_number(obj, "sctp");
                     if (port <= 0)
                         port = EDWORK_PORT;
                     if ((host) && (host[0]))
-                        edwork_add_node(edfs_context->edwork, host, port, 0);
+                        edwork_add_node(edfs_context->edwork, host, port, 0, sctp);
                 }
             }
         }
@@ -5450,7 +5451,7 @@ int edwork_thread(void *userdata) {
                 add_port = EDWORK_PORT;
         }
         if (host_and_port[0])
-            edwork_add_node(edwork, host_and_port, add_port, 0);
+            edwork_add_node(edwork, host_and_port, add_port, 0, 1);
         else
             log_error("error parsing url: %s", host_and_port);
     }

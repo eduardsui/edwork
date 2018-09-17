@@ -149,6 +149,7 @@ struct client_data {
     time_t last_seen;
 
     unsigned char is_listen_socket;
+    unsigned char sctp_socket;
 #ifdef WITH_SCTP
     time_t sctp_timestamp;
     time_t sctp_reconnect_timestamp;
@@ -335,6 +336,7 @@ static void edwork_sctp_update_socket(struct edwork_data *edwork, struct socket 
     for (i = 0; i < edwork->clients_count; i++) {
         if ((edwork->clients[i].socket) && (edwork->clients[i].socket == sock)) {
             edwork->clients[i].is_sctp = 1;
+            edwork->clients[i].sctp_socket = 1;
             edwork->clients[i].sctp_timestamp = time(NULL);
             edwork->clients[i].last_seen = time(NULL);
             edwork->sctp_timestamp = edwork->clients[i].sctp_timestamp;
@@ -889,7 +891,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
 
         serveraddr.sin_family = AF_INET;
         serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
-        serveraddr.sin_port = htons((unsigned short)port + 1);
+        serveraddr.sin_port = htons((unsigned short)port);
 
         if (SCTP_bind(data->sctp_socket, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0) {
             log_error("error binding SCTP socket");
@@ -951,7 +953,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     thread_mutex_init(&data->thread_lock);
 #endif
     thread_mutex_init(&data->callback_lock);
-    edwork_add_node(data, "255.255.255.255", port, 0);
+    edwork_add_node(data, "255.255.255.255", port, 0, 0);
 
     return data;
 }
@@ -1202,15 +1204,13 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         data->clients[data->clients_count].is_listen_socket = 0;
 #ifdef WITH_SCTP
     // no sctp for broadcast address
-    if ((is_sctp) || (data->clients_count == 0)) {
-        // is remote socket
-        data->clients[data->clients_count].socket = 0;
-        data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
-    } else {
+    data->clients[data->clients_count].socket = 0;
+    data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
+    if ((is_sctp) && (!is_listen_socket) && (data->clients_count == 0)) {
         struct sockaddr addr2;
         memcpy(&addr2, sin, client_len);
         if (addr2.sa_family == AF_INET)
-            ((struct sockaddr_in *)&addr2)->sin_port = htons(ntohs(((struct sockaddr_in *)&addr2)->sin_port) + 1);
+            ((struct sockaddr_in *)&addr2)->sin_port = ntohs(((struct sockaddr_in *)&addr2)->sin_port);
 
         data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len);
         if (data->clients[data->clients_count].socket)
@@ -1230,6 +1230,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         data->clients[data->clients_count].sctp_timestamp = 0;
 #endif
 
+    data->clients[data->clients_count].sctp_socket = is_sctp;
     data->clients_count ++;
 
     struct sockaddr_in *addr_key = (struct sockaddr_in *)malloc(sizeof(struct sockaddr_in));
@@ -1249,7 +1250,7 @@ void *edwork_ensure_node_in_list(struct edwork_data *data, void *clientaddr, int
     return add_node(data, (struct sockaddr_in *)clientaddr, clientaddrlen, 1, 1, is_sctp, is_listen_socket);
 }
 
-void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket) {
+void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp_socket) {
     struct sockaddr_in sin;
     struct hostent     *hp;
 
@@ -1268,8 +1269,12 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port, int i
     sin.sin_len         = sizeof(sin);
 #endif
 
-    if (add_node(data, &sin, sizeof(sin), 0, 0, 0, is_listen_socket))
-        log_info("added node %s:%i", node, port);
+    if (add_node(data, &sin, sizeof(sin), 0, 0, sctp_socket, is_listen_socket)) {
+        if (sctp_socket)
+            log_info("added stateful node %s:%i", node, port);
+        else
+            log_info("added node %s:%i", node, port);
+    }
 }
 
 int edwork_private_broadcast(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, int buf_is_packet, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino, const void *clientaddr, int clientaddr_len, int sleep_us) {
@@ -1745,7 +1750,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     thread_mutex_lock(&data->clients_lock);
     unsigned int found = 0;
     for (i = 0; i < data->clients_count; i++) {
-        if (*buf_size < 7)
+        if (*buf_size < 8)
             break;
 #if defined(WITH_SCTP) && defined(SCTP_UDP_ENCAPSULATION)
         if ((!data->force_sctp) && (data->clients[i].is_sctp))
@@ -1759,7 +1764,12 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
                 buf += 4;
                 memcpy(buf, &data->clients[i].clientaddr.sin_port, 2);
                 buf += 2;
-                *buf_size -= 7;
+                if (data->clients[i].sctp_socket) {
+                    *buf = 1;
+                    buf++;
+                    *buf_size -= 8;
+                } else
+                    *buf_size -= 7;
             }
             found ++;
         }
@@ -1781,7 +1791,7 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
         if ((size > buf_size) || (!size))
             break;
 
-        if (size == 6) {
+        if ((size == 6) || (size == 7)) {
             // ipv4
             buffer[0] = 0;
             snprintf(buffer, sizeof(buffer), "%i.%i.%i.%i", (int)buf[0], (int)buf[1], (int)buf[2], (int)buf[3]);
@@ -1789,7 +1799,10 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
             unsigned short port;
             memcpy(&port, buf + 4, 2);
             port = ntohs(port);
-            edwork_add_node(data, buffer, port, 0);
+            int sctp = 0;
+            if (size == 7)
+                sctp = buffer[6];
+            edwork_add_node(data, buffer, port, 0, sctp);
             records ++;
         }
 
