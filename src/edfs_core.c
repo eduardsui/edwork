@@ -5218,13 +5218,13 @@ void flush_queue(struct edfs *edfs_context) {
         if (fsio) {
             switch (fsio->ack) {
                 case 3:
-                    edwork_broadcast(edfs_context->edwork, fsio->type, fsio->buffer, fsio->size, 0, EDWORK_DATA_NODES, fsio->ino);
+                    edwork_broadcast(edfs_context->edwork, fsio->type, fsio->buffer, fsio->size, 0, EDWORK_DATA_NODES, fsio->ino, 0);
                     break;
                 case 2:
-                    edwork_broadcast(edfs_context->edwork, fsio->type, fsio->buffer, fsio->size, 1, EDWORK_NODES, fsio->ino);
+                    edwork_broadcast(edfs_context->edwork, fsio->type, fsio->buffer, fsio->size, 1, EDWORK_NODES, fsio->ino, 0);
                     break;
                 default:
-                    edwork_broadcast(edfs_context->edwork, fsio->type, fsio->buffer, fsio->size, fsio->ack ? EDWORK_NODES : 0, EDWORK_NODES, fsio->ino);
+                    edwork_broadcast(edfs_context->edwork, fsio->type, fsio->buffer, fsio->size, fsio->ack ? EDWORK_NODES : 0, EDWORK_NODES, fsio->ino, 0);
                     break;
             }
             free(fsio);
@@ -5265,7 +5265,7 @@ unsigned int edwork_resync(struct edfs *edfs_context, void *clientaddr, int clie
                         edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL);
                         usleep(200);
                     } else
-                        edwork_broadcast(edfs_context->edwork, "desc", buffer, len, 0, EDWORK_NODES, 0);
+                        edwork_broadcast(edfs_context->edwork, "desc", buffer, len, 0, EDWORK_NODES, 0, 0);
                 } else
                     log_debug("error");
             }
@@ -5285,7 +5285,7 @@ unsigned int edwork_resync_desc(struct edfs *edfs_context, uint64_t inode, void 
         if ((clientaddr) && (clientaddrlen))
             edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL);
         else
-            edwork_broadcast(edfs_context->edwork, "desc", buffer, len, 0, EDWORK_NODES, 0);
+            edwork_broadcast(edfs_context->edwork, "desc", buffer, len, 0, EDWORK_NODES, 0, 0);
         return 1;
     } else
         log_debug("error");
@@ -5321,7 +5321,7 @@ unsigned int edwork_resync_dir_desc(struct edfs *edfs_context, uint64_t inode, v
                     edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL);
                     usleep(500);
                 } else
-                    edwork_broadcast(edfs_context->edwork, "desc", buffer, len, 0, EDWORK_NODES, 0);
+                    edwork_broadcast(edfs_context->edwork, "desc", buffer, len, 0, EDWORK_NODES, 0, 0);
             } else
                 log_debug("error");
         }
@@ -5457,7 +5457,7 @@ int edwork_thread(void *userdata) {
                 add_port = EDWORK_PORT;
         }
         if (host_and_port[0])
-            edwork_add_node(edwork, host_and_port, add_port, 0, 1);
+            edwork_add_node(edwork, host_and_port, add_port, 0, 3);
         else
             log_error("error parsing url: %s", host_and_port);
     }
@@ -5486,7 +5486,7 @@ int edwork_thread(void *userdata) {
             edfs_context->force_rebroadcast = 0;
         }
         if (time(NULL) - ping > EDWORK_PING_INTERVAL) {
-            edwork_broadcast(edwork, "ping", NULL, 0, 0, EDWORK_NODES, 0);
+            edwork_broadcast(edwork, "ping", NULL, 0, 0, EDWORK_NODES, 0, 1);
             ping = time(NULL);
         }
 
