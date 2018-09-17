@@ -1536,9 +1536,11 @@ int edworks_data_pending(struct edwork_data *data, int timeout_ms) {
 #endif
 }
 
-int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int is_sctp, int ttl) {
+int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int is_sctp, int is_listen_socket, int ttl) {
 #ifdef WITH_SCTP
     if (is_sctp) {
+        if (is_listen_socket)
+            return edwork_send_to_sctp_socket(data, data->sctp_socket, type, buf, len, clientaddr, clientaddrlen, EDWORK_SCTP_TTL);
         uintptr_t data_index = (uintptr_t)avl_search(&data->tree, clientaddr);
         SCTP_SOCKET_TYPE socket = 0;
         if (data_index > 0) {
