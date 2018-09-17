@@ -1263,7 +1263,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         struct sockaddr addr2;
         memcpy(&addr2, sin, client_len);
         if (addr2.sa_family == AF_INET)
-            ((struct sockaddr_in *)&addr2)->sin_port = ntohs(((struct sockaddr_in *)&addr2)->sin_port);
+            ((struct sockaddr_in *)&addr2)->sin_port = ((struct sockaddr_in *)&addr2)->sin_port;
         data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len, encapsulation_port);
         if (data->clients[data->clients_count].socket)
             data->clients[data->clients_count].sctp_reconnect_timestamp = time(NULL);
@@ -1277,7 +1277,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         data->clients[data->clients_count].is_sctp = 1;
     else
         data->clients[data->clients_count].is_sctp = ((is_listen_socket) || (is_callback)) ? is_sctp : 0;
-    if ((is_sctp & 1) && (is_listen_socket)) {
+    if ((is_sctp & 1) && ((is_listen_socket) || (is_callback))) {
         data->clients[data->clients_count].sctp_timestamp = time(NULL);
         data->sctp_timestamp = data->clients[data->clients_count].sctp_timestamp;
     } else
