@@ -1536,7 +1536,7 @@ int edworks_data_pending(struct edwork_data *data, int timeout_ms) {
 #endif
 }
 
-int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int is_sctp) {
+int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int is_sctp, int ttl) {
 #ifdef WITH_SCTP
     if (is_sctp) {
         uintptr_t data_index = (uintptr_t)avl_search(&data->tree, clientaddr);
