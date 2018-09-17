@@ -1765,7 +1765,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
         if ((!data->force_sctp) && (data->clients[i].is_sctp))
             continue;
 #endif
-        if ((!data->clients[i].is_listen_socket) && (data->clients[i].last_seen >= threshold)) {
+        if (data->clients[i].last_seen >= threshold) {
             if (found >= offset) {
                 records ++;
                 if (data->clients[i].sctp_socket)
@@ -1774,11 +1774,14 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
                     *buf ++ = 6;
                 memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
                 buf += 4;
-                memcpy(buf, &data->clients[i].clientaddr.sin_port, 2);
+                if (data->clients[i].is_listen_socket) {
+                    unsigned short port = htons(4848);
+                    memcpy(buf, &port, 2);
+                } else
+                    memcpy(buf, &data->clients[i].clientaddr.sin_port, 2);
                 buf += 2;
                 if (data->clients[i].sctp_socket) {
-                    *buf = data->clients[i].sctp_socket;
-                    buf++;
+                    *buf ++ = data->clients[i].sctp_socket;
                     *buf_size -= 8;
                 } else
                     *buf_size -= 7;
