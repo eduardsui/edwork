@@ -1816,10 +1816,11 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
             port = ntohs(port);
             int sctp = 0;
             if (size == 7)
-                sctp = buffer[6];
+                sctp = buf[6];
             edwork_add_node(data, buffer, port, 0, sctp);
             records ++;
-        }
+        } else
+            log_warn("invalid record size (%i)", size);
 
         buf_size -= size;
         buf += size;
