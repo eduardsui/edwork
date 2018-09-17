@@ -4418,7 +4418,7 @@ one_loop:
         return;
     } 
     if (!memcmp(type, "list", 4)) {
-        log_info("ADDR request received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
+        log_info("LIST request received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         uint32_t offset = 0;
         if ((payload) && (payload_size >= sizeof(uint32_t))) {
             offset = ntohl(*(uint32_t *)payload);
@@ -4438,6 +4438,7 @@ one_loop:
         int size = BLOCK_SIZE - 4;
         memcpy(buffer, payload, 4);
         int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 24 * 3600);
+        log_info("%i records found", records);
         if (records > 0) {
             size += 4;
             if (edwork_send_to_peer(edwork, "addr", buffer, size, clientaddr, clientaddrlen, is_sctp) <= 0) {

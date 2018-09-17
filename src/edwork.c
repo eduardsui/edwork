@@ -1759,7 +1759,10 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
         if ((!data->clients[i].is_listen_socket) && (data->clients[i].last_seen >= threshold)) {
             if (found >= offset) {
                 records ++;
-                *buf ++ = 6;
+                if (data->clients[i].sctp_socket)
+                    *buf ++ = 7;
+                else
+                    *buf ++ = 6;
                 memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
                 buf += 4;
                 memcpy(buf, &data->clients[i].clientaddr.sin_port, 2);
