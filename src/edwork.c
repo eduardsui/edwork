@@ -1171,12 +1171,15 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
 #ifdef WITH_SCTP
         if (data_index != 1) {
             if (data->force_sctp)
-                peer->is_sctp |= 1;
-            if ((is_sctp) && (is_listen_socket)) {
+                peer->is_sctp = 1;
+            if ((is_sctp & 1) && (is_listen_socket)) {
                 peer->sctp_timestamp = time(NULL);
                 data->sctp_timestamp = peer->sctp_timestamp;
             }
-            peer->sctp_socket |= 2;
+            if (is_sctp & 1)
+                peer->sctp_socket |= 1;
+            else
+                peer->sctp_socket |= 2;
         }
 #endif
         thread_mutex_unlock(&data->clients_lock);
@@ -1207,7 +1210,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     // no sctp for broadcast address
     data->clients[data->clients_count].socket = 0;
     data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
-    if ((is_sctp) && (!is_listen_socket) && (data->clients_count == 0)) {
+    if ((is_sctp & 1) && (!is_listen_socket) && (data->clients_count == 0)) {
         struct sockaddr addr2;
         memcpy(&addr2, sin, client_len);
         if (addr2.sa_family == AF_INET)
@@ -1223,8 +1226,8 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     if ((data->force_sctp) && (data->clients_count))
         data->clients[data->clients_count].is_sctp = 1;
     else
-        data->clients[data->clients_count].is_sctp = is_sctp;
-    if ((is_sctp) && (is_listen_socket)) {
+        data->clients[data->clients_count].is_sctp = is_sctp & 1;
+    if ((is_sctp & 1) && (is_listen_socket)) {
         data->clients[data->clients_count].sctp_timestamp = time(NULL);
         data->sctp_timestamp = data->clients[data->clients_count].sctp_timestamp;
     } else
@@ -1335,7 +1338,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                 if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
                     log_debug("not broadcasting to same client");
                 } else
-                if ((data->clients[i].last_seen >= threshold) || (i == 0)) { // i == 0 => means first addres (broadcast address)
+                if ((data->clients[i].last_seen >= threshold) || (i == 0) || (force_udp)) { // i == 0 => means first addres (broadcast address)
                     if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, 1) <= 0) {
 #ifdef _WIN32
                         log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
