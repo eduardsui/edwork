@@ -331,7 +331,7 @@ void edwork_done() {
 unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, struct sctp_rcvinfo *rcvinfo, struct sockaddr *addrs) {
     unsigned short port = 0;
 
-    if ((!addrs) || (!sock))
+    if (!sock)
         return 0;
 #ifdef SCTP_UDP_ENCAPSULATION
     struct sctp_udpencaps encaps;
@@ -341,6 +341,12 @@ unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, st
         encaps.sue_assoc_id = rcvinfo->rcv_assoc_id;
     else
         encaps.sue_assoc_id = SCTP_getassocid(sock, addrs);
+
+    struct sockaddr addrs2;
+    if (!addrs) {
+        if ((SCTP_getpaddrs(sock, encaps.sue_assoc_id, &addrs) <= 0) || (!addrs))
+            return 0;
+    }
     memcpy(&encaps.sue_address, addrs, sizeof(struct sockaddr));
     if (SCTP_getsockopt(sock, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, &len)) {
         log_error("error in SCTP_getsockopt %i", errno);
@@ -357,9 +363,6 @@ static void edwork_sctp_update_socket(struct edwork_data *edwork, struct socket 
         return;
 
 #if defined(SCTP_UDP_ENCAPSULATION) && defined(WITH_USRSCTP)
-    if ((!addrs) || (!rcvinfo))
-        return;
-
     unsigned short port = edword_sctp_get_remote_encapsulation_port(sock, rcvinfo, addrs);
     if (port) {
         thread_mutex_lock(&edwork->clients_lock);
@@ -394,7 +397,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
         log_error("sctp notification error");
         return;
     }
-    return;
+
     int i;
     int reset = 0;
     struct sockaddr *addrs = NULL;
@@ -1198,7 +1201,7 @@ int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket
 }
 #endif
 
-void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len, int update_seen, int return_old_peer, int is_sctp, int is_listen_socket, unsigned short encapsulation_port) {
+void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len, int update_seen, int return_old_peer, int is_sctp, int is_listen_socket, unsigned short encapsulation_port, int is_callback) {
     if ((!sin) || (client_len <= 0) || (sin->sin_addr.s_addr == 0) || (sin->sin_port == 0))
         return 0;
 
@@ -1216,13 +1219,15 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         if (data_index != 1) {
             if (data->force_sctp)
                 peer->is_sctp = 1;
-            if ((is_sctp & 1) && (is_listen_socket)) {
+            if ((is_sctp & 1) && ((is_listen_socket) || (is_callback))) {
                 peer->sctp_timestamp = time(NULL);
                 data->sctp_timestamp = peer->sctp_timestamp;
             }
-            if (is_sctp & 1)
+            if (is_sctp & 1) {
                 peer->sctp_socket |= 1;
-            else
+                if (((is_listen_socket) || (is_callback)))
+                    peer->is_sctp = 1;
+            } else
                 peer->sctp_socket |= 2;
         }
 #endif
@@ -1254,12 +1259,11 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     // no sctp for broadcast address
     data->clients[data->clients_count].socket = 0;
     data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
-    if ((is_sctp & 1) && (!is_listen_socket) && (data->clients_count == 0)) {
+    if ((is_sctp & 1) && (!is_listen_socket) && (data->clients_count)) {
         struct sockaddr addr2;
         memcpy(&addr2, sin, client_len);
         if (addr2.sa_family == AF_INET)
             ((struct sockaddr_in *)&addr2)->sin_port = ntohs(((struct sockaddr_in *)&addr2)->sin_port);
-
         data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len, encapsulation_port);
         if (data->clients[data->clients_count].socket)
             data->clients[data->clients_count].sctp_reconnect_timestamp = time(NULL);
@@ -1272,7 +1276,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     if ((data->force_sctp) && (data->clients_count))
         data->clients[data->clients_count].is_sctp = 1;
     else
-        data->clients[data->clients_count].is_sctp = is_listen_socket ? is_sctp : 0;
+        data->clients[data->clients_count].is_sctp = ((is_listen_socket) || (is_callback)) ? is_sctp : 0;
     if ((is_sctp & 1) && (is_listen_socket)) {
         data->clients[data->clients_count].sctp_timestamp = time(NULL);
         data->sctp_timestamp = data->clients[data->clients_count].sctp_timestamp;
@@ -1298,7 +1302,7 @@ void *edwork_ensure_node_in_list(struct edwork_data *data, void *clientaddr, int
     if ((!data) || (!clientaddr) || (!clientaddrlen))
         return 0;
 
-    return add_node(data, (struct sockaddr_in *)clientaddr, clientaddrlen, 1, 1, is_sctp, is_listen_socket, 0);
+    return add_node(data, (struct sockaddr_in *)clientaddr, clientaddrlen, 1, 1, is_sctp, is_listen_socket, 0, 1);
 }
 
 void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp_socket, unsigned short encapsulation_port) {
@@ -1320,7 +1324,7 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port, int i
     sin.sin_len         = sizeof(sin);
 #endif
 
-    if (add_node(data, &sin, sizeof(sin), 0, 0, sctp_socket, is_listen_socket, encapsulation_port)) {
+    if (add_node(data, &sin, sizeof(sin), 0, 0, sctp_socket, is_listen_socket, encapsulation_port, 0)) {
         if (sctp_socket & 1) {
             log_info("added stateful node %s:%i (encapsulation port %i)", node, port, (int)encapsulation_port);
         } else
