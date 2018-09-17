@@ -5173,7 +5173,7 @@ void edwork_load_nodes(struct edfs *edfs_context) {
                     if (port <= 0)
                         port = EDWORK_PORT;
                     if ((host) && (host[0]))
-                        edwork_add_node(edfs_context->edwork, host, port, 0, sctp);
+                        edwork_add_node(edfs_context->edwork, host, port, 0, sctp, 0);
                 }
             }
         }
@@ -5457,7 +5457,7 @@ int edwork_thread(void *userdata) {
                 add_port = EDWORK_PORT;
         }
         if (host_and_port[0])
-            edwork_add_node(edwork, host_and_port, add_port, 0, 3);
+            edwork_add_node(edwork, host_and_port, add_port, 0, 3, 0);
         else
             log_error("error parsing url: %s", host_and_port);
     }

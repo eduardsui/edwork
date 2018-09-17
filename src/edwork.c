@@ -49,6 +49,7 @@
         #define SCTP_SOCKET_TYPE    struct socket *
         #define SCTP_socket(domain, type, protocol)                     usrsctp_socket(domain, type, protocol, edwork_sctp_receive, NULL, 0, data)
         #define SCTP_setsockopt(socket, level, optname, optval, optlen) usrsctp_setsockopt(socket, level, optname, optval, optlen)
+        #define SCTP_getsockopt(socket, level, optname, optval, optlen) usrsctp_getsockopt(socket, level, optname, optval, optlen)
         #define SCTP_bind(socket, addr, addrlen)                        usrsctp_bind(socket, addr, addrlen)
         #define SCTP_listen(socket, backlog)                            usrsctp_listen(socket, backlog)
         #define SCTP_accept(socket, addr, addrlen)                      usrsctp_accept(socket, addr, addrlen)
@@ -154,6 +155,7 @@ struct client_data {
     time_t sctp_timestamp;
     time_t sctp_reconnect_timestamp;
     unsigned char is_sctp;
+    unsigned short encapsulation_port;
 #endif
 };
 
@@ -214,7 +216,7 @@ struct edwork_data {
 
 #ifdef WITH_SCTP
 int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int ttl);
-static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const struct sockaddr *addr, int addr_len);
+static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const struct sockaddr *addr, int addr_len, unsigned short encapsulation_port);
 #endif
 int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len);
 
@@ -326,9 +328,50 @@ void edwork_done() {
 
 #ifdef WITH_SCTP
 
-#ifdef WITH_USRSCTP
-static void edwork_sctp_update_socket(struct edwork_data *edwork, struct socket *sock) {
-    if ((!edwork) || (!sock) || (sock == edwork->sctp_socket))
+unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, struct sctp_rcvinfo *rcvinfo, struct sockaddr *addrs) {
+    unsigned short port = 0;
+
+    if ((!addrs) || (!sock))
+        return 0;
+#ifdef SCTP_UDP_ENCAPSULATION
+    struct sctp_udpencaps encaps;
+	memset(&encaps, 0, sizeof(struct sctp_udpencaps));
+    socklen_t len = sizeof(struct sctp_udpencaps);
+    if (rcvinfo)
+        encaps.sue_assoc_id = rcvinfo->rcv_assoc_id;
+    else
+        encaps.sue_assoc_id = SCTP_getassocid(sock, addrs);
+    memcpy(&encaps.sue_address, addrs, sizeof(struct sockaddr));
+    if (SCTP_getsockopt(sock, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, &len)) {
+        log_error("error in SCTP_getsockopt %i", errno);
+    } else {
+        port = ntohs(encaps.sue_port);
+        log_trace("got encapsulation port %i", (int)port);
+    }
+#endif
+    return port;
+}
+
+static void edwork_sctp_update_socket(struct edwork_data *edwork, struct socket *sock, struct sctp_rcvinfo *rcvinfo, struct sockaddr *addrs) {
+    if ((!edwork) || (!sock))
+        return;
+
+#if defined(SCTP_UDP_ENCAPSULATION) && defined(WITH_USRSCTP)
+    if ((!addrs) || (!rcvinfo))
+        return;
+
+    unsigned short port = edword_sctp_get_remote_encapsulation_port(sock, rcvinfo, addrs);
+    if (port) {
+        thread_mutex_lock(&edwork->clients_lock);
+        uintptr_t data_index = (uintptr_t)avl_search(&edwork->tree, (void *)addrs);
+        if (data_index > 1) {
+            edwork->clients[data_index - 1].encapsulation_port = port;
+            log_trace("set encapsulation port to %i for %s", (int)edwork->clients[data_index - 1].encapsulation_port, edwork_addr_ipv4(addrs));
+        }
+        thread_mutex_unlock(&edwork->clients_lock);
+    }
+#endif
+    if (sock == edwork->sctp_socket)
         return;
 
     int i;
@@ -373,7 +416,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                                 edwork_send_to_sctp_socket(edwork, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in), 0);
                             }
                         }
-                        edwork_sctp_update_socket(edwork, sock);
+                        edwork_sctp_update_socket(edwork, sock, rcvinfo, addrs);
                     }
                     break;
 
@@ -404,7 +447,7 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             switch (notif->sn_paddr_change.spc_state) {
                 case SCTP_ADDR_AVAILABLE:
                     log_trace("ADDRESS AVAILABLE");
-                    edwork_sctp_update_socket(edwork, sock);
+                    edwork_sctp_update_socket(edwork, sock, rcvinfo, NULL);
                     break;
                 case SCTP_ADDR_UNREACHABLE:
                     log_trace("ADDRESS UNREACHABLE");
@@ -414,15 +457,15 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                     break;
                 case SCTP_ADDR_ADDED:
                     log_trace("ADDRESS ADDED");
-                    edwork_sctp_update_socket(edwork, sock);
+                    edwork_sctp_update_socket(edwork, sock, rcvinfo, NULL);
                     break;
                 case SCTP_ADDR_MADE_PRIM:
                     log_trace("ADDRESS MADE PRIMARY");
-                    edwork_sctp_update_socket(edwork, sock);
+                    edwork_sctp_update_socket(edwork, sock, rcvinfo, NULL);
                     break;
                 case SCTP_ADDR_CONFIRMED:
                     log_trace("ADDRESS CONFIRMED");
-                    edwork_sctp_update_socket(edwork, sock);
+                    edwork_sctp_update_socket(edwork, sock, rcvinfo, NULL);
                     break;
                 default:
                     log_trace("SCTP_PEER_ADDR_CHANGE, STATE: %i", (int)notif->sn_paddr_change.spc_state);
@@ -491,10 +534,10 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                     edwork->clients[i].is_listen_socket = 0;
                     if (reset == 2) {
                         if (addrs->sa_family == AF_INET6)
-                            edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in6));
+                            edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in6), edwork->clients[i].encapsulation_port);
                         else
                         if (addrs->sa_family == AF_INET)
-                            edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in));
+                            edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in), edwork->clients[i].encapsulation_port);
                         if (edwork->clients[i].socket) {
                             edwork->clients[i].sctp_reconnect_timestamp = time(NULL);
                             edwork->clients[i].last_seen = time(NULL);
@@ -558,7 +601,9 @@ static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, v
     free(data);
     return 1;
 }
+
 #else
+
 static void edwork_add_poll_socket(struct edwork_data *data, int socket) {
     data->ufds = (struct pollfd *)realloc(data->ufds, sizeof(struct pollfd) * (data->ufds_len + 1));
     data->ufds[data->ufds_len].fd = socket;
@@ -582,7 +627,7 @@ static void edwork_remove_poll_socket(struct edwork_data *data, int offset) {
 }
 #endif
 
-static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const struct sockaddr *addr, int addr_len) {
+static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const struct sockaddr *addr, int addr_len, unsigned short encapsulation_port) {
     SCTP_SOCKET_TYPE peer_socket = SCTP_socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
     if (!peer_socket)
         return 0;
@@ -609,7 +654,7 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
         struct sctp_udpencaps encaps;
 	    memset(&encaps, 0, sizeof(struct sctp_udpencaps));
 	    encaps.sue_address.ss_family = AF_INET;
-	    encaps.sue_port = htons(EDWORK_SCTP_UDP_TUNNELING_PORT);
+	    encaps.sue_port = htons(encapsulation_port ? encapsulation_port : EDWORK_SCTP_UDP_TUNNELING_PORT);
 
         if (SCTP_setsockopt(peer_socket, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, sizeof(struct sctp_udpencaps)))
             log_error("error in SCTP_setsockopt %i", errno);
@@ -654,7 +699,7 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect_hostname(struct edwork_data *data, c
     sin.sin_family      = AF_INET;
     sin.sin_port        = htons((int)port);
 
-    return edwork_sctp_connect(data, (struct sockaddr *)&sin, sizeof(sin));
+    return edwork_sctp_connect(data, (struct sockaddr *)&sin, sizeof(sin), 0);
 }
 
 ssize_t safe_sctp_sendto(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen, int ttl) {
@@ -685,7 +730,6 @@ ssize_t safe_sctp_recvfrom(struct edwork_data *data, SCTP_SOCKET_TYPE socket, vo
     thread_mutex_unlock(&data->sock_lock);
     return err;
 }
-#endif
 
 #ifdef WITH_SCTP
 int edwork_is_sctp(struct edwork_data *data, const void *clientaddr_ptr) {
@@ -953,7 +997,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     thread_mutex_init(&data->thread_lock);
 #endif
     thread_mutex_init(&data->callback_lock);
-    edwork_add_node(data, "255.255.255.255", port, 0, 0);
+    edwork_add_node(data, "255.255.255.255", port, 0, 0, 0);
 
     return data;
 }
@@ -1154,7 +1198,7 @@ int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket
 }
 #endif
 
-void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len, int update_seen, int return_old_peer, int is_sctp, int is_listen_socket) {
+void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len, int update_seen, int return_old_peer, int is_sctp, int is_listen_socket, unsigned short encapsulation_port) {
     if ((!sin) || (client_len <= 0) || (sin->sin_addr.s_addr == 0) || (sin->sin_port == 0))
         return 0;
 
@@ -1216,12 +1260,14 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         if (addr2.sa_family == AF_INET)
             ((struct sockaddr_in *)&addr2)->sin_port = ntohs(((struct sockaddr_in *)&addr2)->sin_port);
 
-        data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len);
+        data->clients[data->clients_count].socket = edwork_sctp_connect(data, (const struct sockaddr *)&addr2, client_len, encapsulation_port);
         if (data->clients[data->clients_count].socket)
             data->clients[data->clients_count].sctp_reconnect_timestamp = time(NULL);
         else
             data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
-    }
+    } else
+    if ((is_sctp) && (is_listen_socket) && (!encapsulation_port))
+        encapsulation_port = edword_sctp_get_remote_encapsulation_port(data->sctp_socket, NULL, (struct sockaddr *)sin);
 
     if ((data->force_sctp) && (data->clients_count))
         data->clients[data->clients_count].is_sctp = 1;
@@ -1232,6 +1278,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         data->sctp_timestamp = data->clients[data->clients_count].sctp_timestamp;
     } else
         data->clients[data->clients_count].sctp_timestamp = 0;
+    data->clients[data->clients_count].encapsulation_port = encapsulation_port;
 #endif
 
     data->clients[data->clients_count].sctp_socket = is_sctp;
@@ -1251,10 +1298,10 @@ void *edwork_ensure_node_in_list(struct edwork_data *data, void *clientaddr, int
     if ((!data) || (!clientaddr) || (!clientaddrlen))
         return 0;
 
-    return add_node(data, (struct sockaddr_in *)clientaddr, clientaddrlen, 1, 1, is_sctp, is_listen_socket);
+    return add_node(data, (struct sockaddr_in *)clientaddr, clientaddrlen, 1, 1, is_sctp, is_listen_socket, 0);
 }
 
-void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp_socket) {
+void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp_socket, unsigned short encapsulation_port) {
     struct sockaddr_in sin;
     struct hostent     *hp;
 
@@ -1273,10 +1320,10 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port, int i
     sin.sin_len         = sizeof(sin);
 #endif
 
-    if (add_node(data, &sin, sizeof(sin), 0, 0, sctp_socket, is_listen_socket)) {
-        if (sctp_socket & 1)
-            log_info("added stateful node %s:%i", node, port);
-        else
+    if (add_node(data, &sin, sizeof(sin), 0, 0, sctp_socket, is_listen_socket, encapsulation_port)) {
+        if (sctp_socket & 1) {
+            log_info("added stateful node %s:%i (encapsulation port %i)", node, port, (int)encapsulation_port);
+        } else
             log_info("added node %s:%i", node, port);
     }
 }
@@ -1351,7 +1398,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
                                 data->clients[i].is_sctp = 0;
                                 if (data->clients[i].socket) {
                                     SCTP_close(data->clients[i].socket);
-                                    data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen);
+                                    data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, data->clients[i].encapsulation_port);
                                     if (data->clients[i].socket)
                                         log_trace("reconnecting SCTP socket");
                                 }
@@ -1758,6 +1805,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     // active in last 72 hours
     thread_mutex_lock(&data->clients_lock);
     unsigned int found = 0;
+    unsigned short port;
     for (i = 0; i < data->clients_count; i++) {
         if (*buf_size < 8)
             break;
@@ -1768,21 +1816,30 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
         if (data->clients[i].last_seen >= threshold) {
             if (found >= offset) {
                 records ++;
-                if (data->clients[i].sctp_socket)
-                    *buf ++ = 7;
-                else
+                if (data->clients[i].sctp_socket) {
+                    if (data->clients[i].encapsulation_port)
+                        *buf ++ = 9;
+                    else
+                        *buf ++ = 7;
+                } else
                     *buf ++ = 6;
                 memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
                 buf += 4;
                 if (data->clients[i].is_listen_socket) {
-                    unsigned short port = htons(4848);
+                    port = htons(4848);
                     memcpy(buf, &port, 2);
                 } else
                     memcpy(buf, &data->clients[i].clientaddr.sin_port, 2);
                 buf += 2;
                 if (data->clients[i].sctp_socket) {
                     *buf ++ = data->clients[i].sctp_socket;
-                    *buf_size -= 8;
+                    if (data->clients[i].encapsulation_port) {
+                        port = htons(data->clients[i].encapsulation_port);
+                        memcpy(buf, &port, 2);
+                        buf += 2;
+                        *buf_size -= 10;
+                    } else
+                        *buf_size -= 8;
                 } else
                     *buf_size -= 7;
             }
@@ -1806,18 +1863,25 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
         if ((size > buf_size) || (!size))
             break;
 
-        if ((size == 6) || (size == 7)) {
+        if ((size == 6) || (size == 7) || (size == 9)) {
             // ipv4
             buffer[0] = 0;
             snprintf(buffer, sizeof(buffer), "%i.%i.%i.%i", (int)buf[0], (int)buf[1], (int)buf[2], (int)buf[3]);
 
             unsigned short port;
+            unsigned short encapsulation_port = 0;
             memcpy(&port, buf + 4, 2);
             port = ntohs(port);
             int sctp = 0;
-            if (size == 7)
+            if (size >= 7) {
                 sctp = buf[6];
-            edwork_add_node(data, buffer, port, 0, sctp);
+                if (size == 9) {
+                    memcpy(&encapsulation_port, buf + 7, 2);
+                    encapsulation_port = ntohs(encapsulation_port);
+                }
+            }
+
+            edwork_add_node(data, buffer, port, 0, sctp, encapsulation_port);
             records ++;
         } else
             log_warn("invalid record size (%i)", size);
