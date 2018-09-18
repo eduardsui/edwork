@@ -479,7 +479,6 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             break;
         case SCTP_SHUTDOWN_EVENT:
             log_trace("SCTP_SHUTDOWN_EVENT");
-            reset = 1;
             break;
         case SCTP_ADAPTATION_INDICATION:
             log_trace("SCTP_ADAPTATION_INDICATION");
