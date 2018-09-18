@@ -1922,7 +1922,7 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
     return inode;
 }
 
-int edfs_reply_chunk(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, unsigned char *buf, int size) {
+int edfs_reply_chunk(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, unsigned char *buf, int size, uint32_t chunk_hash) {
     if (size <= 0)
         return -1;
 
@@ -1940,6 +1940,15 @@ int edfs_reply_chunk(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, 
     int err = fread(buf, 1, size, f);
     edfs_file_unlock(edfs_context, f);
     fclose(f);
+
+    if (chunk_hash) {
+        if ((err > 0) && (err < 64))
+            err = 0;
+        if ((err > 0) && (XXH32(buf, 64, 0) != chunk_hash)) {
+            log_warn("chunk has different hash than requested");
+            err = 0;
+        }
+    }
 
     return err;
 }
@@ -1966,10 +1975,11 @@ int edfs_reply_hash(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, u
     return err;
 }
 
-int request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int encrypted, int use_cached_addr, unsigned char *proof_cache, int *proof_size) {
-    unsigned char additional_data[16];
+int request_data(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, int encrypted, int use_cached_addr, unsigned char *proof_cache, int *proof_size, uint32_t chunk_hash) {
+    unsigned char additional_data[20];
     *(uint64_t *)additional_data = htonll(ino);
     *(uint64_t *)(additional_data + 8)= htonll(chunk);
+    *(uint32_t *)(additional_data + 16)= htonl(chunk_hash);
 
     struct sockaddr_in *use_clientaddr = NULL;
     int clientaddr_size = 0;
@@ -2175,7 +2185,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                 if (chunk > last_file_chunk)
                     return read_size;
             }
-            is_sctp = request_data(edfs_context, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size);
+            is_sctp = request_data(edfs_context, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size, sig_hash);
             if (is_sctp)
                 do_forward = 0;
             log_trace("requesting chunk %s:%" PRIu64 " (sctp: %i)", path, chunk, is_sctp);
@@ -2198,7 +2208,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
                     }
                     if (forward_chunk <= last_file_chunk) {
                         forward_chunks_requested ++;
-                        request_data(edfs_context, ino, forward_chunk ++, 1, 1, NULL, NULL);
+                        request_data(edfs_context, ino, forward_chunk ++, 1, 1, NULL, NULL, 0);
                         uint64_t delta = (microseconds() - start);
                         if ((delta >= wait_count) || (delta < 2000))
                             continue;
@@ -2214,7 +2224,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
         } else {
 #ifdef EDFS_FORWARD_REQUEST
             if ((!chunk_exists(path, forward_chunk)) && (forward_chunk <= last_file_chunk))
-                request_data(edfs_context, ino, forward_chunk, 1, 1, NULL, NULL);
+                request_data(edfs_context, ino, forward_chunk, 1, 1, NULL, NULL, 0);
 #endif
             if ((filebuf) && (read_size > 0)) {
                 filebuf->last_read_chunk = chunk;
@@ -3396,7 +3406,7 @@ int edfs_shard_data_request(struct edfs *edfs_context, uint64_t inode, uint64_t 
     if (get_deleted_json(edfs_context, inode))
         return 1;
 
-    request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
+    request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL, 0);
     return 0;
 }
 
@@ -3473,7 +3483,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             edfs_schedule(edfs_context, edfs_shard_data_request, 250000, 7ULL * 24ULL * 3600000000ULL, inode, chunk, 1, 1);
         } else {
             // use cached addresses for 90% of requests, 10% are broadcasts
-            request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL);
+            request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL, 0);
         }
     } else {
         if ((try_update_hash) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
@@ -4292,7 +4302,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
 
         int is_encrypted = !memcmp(type, "wan4", 4);
 
-        if ((!payload) || (payload_size < 64)) {
+        if ((!payload) || (payload_size < 68)) {
             log_warn("WANT packet too small");
             return;
         }
@@ -4307,7 +4317,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         uint64_t ino = ntohll(*(uint64_t *)payload);
         uint64_t chunk = ntohll(*(uint64_t *)(payload + 8));
 
-        int payload_offset = is_encrypted ? 48 : 16;
+        int payload_offset = is_encrypted ? 52 : 20;
         if (!edwork_check_proof_of_work(edwork, payload, payload_size, payload_offset, timestamp, EDWORK_WANT_WORK_LEVEL, EDWORK_WANT_WORK_PREFIX, who_am_i)) {
             log_warn("no valid proof of work");
             return;
@@ -4329,8 +4339,9 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         if (ino > 0) {
             int loop_count = 0;
             int size;
+            uint32_t chunk_hash = ntohll(*(uint32_t *)(payload + 16));
 one_loop:
-            size = edfs_reply_chunk(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
+            size = edfs_reply_chunk(edfs_context, ino, chunk, buffer + 32, sizeof(buffer), chunk_hash);
             if (size > 0) {
                 unsigned char *additional_data = buffer;
                 *(uint64_t *)additional_data = htonll(ino);
@@ -4339,13 +4350,13 @@ one_loop:
                 *(uint64_t *)(additional_data + 24) = htonll(size);
 
                 if (is_encrypted) {
-                    if (payload_size < 96) {
+                    if (payload_size < 100) {
                         log_warn("WAN4 packet too small");
                         return;
                     }
                     unsigned char shared_secret[32];
                     
-                    curve25519(shared_secret, edfs_context->key.secret, payload + 16) ;
+                    curve25519(shared_secret, edfs_context->key.secret, payload + 20);
 
                     unsigned char buf2[BLOCK_SIZE_MAX];
                     memcpy(buf2, edfs_context->key.pk, 32);
@@ -4385,7 +4396,7 @@ one_loop:
             } else
             if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
                 log_trace("forwarding chunk request");
-                request_data(edfs_context, ino, chunk, 1, 0, NULL, NULL);
+                request_data(edfs_context, ino, chunk, 1, 0, NULL, NULL, 0);
                 edfs_context->proxy_timestamp = microseconds();
             }
         }
