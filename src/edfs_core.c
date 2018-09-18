@@ -1953,7 +1953,7 @@ int edfs_reply_chunk(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, 
     return err;
 }
 
-int edfs_reply_hash(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, unsigned char *buf, int size) {
+int edfs_reply_hash(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, unsigned char *buf, int size, uint32_t file_hash) {
     if (size <= 0)
         return -1;
 
@@ -1972,6 +1972,16 @@ int edfs_reply_hash(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, u
     edfs_file_unlock(edfs_context, f);
     fclose(f);
 
+    if ((err > 0) && (err < 64))
+        return 0;
+
+    if ((err > 0) && (file_hash)) {
+        unsigned char hash[32];
+        if ((!read_file_json(edfs_context, ino, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash)) || (XXH32(hash, 32, 0) != file_hash)) {
+            log_warn("descriptor has different hash than requested");
+            err = 0;
+        }
+    }
     return err;
 }
 
@@ -2417,7 +2427,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
         int check_hash = 0;
         int blockchain_error = 0;
         int send_want = 1;
-        unsigned char additional_data[16];
+        unsigned char additional_data[20];
         *(uint64_t *)additional_data = htonll(ino);
 
         if ((found_in_blockchain) && (memcmp(blockchainhash, hash, 32))) {
@@ -2427,6 +2437,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
         }
 
         if ((size > 0) && (memcmp(hash, null_hash, 32))) {
+            *(uint64_t *)(additional_data + 16) = htonl(XXH32(hash, 32, 0));
             // file hash hash
             int valid_hash = 0;
             uint64_t max_chunks = edfs_get_max_chunk(size);
@@ -2454,12 +2465,9 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                 }
                 for (i = 0; i < max_chunks; i++) {
                     *(uint64_t *)(additional_data + 8)= htonll(i);
-                    // EDFS_THREAD_LOCK(edfs_context);
                     notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                    // EDFS_THREAD_UNLOCK(edfs_context);
                 }
-
-
+                
                 if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                     log_error("hash read timed out");
                     if (!hash_error)
@@ -3487,10 +3495,11 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         }
     } else {
         if ((try_update_hash) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
-            unsigned char additional_data[16];
+            unsigned char additional_data[20];
             uint64_t max_chunks = edfs_get_max_chunk(file_size);
 
             *(uint64_t *)additional_data = htonll(inode);
+            *(uint64_t *)(additional_data + 16) = 0;
             int i;
             for (i = 0; i < max_chunks; i ++) {
                 *(uint64_t *)(additional_data + 8)= htonll(i);
@@ -4396,7 +4405,7 @@ one_loop:
             } else
             if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
                 log_trace("forwarding chunk request");
-                request_data(edfs_context, ino, chunk, 1, 0, NULL, NULL, 0);
+                request_data(edfs_context, ino, chunk, 1, 0, NULL, NULL, chunk_hash);
                 edfs_context->proxy_timestamp = microseconds();
             }
         }
@@ -4648,7 +4657,7 @@ one_loop:
         }
 #endif
 
-        if ((!payload) || (payload_size < 96)) {
+        if ((!payload) || (payload_size < 100)) {
             log_warn("HASH packet too small");
             return;
         }
@@ -4656,7 +4665,7 @@ one_loop:
         uint64_t ino = ntohll(*(uint64_t *)payload);
         uint64_t chunk = ntohll(*(uint64_t *)(payload + 8));
 
-        if (!edwork_check_proof_of_work(edwork, payload, payload_size, 48, timestamp, EDWORK_WANT_WORK_LEVEL, EDWORK_WANT_WORK_PREFIX, who_am_i)) {
+        if (!edwork_check_proof_of_work(edwork, payload, payload_size, 52, timestamp, EDWORK_WANT_WORK_LEVEL, EDWORK_WANT_WORK_PREFIX, who_am_i)) {
             log_warn("no valid proof of work");
             return;
         }
@@ -4675,7 +4684,7 @@ one_loop:
         }
 
         if (ino > 0) {
-            int size = edfs_reply_hash(edfs_context, ino, chunk, buffer + 32, sizeof(buffer));
+            int size = edfs_reply_hash(edfs_context, ino, chunk, buffer + 32, sizeof(buffer), ntohl(*(uint64_t *)(payload + 16)));
             if (size > 0) {
                 if (!edfs_check_blockhash(edfs_context, blockhash, 0)) {
                     log_warn("blockchain has different hash or length for %s", edwork_addr_ipv4(clientaddr));
@@ -4692,7 +4701,7 @@ one_loop:
 
 
                 unsigned char shared_secret[32];                    
-                curve25519(shared_secret, edfs_context->key.secret, payload + 16) ;
+                curve25519(shared_secret, edfs_context->key.secret, payload + 20);
 
                 unsigned char buf2[BLOCK_SIZE_MAX];
                 memcpy(buf2, edfs_context->key.pk, 32);
@@ -4704,9 +4713,7 @@ one_loop:
                     log_info("DATI sent");
             } else
             if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
-                // EDFS_THREAD_LOCK(edfs_context);
-                notify_io(edfs_context, "hash", payload, 16, edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                // EDFS_THREAD_UNLOCK(edfs_context);
+                notify_io(edfs_context, "hash", payload, 20, edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 edfs_context->proxy_timestamp = microseconds();
             }
         }
