@@ -136,7 +136,7 @@ uint64_t switchorder(uint64_t input);
 // max 128 bytes
 #define EDWOR_MAX_LAN_BROADCAST_SIZE    128
 
-#define EDWORK_SCTP_EVENTS              { SCTP_ASSOC_CHANGE }
+#define EDWORK_SCTP_EVENTS              { SCTP_ASSOC_CHANGE, SCTP_REMOTE_ERROR, SCTP_SHUTDOWN_EVENT }
 
 struct client_data {
     struct sockaddr_in clientaddr;
@@ -423,17 +423,17 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                     }
                     break;
 
-                /* case SCTP_COMM_LOST:
+                case SCTP_COMM_LOST:
                     log_trace("SCTP_COMM_LOST");
                     reset = 2;
                     break;
 
                 case SCTP_SHUTDOWN_COMP:
                     log_trace("SCTP_SHUTDOWN_COMP");
-                    reset = 1;
+                    reset = 2;
                     break;
 
-                case SCTP_CANT_STR_ASSOC:
+                /* case SCTP_CANT_STR_ASSOC:
                     if ((notif->sn_assoc_change.sac_state != SCTP_COMM_UP) && (notif->sn_assoc_change.sac_state != SCTP_RESTART)) {
                         log_trace("SCTP_CANT_STR_ASSOC, STATE: %i", (int)notif->sn_assoc_change.sac_state);
                         reset = 3;
@@ -559,15 +559,14 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             if ((SCTP_getpaddrs(sock, rcvinfo->rcv_assoc_id, &addrs) > 0) && (addrs))
                 log_trace("SCTP connection reset %s", edwork_addr_ipv4(addrs));
 
-            struct sockaddr *addrs = NULL;
-            int n = SCTP_getpaddrs(sock, rcvinfo->rcv_assoc_id, &addrs);
-            if (n > 0) {
-                if (addrs->sa_family == AF_INET6)
-                    edwork_remove_addr(edwork, addrs, sizeof(struct sockaddr_in6));
-                else
-                if (addrs->sa_family == AF_INET)
-                    edwork_remove_addr(edwork, addrs, sizeof(struct sockaddr_in));
+            thread_mutex_lock(&edwork->clients_lock);
+            uintptr_t data_index = (uintptr_t)avl_search(&edwork->tree, (void *)addrs);
+            if (data_index > 1) {
+                edwork->clients[data_index].is_sctp = 0;
+                edwork->clients[data_index].sctp_timestamp = 0;
+                edwork->clients[data_index].is_listen_socket = 0;
             }
+            thread_mutex_unlock(&edwork->clients_lock);
         }
     }
 }
