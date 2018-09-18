@@ -2456,7 +2456,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                         avl_insert(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino, (void *)1);
                     break;
                 }
-                if ((hash_error) && ((flags & 3) != O_RDONLY)) {
+                if ((hash_error) && ((flags & 3) == O_RDONLY)) {
                     log_warn("file hash still mismatched, using last known version (not waiting for timeout)");
                     break;
                 }
