@@ -1936,7 +1936,9 @@ int edfs_reply_chunk(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, 
     if (!f)
         return -errno;
 
+    edfs_file_lock(edfs_context, f, 0);
     int err = fread(buf, 1, size, f);
+    edfs_file_unlock(edfs_context, f);
     fclose(f);
 
     return err;
@@ -1956,7 +1958,9 @@ int edfs_reply_hash(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, u
     if (!f)
         return -errno;
 
+    edfs_file_lock(edfs_context, f, 0);
     int err = fread(buf, 1, size, f);
+    edfs_file_unlock(edfs_context, f);
     fclose(f);
 
     return err;
@@ -2302,11 +2306,14 @@ int edfs_update_chain(struct edfs *edfs_context, uint64_t ino, int64_t file_size
             log_warn("error reading %s", fullpath2);
             return 0;
         }
+        edfs_file_lock(edfs_context, f, 0);
         if (fread(signature_data, 1, 64, f) != 64) {
+            edfs_file_unlock(edfs_context, f);
             fclose(f);
             log_error("error reading signature in %s", fullpath2);
             return 0;
         }
+        edfs_file_unlock(edfs_context, f);
         fclose(f);
         sha256_update(&ctx, (const BYTE *)signature_data, 64);
     }
@@ -2445,10 +2452,11 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
 
                 if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                     log_error("hash read timed out");
-                    avl_insert(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino, (void *)1);
+                    if (!hash_error)
+                        avl_insert(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino, (void *)1);
                     break;
                 }
-                if (hash_error) {
+                if ((hash_error) && ((flags & 3) != O_RDONLY)) {
                     log_warn("file hash still mismatched, using last known version (not waiting for timeout)");
                     break;
                 }
