@@ -266,7 +266,6 @@ struct edfs {
     thread_ptr_t shard_thread;
 
     thread_mutex_t lock;
-    // thread_mutex_t io_lock;
 #ifdef EDFS_MULTITHREADED
     thread_mutex_t thread_lock;
 #endif
@@ -342,6 +341,7 @@ void edfs_block_save(struct edfs *edfs_context, struct block *chain);
 void edfs_update_proof_inode(struct edfs *edfs_context, uint64_t ino);
 int edfs_lookup_blockchain(struct edfs *edfs_context, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char *blockchainhash, uint64_t *generation, uint64_t *timestamp);
 size_t base64_encode_no_padding(const unsigned char *in, int in_size, unsigned char *out, int out_size);
+int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk, const unsigned char *buf, int size, struct edfs_hash_buffer *hash_buffer);
 
 uint64_t microseconds() {
     struct timeval tv;
@@ -1471,11 +1471,7 @@ void write_json(struct edfs *edfs_context, const char *base_path, const char *na
     }
     int string_len = strlen(serialized_string);
     unsigned char signature[64];
-    // if (edfs_context->mutex_initialized)
-    //     thread_mutex_lock(&edfs_context->io_lock);
     edfs_write_file(edfs_context, base_path, b64name, (const unsigned char *)serialized_string, string_len, ".json", 1, NULL, NULL, signature, NULL);
-    // if (edfs_context->mutex_initialized)
-    //     thread_mutex_unlock(&edfs_context->io_lock);
 
     // do not broadcast root object
     if (parent != 0) {
@@ -1493,11 +1489,7 @@ JSON_Value *read_json(struct edfs *edfs_context, const char *base_path, uint64_t
     char b64name[MAX_B64_HASH_LEN];
     computename(inode, b64name);
 
-    // if (edfs_context->mutex_initialized)
-    //     thread_mutex_lock(&edfs_context->io_lock);
     int data_size = edfs_read_file(edfs_context, base_path, b64name, (unsigned char *)data, MAX_INODE_DESCRIPTOR_SIZE - 1, ".json", 1, 1, 0, NULL, 0);
-    // if (edfs_context->mutex_initialized)
-    //     thread_mutex_unlock(&edfs_context->io_lock);
     if (data_size <= 0) {
         log_trace("invalid file %s/%s.json", base_path, b64name);
         return 0;
@@ -1521,9 +1513,6 @@ int write_json2(struct edfs *edfs_context, const char *base_path, uint64_t inode
     if (!serialized_string)
         return 0;
 
-    // if (edfs_context->mutex_initialized)
-    //     thread_mutex_lock(&edfs_context->io_lock);
-
     int string_len = strlen(serialized_string);
     unsigned char signature[64];
     if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)serialized_string, string_len , ".json", 1, NULL, NULL, signature, NULL) == string_len) {
@@ -1531,16 +1520,11 @@ int write_json2(struct edfs *edfs_context, const char *base_path, uint64_t inode
 
         JSON_Object *root_object = json_value_get_object(root_value);
         if (root_object) {
-            // uint64_t parent = unpacked_ino(json_object_get_string(root_object, "parent"));
-            // if (parent != 0)
             notify_io(edfs_context, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, edfs_context->edwork, 0, 0, NULL, 0, NULL, NULL);
             edfs_update_proof_inode(edfs_context, inode);
         }
     } else
         log_warn("error writing file %s", b64name);
-
-    // if (edfs_context->mutex_initialized)
-    //     thread_mutex_unlock(&edfs_context->io_lock);
 
     return written;
 }
@@ -2122,8 +2106,15 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     if (chunk > last_file_chunk)
         return 0;
 
-    if (filebuf->check_hash)
+    if (filebuf->check_hash) {
+        if ((filebuf->written_data) && (filebuf->hash_buffer) && (filebuf->hash_buffer->read_size)) {
+            char b64name[MAX_B64_HASH_LEN];
+            char fullpath[MAX_PATH_LEN];
+            adjustpath(edfs_context, fullpath, computename(ino, b64name));
+            edfs_update_hash(edfs_context, fullpath, -1, NULL, 0, filebuf->hash_buffer);
+        }
         sig_hash = edfs_get_hash(edfs_context, path, ino, chunk);
+    }
     int use_addr_cache = 1;
     int requested = 0;
     int do_forward = 1;
@@ -2135,11 +2126,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
         // avoid I/O lock
         if (chunk_exists(path, chunk)) {
             int filesize;
-            // if (edfs_context->mutex_initialized)
-            //    thread_mutex_lock(&edfs_context->io_lock);
             read_size = edfs_read_file(edfs_context, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, sig_hash);
-            // if (edfs_context->mutex_initialized)
-            //     thread_mutex_unlock(&edfs_context->io_lock);
 #ifdef EDFS_REMOVE_INCOMPLETE_CHUNKS
             if ((read_size > 0) && (read_size < size) && (chunk < filebuf->last_read_chunk)) {
                 // incomplete chunk, remove it
@@ -2924,8 +2911,6 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
         int err = 0;
         int64_t offset = fbuf->offset - fbuf->size;
         int64_t initial_filesize = get_size_json(edfs_context, ino);
-        // if (edfs_context->mutex_initialized)
-        //     thread_mutex_lock(&edfs_context->io_lock);
         int64_t filesize = initial_filesize;
         fbuf->file_size = filesize;
         while (size > 0) {
@@ -2945,8 +2930,6 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
             offset += err;
             fbuf->written_data = 1;
         }
-        // if (edfs_context->mutex_initialized)
-        //     thread_mutex_unlock(&edfs_context->io_lock);
 
         if (offset > initial_filesize) {
              edfs_set_size(edfs_context, ino, filesize);
@@ -3578,14 +3561,10 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                 json_value_free(root_value);
                 return 0;
             }
-            // if (edfs_context->mutex_initialized)
-            //     thread_mutex_lock(&edfs_context->io_lock);
             if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)payload, size , ".json", 0, NULL, NULL, NULL, NULL) != size ) {
                 log_warn("error writing root file %s", b64name);
                 written = -1;
             }
-            // if (edfs_context->mutex_initialized)
-            //     thread_mutex_unlock(&edfs_context->io_lock);
             return written;
         }
         if ((inode) && (name) && (b64name) && (parent) && (type) && (timestamp)) {
@@ -3634,16 +3613,12 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     else
                         remove_node(edfs_context, parent, inode, 1, generation, 1);
                 }
-                // if (edfs_context->mutex_initialized)
-                //     thread_mutex_lock(&edfs_context->io_lock);
                 if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)payload, size , ".json", 0, NULL, NULL, NULL, NULL) != size ) {
                     log_warn("error writing file %s", b64name);
                     written = -1;
                 } else
                 if ((!current_type) && (!deleted))
                     makesyncnode(edfs_context, parentb64name, b64name, name);
-                // if (edfs_context->mutex_initialized)
-                //     thread_mutex_unlock(&edfs_context->io_lock);
 
                 if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id)) {
                     uint64_t file_size = (uint64_t)json_object_get_number(root_object, "size");
@@ -3655,11 +3630,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                 char path[MAX_PATH_LEN];
                 snprintf(path, sizeof(path), "%s/%s/%s", edfs_context->working_directory, parentb64name, b64name);
                 if (!edfs_file_exists(path)) {
-                    // if (edfs_context->mutex_initialized)
-                    //     thread_mutex_lock(&edfs_context->io_lock);
                     makesyncnode(edfs_context, parentb64name, b64name, name);
-                    // if (edfs_context->mutex_initialized)
-                    //     thread_mutex_unlock(&edfs_context->io_lock);
                 }
             }
         } else {
@@ -3784,11 +3755,7 @@ int edwork_process_data(struct edfs *edfs_context, const unsigned char *payload,
         // includes a signature
         if (signature_size)
             datasize += 64;
-        // if (edfs_context->mutex_initialized)
-        //     thread_mutex_lock(&edfs_context->io_lock);
         int written_bytes = edfs_write_block(edfs_context, inode, chunk, payload + 32 + signature_size, datasize, timestamp / 1000000);
-        // if (edfs_context->mutex_initialized)
-        //     thread_mutex_unlock(&edfs_context->io_lock);
         edwork_cache_addr(edfs_context, inode, clientaddr, clientaddrlen);
 
         if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id))
@@ -3834,11 +3801,7 @@ int edwork_process_hash(struct edfs *edfs_context, const unsigned char *payload,
         // includes a signature
         if (signature_size)
             datasize += 64;
-        // if (edfs_context->mutex_initialized)
-        //     thread_mutex_lock(&edfs_context->io_lock);
         int written_bytes = edfs_write_hash_block(edfs_context, inode, chunk, payload + 32 + signature_size, datasize, timestamp / 1000000);
-        // if (edfs_context->mutex_initialized)
-        //     thread_mutex_unlock(&edfs_context->io_lock);
         edwork_cache_addr(edfs_context, inode, clientaddr, clientaddrlen);
         if (written_bytes == datasize) {
             written = 1;
