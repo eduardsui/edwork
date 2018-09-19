@@ -1554,6 +1554,7 @@ int write_json2(struct edfs *edfs_context, const char *base_path, uint64_t inode
     } else
         log_warn("error writing file %s", b64name);
 
+    json_free_serialized_string(serialized_string);
     return written;
 }
 
