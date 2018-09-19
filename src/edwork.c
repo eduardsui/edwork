@@ -343,9 +343,11 @@ unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, st
         encaps.sue_assoc_id = SCTP_getassocid(sock, addrs);
 
     struct sockaddr addrs2;
+    int addrs_is_local = 0;
     if (!addrs) {
         if ((SCTP_getpaddrs(sock, encaps.sue_assoc_id, &addrs) <= 0) || (!addrs))
             return 0;
+        addrs_is_local = 1;
     }
     memcpy(&encaps.sue_address, addrs, sizeof(struct sockaddr));
     if (SCTP_getsockopt(sock, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, &len)) {
@@ -354,7 +356,8 @@ unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, st
         port = ntohs(encaps.sue_port);
         log_trace("got encapsulation port %i", (int)port);
     }
-    SCTP_freepaddrs(addrs);
+    if (addrs_is_local)
+        SCTP_freepaddrs(addrs);
 #endif
     return port;
 }
