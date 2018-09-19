@@ -517,6 +517,11 @@ int main(int argc, char *argv[]) {
         if (se != NULL) {
             fuse_set_signal_handlers(fuse_get_session(se));
             edfs_edwork_init(edfs_context, port);
+#ifdef _WIN32
+            // on windows, if no parameters, detach console
+            if ((!foreground) || (argc == 1))
+                FreeConsole();
+#endif
 #ifdef EDFS_MULTITHREADED
             err = fuse_loop_mt(se);
 #else
