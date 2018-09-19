@@ -180,6 +180,7 @@ struct filewritebuf {
     int in_read;
 
     struct edfs_hash_buffer *hash_buffer;
+    int flags;
 };
 
 struct edwork_shard_io {
@@ -293,6 +294,9 @@ struct edfs {
     avl_tree_t ino_checksum_mismatch;
     avl_tree_t ino_sync_file;
 
+    avl_tree_t notify_write;
+    thread_mutex_t notify_write_lock;
+
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
     avl_tree_t peer_discovery;
     time_t disc_timestamp;
@@ -342,6 +346,7 @@ void edfs_update_proof_inode(struct edfs *edfs_context, uint64_t ino);
 int edfs_lookup_blockchain(struct edfs *edfs_context, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char *blockchainhash, uint64_t *generation, uint64_t *timestamp);
 size_t base64_encode_no_padding(const unsigned char *in, int in_size, unsigned char *out, int out_size);
 int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk, const unsigned char *buf, int size, struct edfs_hash_buffer *hash_buffer);
+int edfs_update_chain(struct edfs *edfs_context, uint64_t ino, int64_t file_size, unsigned char *hash, uint64_t *hash_chunks);
 
 uint64_t microseconds() {
     struct timeval tv;
@@ -594,6 +599,29 @@ int edfs_file_unlock(struct edfs *edfs_context, FILE *f) {
     lock.l_type = F_UNLCK;
     return fcntl(fileno(f), F_SETLKW, &lock);
 #endif
+}
+
+void edfs_notify_write(struct edfs *edfs_context, uint64_t inode, int write) {
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->notify_write_lock);
+    intptr_t write_count = (intptr_t)avl_remove(&edfs_context->notify_write, (void *)(uintptr_t)inode);
+    if (write)
+        write_count ++;
+    else
+        write_count --;
+    if (write_count > 0)
+        avl_insert(&edfs_context->notify_write, (void *)(uintptr_t)inode, (void *)write_count);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->notify_write_lock);
+}
+
+intptr_t edfs_is_write(struct edfs *edfs_context, uint64_t inode) {
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&edfs_context->notify_write_lock);
+    intptr_t write_count = (intptr_t)avl_search(&edfs_context->notify_write, (void *)(uintptr_t)inode);
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&edfs_context->notify_write_lock);
+    return write_count;
 }
 
 void notify_io(struct edfs *edfs_context, const char type[4], const unsigned char *buffer, int buffer_size, const unsigned char *append_data, int append_len, unsigned char ack, int do_sign, uint64_t ino, struct edwork_data *edwork, int proof_of_work, int loose_encrypt, void *use_clientaddr, int clientaddr_len, unsigned char *proof_of_work_cache, int *proof_of_work_size_cache) {
@@ -1977,8 +2005,15 @@ int edfs_reply_hash(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, u
 
     if ((err > 0) && (file_hash)) {
         unsigned char hash[32];
-        if ((!read_file_json(edfs_context, ino, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash)) || (XXH32(hash, 32, 0) != file_hash)) {
+        unsigned char computed_hash[32];
+        int64_t file_size = 0;
+        if ((!read_file_json(edfs_context, ino, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash)) || (XXH32(hash, 32, 0) != file_hash)) {
             log_warn("descriptor has different hash than requested");
+            err = 0;
+        }
+
+        if ((!edfs_update_chain(edfs_context, ino, file_size, computed_hash, NULL)) || (memcmp(computed_hash, hash, 32))) {
+            log_warn("computed hash differs from descriptor hash");
             err = 0;
         }
     }
@@ -2130,6 +2165,9 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
     if (chunk > last_file_chunk)
         return 0;
 
+    if ((filebuf->check_hash) && ((filebuf->flags & 3) == O_RDONLY) && (edfs_is_write(edfs_context, ino)))
+        filebuf->check_hash = 0;
+
     if (filebuf->check_hash) {
         if ((filebuf->written_data) && (filebuf->hash_buffer) && (filebuf->hash_buffer->read_size)) {
             char b64name[MAX_B64_HASH_LEN];
@@ -2150,7 +2188,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
         // avoid I/O lock
         if (chunk_exists(path, chunk)) {
             int filesize;
-            read_size = edfs_read_file(edfs_context, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, sig_hash);
+            read_size = edfs_read_file(edfs_context, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash);
 #ifdef EDFS_REMOVE_INCOMPLETE_CHUNKS
             if ((read_size > 0) && (read_size < size) && (chunk < filebuf->last_read_chunk)) {
                 // incomplete chunk, remove it
@@ -2253,6 +2291,9 @@ int read_chunk(struct edfs *edfs_context, const char *path, int64_t chunk, char 
         if (size > max_size)
             size = max_size;
     }
+
+    if (offset + size > filebuf->file_size)
+        size = filebuf->file_size - offset;
 
     if (size <= 0)
         return 0;
@@ -2403,6 +2444,32 @@ int edfs_releasedir(struct dirbuf *buf) {
     return 0;
 }
 
+int edfs_request_hash_if_needed(struct edfs *edfs_context, edfs_ino_t ino) {
+    unsigned char hash[32];
+    unsigned char computed_hash[32];
+    int64_t size = 0;
+    int type = read_file_json(edfs_context, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    if ((!type) || (!size))
+        return 0;
+
+    if ((edfs_update_chain(edfs_context, ino, size, computed_hash, NULL)) && (!memcmp(hash, computed_hash, 32))) {
+        log_trace("hash is up-to-date");
+        return 0;
+    }
+
+    unsigned char additional_data[20];
+    *(uint64_t *)additional_data = htonll(ino);
+    uint64_t max_chunks = edfs_get_max_chunk(size);
+    *(uint64_t *)(additional_data + 16) = htonl(XXH32(hash, 32, 0));
+
+    uint64_t i = 0;
+    for (i = 0; i < max_chunks; i++) {
+        *(uint64_t *)(additional_data + 8)= htonll(i);
+        notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+    }
+    return 1;
+}
+
 int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filewritebuf **fbuf) {
     int64_t size = 0;
     static unsigned char null_hash[32];
@@ -2436,7 +2503,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             blockchain_error = 1;
         }
 
-        if ((size > 0) && (memcmp(hash, null_hash, 32))) {
+        if ((size > 0) && (memcmp(hash, null_hash, 32)) && (!edfs_is_write(edfs_context, ino))) {
             *(uint64_t *)(additional_data + 16) = htonl(XXH32(hash, 32, 0));
             // file hash hash
             int valid_hash = 0;
@@ -2445,20 +2512,20 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             uint64_t start = microseconds();
             void *hash_error = (struct edfs_ino_cache *)avl_search(&edfs_context->ino_checksum_mismatch, (void *)(uintptr_t)ino);
             do {
-                if (blockchain_error) {
+                if (blockchain_error)
                     blockchain_error = 0;
-                } else {
-                    if (edfs_update_chain(edfs_context, ino, size, computed_hash, &max_chunks)) {
-                        if (!memcmp(hash, computed_hash, 32)) {
-                            valid_hash = 1;
-                            break;
-                        }
-                        if ((found_in_blockchain) && (!memcmp(blockchainhash, computed_hash, 32))) {
-                            valid_hash = 1;
-                            break;
-                        }
+
+                if (edfs_update_chain(edfs_context, ino, size, computed_hash, &max_chunks)) {
+                    if (!memcmp(hash, computed_hash, 32)) {
+                        valid_hash = 1;
+                        break;
+                    }
+                    if ((found_in_blockchain) && (!memcmp(blockchainhash, computed_hash, 32))) {
+                        valid_hash = 1;
+                        break;
                     }
                 }
+
                 if (send_want) {
                     notify_io(edfs_context, "wand", additional_data, 8, NULL, 0, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                     send_want = 0;
@@ -2507,9 +2574,9 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             (*fbuf)->ino = ino;
             (*fbuf)->file_size = size;
             (*fbuf)->check_hash = check_hash;
+            (*fbuf)->flags = flags;
         }
     }
-
     return 0;
 }
 
@@ -2526,9 +2593,9 @@ int edfs_create(struct edfs *edfs_context, edfs_ino_t parent, const char *name, 
         if (*buf) {
             memset(*buf, 0, sizeof(struct filewritebuf));
             (*buf)->ino = *inode;
+            (*buf)->flags = O_WRONLY;
         }
     }
-
     return 0;
 }
 
@@ -2627,9 +2694,9 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
             hash_buffer->chunk = hash_chunk;
             hash_buffer->read_size = 0;
         }
-        if (chunk < 0)
-            return 1;
     }
+    if (chunk < 0)
+        return 1;
 
     uint32_t hash = htonl(XXH32(buf, size, 0));
 
@@ -2954,7 +3021,10 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
             p += err;
             size -= err;
             offset += err;
-            fbuf->written_data = 1;
+            if (!fbuf->written_data) {
+                fbuf->written_data = 1;
+                edfs_notify_write(edfs_context, ino, 1);
+            }
         }
 
         if (offset > initial_filesize) {
@@ -3036,12 +3106,14 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
                 log_error("error updating chain");
             if (max_size > 0)
                 edfs_update_json_number_if_less(edfs_context, fbuf->ino, "size", max_size);
+            edfs_notify_write(edfs_context, fbuf->ino, 0);
         }
         if (edfs_context->mutex_initialized)
             thread_mutex_lock(&edfs_context->ino_cache_lock);
         void *ino_cache = avl_remove(&edfs_context->ino_cache, (void *)(uintptr_t)fbuf->ino);
         if (edfs_context->mutex_initialized)
             thread_mutex_unlock(&edfs_context->ino_cache_lock);
+
         free(ino_cache);
         free(fbuf->p);
         free(fbuf->hash_buffer);
@@ -3433,9 +3505,9 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             log_trace("data up to date");
             return;
         }
+        edfs_request_hash_if_needed(edfs_context, inode);
     }
     adjustpath(edfs_context, fullpath, computename(inode, b64name));
-
 
     if (!file_size)
         file_size = get_size_json(edfs_context, inode);
@@ -3470,6 +3542,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
                 break;
             } else
             if (XXH32(sig_buffer, sizeof(sig_buffer), 0) != signature_hash) {
+                edfs_request_hash_if_needed(edfs_context, inode);
                 log_debug("modified chunk %s:%" PRIu64, fullpath, chunk);
                 break;
             }
@@ -3494,18 +3567,11 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
             request_data(edfs_context, inode, chunk, 1, edwork_random() % 10, NULL, NULL, 0);
         }
     } else {
-        if ((try_update_hash) && (!edfs_try_make_hash(edfs_context, fullpath, file_size))) {
-            unsigned char additional_data[20];
-            uint64_t max_chunks = edfs_get_max_chunk(file_size);
-
-            *(uint64_t *)additional_data = htonll(inode);
-            *(uint64_t *)(additional_data + 16) = 0;
-            int i;
-            for (i = 0; i < max_chunks; i ++) {
-                *(uint64_t *)(additional_data + 8)= htonll(i);
-                notify_io(edfs_context, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, inode, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-            }
+        if (try_update_hash) {
+            edfs_try_make_hash(edfs_context, fullpath, file_size);
+            edfs_request_hash_if_needed(edfs_context, inode);
         }
+
         void *avl_data;
         if (json_version)
             avl_data = (void *)(uintptr_t)json_version;
@@ -3611,8 +3677,9 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                         log_warn("refused to update descriptor: received version is older (%" PRIu64 " > %" PRIu64 ")", current_generation, generation);
                     if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id) && (current_generation == generation) && (!deleted)) {
                         uint64_t file_size = (uint64_t)json_object_get_number(root_object, "size");
-                        if (file_size)
+                        if (file_size) {
                             edfs_queue_ensure_data(edfs_context, inode, file_size, 0, 0, generation + 1);
+                        }
                     }
                 } else
                 if (current_type) {
@@ -5590,6 +5657,7 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
         thread_mutex_init(&edfs_context->thread_lock);
 #endif
         thread_mutex_init(&edfs_context->ino_cache_lock);
+        thread_mutex_init(&edfs_context->notify_write_lock);
 
         edfs_context->mutex_initialized = 1;
         edfs_context->network_thread = thread_create(edwork_thread, (void *)edfs_context, "edwork", 8192 * 1024);
@@ -5640,6 +5708,7 @@ void edfs_edwork_done(struct edfs *edfs_context) {
     thread_mutex_term(&edfs_context->thread_lock);
 #endif
     thread_mutex_term(&edfs_context->ino_cache_lock);
+    thread_mutex_term(&edfs_context->notify_write_lock);
 }
 
 static void recursive_mkdir(const char *dir) {
@@ -5801,6 +5870,7 @@ struct edfs *edfs_create_context(const char *use_working_directory) {
         avl_initialize(&edfs_context->ino_cache, ino_compare, avl_ino_destructor);
         avl_initialize(&edfs_context->ino_checksum_mismatch, ino_compare, avl_ino_destructor);
         avl_initialize(&edfs_context->ino_sync_file, ino_compare, avl_ino_destructor);
+        avl_initialize(&edfs_context->notify_write, ino_compare, avl_ino_destructor);
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
         avl_initialize(&edfs_context->peer_discovery, ino_compare, avl_ino_destructor);
 #endif
@@ -5815,6 +5885,7 @@ void edfs_destroy_context(struct edfs *edfs_context) {
     avl_destroy(&edfs_context->ino_cache, avl_ino_key_data_destructor);
     avl_destroy(&edfs_context->ino_checksum_mismatch, avl_ino_key_cache_destructor);
     avl_destroy(&edfs_context->ino_sync_file, avl_ino_key_cache_destructor);
+    avl_destroy(&edfs_context->notify_write, avl_ino_key_cache_destructor);
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
     avl_destroy(&edfs_context->peer_discovery, avl_ino_key_data_destructor);
 #endif
