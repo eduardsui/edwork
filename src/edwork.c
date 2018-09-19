@@ -354,6 +354,7 @@ unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, st
         port = ntohs(encaps.sue_port);
         log_trace("got encapsulation port %i", (int)port);
     }
+    SCTP_freepaddrs(addrs);
 #endif
     return port;
 }
@@ -420,6 +421,10 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                             }
                         }
                         edwork_sctp_update_socket(edwork, sock, rcvinfo, addrs);
+                        if (addrs) {
+                            SCTP_freepaddrs(addrs);
+                            addrs = NULL;
+                        }
                     }
                     break;
 
@@ -548,6 +553,10 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                         if (edwork->clients[i].sctp_timestamp == edwork->sctp_timestamp)
                             edwork->sctp_timestamp = 0;
                     }
+                    if (addrs) {
+                        SCTP_freepaddrs(addrs);
+                        addrs = NULL;
+                    }
                     break;
                 }
             }
@@ -565,6 +574,10 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                 edwork->clients[data_index].is_listen_socket = 0;
             }
             thread_mutex_unlock(&edwork->clients_lock);
+            if (addrs) {
+                SCTP_freepaddrs(addrs);
+                addrs = NULL;
+            }
         }
     }
 }
