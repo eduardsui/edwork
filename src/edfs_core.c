@@ -4061,6 +4061,27 @@ void edfs_broadcast_top(struct edfs *edfs_context, void *use_clientaddr, int cli
     }
 }
 
+int edfs_block_contains_descriptor(struct block *blockchain, uint64_t inode, uint64_t inode_generation) {
+    if (!blockchain)
+        return 0;
+
+    int i;
+    int record_size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32;
+    int len = blockchain->data_len - 72;
+    uint64_t blockchain_generation = 0;
+    if (len >= record_size) {
+        unsigned char *ptr = blockchain->data;
+        for (i = 0; i < len; i += record_size) {
+            uint64_t blockchain_inode = ntohll(*(uint64_t *)ptr);
+            memcpy(&blockchain_generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
+            blockchain_generation = ntohll(blockchain_generation);
+            if ((inode == blockchain_inode) && (inode_generation == blockchain_generation))
+                return 1;
+        }
+    }
+    return 0;
+}
+
 void edfs_try_new_block(struct edfs *edfs_context) {
     if ((edfs_context->chain) && (!edfs_context->read_only_fs) && (edfs_context->proof_inodes_len)) {
         uint64_t chain_timestamp = edfs_context->chain->timestamp;
@@ -4068,7 +4089,7 @@ void edfs_try_new_block(struct edfs *edfs_context) {
         if (edfs_context->start_timestamp > chain_timestamp)
             chain_timestamp = edfs_context->start_timestamp;
 
-
+        int inodes = 0;
         if (((microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) && (microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT)) {
             log_info("mining new block");
             edwork_callback_lock(edfs_context->edwork, 1);
@@ -4079,20 +4100,33 @@ void edfs_try_new_block(struct edfs *edfs_context) {
             int i;
             for (i = 0; i < edfs_context->proof_inodes_len; i++) {
                 uint64_t inode = edfs_context->proof_inodes[i];
-                uint64_t inode_be = htonll(inode);
-                memcpy(ptr, &inode_be, sizeof(uint64_t));
-                ptr += sizeof(uint64_t);
                 uint64_t generation = 0;
                 uint64_t timestamp = 0;
                 // set hash to 0 for deleted file
-                if (!read_file_json(edfs_context, inode, NULL, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, ptr + sizeof(uint64_t) + sizeof(uint64_t)))
-                    memset(ptr + sizeof(uint64_t) + sizeof(uint64_t), 0, 32);
+                if (!read_file_json(edfs_context, inode, NULL, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t)))
+                    memset(ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), 0, 32);
+
+                if (edfs_block_contains_descriptor(edfs_context->chain, inode, generation)) {
+                    log_debug("data already in blockchain");
+                    continue;
+                }
+
+                inodes ++;
+                uint64_t inode_be = htonll(inode);
+                memcpy(ptr, &inode_be, sizeof(uint64_t));
+
+                ptr += sizeof(uint64_t);
                 generation = htonll(generation);
                 timestamp = htonll(timestamp);
                 memcpy(ptr, &generation, sizeof(uint64_t));
                 ptr += sizeof(uint64_t);
                 memcpy(ptr, &timestamp, sizeof(uint64_t));
                 ptr += sizeof(uint64_t) + 32;
+            }
+            if (!inodes) {
+                log_debug("no need for new block");
+                edwork_callback_lock(edfs_context->edwork, 0);
+                return;
             }
             memcpy(ptr, edwork_who_i_am(edfs_context->edwork), 32);
             ptr += 32;
@@ -4108,13 +4142,13 @@ void edfs_try_new_block(struct edfs *edfs_context) {
                     memcpy(previous_hash, edfs_context->chain->hash, 32);
                 else
                     previous_hash_ptr = NULL;
+                memset(edfs_context->proof_of_time, 0, 40);
+                edfs_context->proof_inodes_len = 0;
                 edwork_callback_lock(edfs_context->edwork, 0);
                 block_mine_with_copy(newblock, BLOCKCHAIN_COMPLEXITY, previous_hash_ptr);
                 edwork_callback_lock(edfs_context->edwork, 1);
                 // check if someone finished faster
                 if ((edfs_context->chain->index == newblock->index - 1) && (edfs_context->chain == old_chain)) {
-                    memset(edfs_context->proof_of_time, 0, 40);
-                    edfs_context->proof_inodes_len = 0;
                     edfs_context->chain = newblock;
                     edfs_block_save(edfs_context, edfs_context->chain);
                     edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
