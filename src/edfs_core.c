@@ -4089,7 +4089,7 @@ void edfs_try_new_block(struct edfs *edfs_context) {
         if (edfs_context->start_timestamp > chain_timestamp)
             chain_timestamp = edfs_context->start_timestamp;
 
-        int inodes = 0;
+        int descriptors = 0;
         if (((microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) || (edfs_context->proof_inodes_len >= MAX_PROOF_INODES)) && (microseconds() - chain_timestamp >= EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT)) {
             log_info("mining new block");
             edwork_callback_lock(edfs_context->edwork, 1);
@@ -4111,7 +4111,7 @@ void edfs_try_new_block(struct edfs *edfs_context) {
                     continue;
                 }
 
-                inodes ++;
+                descriptors ++;
                 uint64_t inode_be = htonll(inode);
                 memcpy(ptr, &inode_be, sizeof(uint64_t));
 
@@ -4123,8 +4123,10 @@ void edfs_try_new_block(struct edfs *edfs_context) {
                 memcpy(ptr, &timestamp, sizeof(uint64_t));
                 ptr += sizeof(uint64_t) + 32;
             }
-            if (!inodes) {
+            if (!descriptors) {
                 log_debug("no need for new block");
+                memset(edfs_context->proof_of_time, 0, 40);
+                edfs_context->proof_inodes_len = 0;
                 edwork_callback_lock(edfs_context->edwork, 0);
                 return;
             }
