@@ -782,11 +782,19 @@ char *adjustpath(struct edfs *edfs_context, char *fullpath, const char *name) {
 
 char *adjustpath2(struct edfs *edfs_context, char *fullpath, const char *name, uint64_t chunk) {
     fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%s", edfs_context->working_directory, name);
+    // ensure directory exists
+    EDFS_MKDIR(fullpath, 0755);
+    fullpath[0] = 0;
     snprintf(fullpath, MAX_PATH_LEN, "%s/%s/%" PRIu64, edfs_context->working_directory, name, chunk);
     return fullpath;
 }
 
 char *adjustpath3(struct edfs *edfs_context, char *fullpath, const char *name, uint64_t chunk) {
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%s", edfs_context->working_directory, name);
+    // ensure directory exists
+    EDFS_MKDIR(fullpath, 0755);
     fullpath[0] = 0;
     snprintf(fullpath, MAX_PATH_LEN, "%s/%s/hash.%" PRIu64, edfs_context->working_directory, name, chunk);
     return fullpath;
@@ -1285,7 +1293,6 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
     int deleted = 0;
     thread_mutex_lock(&edfs_context->events_lock);
     while (root) {
-        i++;
         next = (struct edfs_event *)root->next;
         if (edfs_context->network_done) {
             thread_mutex_unlock(&edfs_context->events_lock);
@@ -1296,6 +1303,7 @@ int edfs_schedule_iterate(struct edfs *edfs_context) {
                 thread_mutex_unlock(&edfs_context->events_lock);
                 int no_reschedule = root->callback(edfs_context, root->userdata_a, root->userdata_b);
                 thread_mutex_lock(&edfs_context->events_lock);
+                i++;
                 if (no_reschedule) {
                     root->callback = NULL;
                     deleted ++;
@@ -1565,7 +1573,7 @@ int read_file_json(struct edfs *edfs_context, uint64_t inode, uint64_t *parent, 
             // first time root
             char fullpath[MAX_PATH_LEN];
             char b64name[MAX_B64_HASH_LEN];
-            EDFS_MKDIR(adjustpath(edfs_context, fullpath, computename(1, b64name)), 0755);
+            // EDFS_MKDIR(adjustpath(edfs_context, fullpath, computename(1, b64name)), 0755);
             write_json(edfs_context, edfs_context->working_directory, ".", 0, inode, 0, S_IFDIR | 0755, NULL, 0, 0, 0, 0);
             root_value = read_json(edfs_context, edfs_context->working_directory, inode);
         }
@@ -1785,7 +1793,7 @@ int makesyncnode(struct edfs *edfs_context, const char *parentb64name, const cha
     char fullpath[MAX_PATH_LEN];
     
     // if directory exists, silently ignore it
-    EDFS_MKDIR(adjustpath(edfs_context, fullpath, b64name), 0755);
+    // EDFS_MKDIR(adjustpath(edfs_context, fullpath, b64name), 0755);
         
     // silently try to make parent node (if not available)
     EDFS_MKDIR(adjustpath(edfs_context, fullpath, parentb64name), 0755);
@@ -1843,7 +1851,8 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     if (!type)
         return -EPERM;
 
-    int err = EDFS_MKDIR(adjustpath(edfs_context, fullpath, computename(inode, b64name)), 0755);
+    // do not create directory by default
+    // EDFS_MKDIR(adjustpath(edfs_context, fullpath, computename(inode, b64name)), 0755);
 
     if (attr & S_IFDIR)
         attr |= 0755;
@@ -1859,6 +1868,9 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     
     adjustpath(edfs_context, fullpath, computename(parent, parentb64name));
 
+    // ensure parent directory exists
+    EDFS_MKDIR(fullpath, 0755);
+
     unsigned char hash[40];
     SHA256_CTX ctx;
 
@@ -1870,7 +1882,7 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     sha256_update(&ctx, (const BYTE *)&parentb64name, strlen(parentb64name));
     sha256_final(&ctx, hash + 8);
 
-    err = edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 40, NULL, 1, NULL, NULL, NULL, NULL);
+    int err = edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 40, NULL, 1, NULL, NULL, NULL, NULL);
 
     if (err > 0) {
         pathhash(edfs_context, fullpath, new_hash);
@@ -2687,6 +2699,8 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
     int chunks_per_file = BLOCK_SIZE / sizeof(uint32_t);
     uint64_t hash_chunk = chunk / chunks_per_file;
 
+    // ensure directory exists
+    EDFS_MKDIR(path, 0755);
     if (hash_buffer) {
         buffer = hash_buffer->buffer;
         if (((chunk < 0) || (hash_buffer->chunk != hash_chunk)) && (hash_buffer->read_size)) {
@@ -2968,6 +2982,9 @@ int edfs_write_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *buf,
     int64_t chunk = off / BLOCK_SIZE;
     int64_t offset = off % BLOCK_SIZE;
     size_t bytes_written = 0;
+
+    // ensure directory exists
+    EDFS_MKDIR(fullpath, 0755);
 
     int64_t filesize = *initial_filesize;
     while (size > 0) {
@@ -3463,7 +3480,7 @@ int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint
         uint64_t requested_block = htonll(edfs_context->chain->index + 2 - userdata_a);
         notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
-        if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 30)) {
+        if ((edfs_context->block_timestamp) && (time(NULL) - edfs_context->block_timestamp >= 20)) {
             edfs_context->hblk_scheduled = 0;
             return 1;
         }
@@ -4966,7 +4983,7 @@ one_loop:
                     struct block *previous_block = (struct block *)edfs_context->chain->previous_block;
                     block_free(edfs_context->chain);
                     edfs_context->chain = previous_block;
-                    edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 1);
+                    edfs_schedule(edfs_context, edfs_blockchain_request, 50000, 0, 0, 0, 0, 1);
                     edfs_context->block_timestamp = time(NULL);
                 }
                 block_free(newblock);
@@ -5464,14 +5481,23 @@ int edwork_shard_queue(void *userdata) {
 int edwork_queue(void *userdata) {
     struct edfs *edfs_context = (struct edfs *)userdata;
     while (!edfs_context->network_done) {
-        edfs_schedule_iterate(edfs_context);
         // check if a new block is due for creation
         edfs_try_new_block(edfs_context);
+        if (!edfs_schedule_iterate(edfs_context)) {
+            if (edfs_context->events) {
 #ifdef _WIN32
-        Sleep(50);
+                Sleep(20);
 #else
-        usleep(50000);
+                usleep(20000);
 #endif
+            } else {
+#ifdef _WIN32
+                Sleep(50);
+#else
+                usleep(50000);
+#endif
+            }
+        }
     }
     return 0;
 }
@@ -5530,7 +5556,7 @@ int edwork_thread(void *userdata) {
     }
 
     edfs_context->hblk_scheduled = 1;
-    edfs_schedule(edfs_context, edfs_blockchain_request, 100000, 0, 0, 0, 0, 0);
+    edfs_schedule(edfs_context, edfs_blockchain_request, 50000, 0, 0, 0, 0, 0);
 
     char *host_and_port = edfs_context->host_and_port;
     if ((host_and_port) && (host_and_port[0])) {

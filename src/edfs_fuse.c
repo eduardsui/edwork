@@ -259,7 +259,7 @@ static int edfs_fuse_statfs(const char *path, struct statvfs *stbuf) {
 }
 #endif
 
-void edfs_fuse_init(struct fuse_operations *edfs_fuse) {
+void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_directory) {
     edfs_fuse->getattr      = edfs_fuse_getattr;
     edfs_fuse->readdir      = edfs_fuse_readdir;
     edfs_fuse->open         = edfs_fuse_open;
@@ -283,7 +283,7 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse) {
     edfs_fuse->statfs       = edfs_fuse_statfs;
 #endif
 
-    edfs_context = edfs_create_context(NULL);
+    edfs_context = edfs_create_context(working_directory);
     edfs_init(edfs_context);
 }
 
@@ -305,6 +305,7 @@ int main(int argc, char *argv[]) {
     FILE *fp = NULL;
     struct fuse_chan *ch;
     char *mountpoint = NULL;
+    char *working_directory = NULL;
     int err = -1;
     int port = EDWORK_PORT;
     int i;
@@ -328,7 +329,21 @@ int main(int argc, char *argv[]) {
     log_set_level(3);
 
     fprintf(stderr, "%s\n", EDFS_BANNER);
-    edfs_fuse_init(&edfs_fuse);
+
+    // first look for working directory
+    for (i = 1; i < argc; i++) {
+        char *arg = argv[i];
+        if ((arg) && (arg[0] == '-') && (!strcmp(arg, "-dir"))) {
+            if (i >= argc - 1) {
+                fprintf(stderr, "edfs: working directory name expected after -dir parameter. Try -help option.\n");
+                exit(-1);
+            }
+            working_directory = argv[i + 1];
+            break;
+        }
+    }
+
+    edfs_fuse_init(&edfs_fuse, working_directory);
 
     for (i = 1; i < argc; i++) {
         char *arg = argv[i];
@@ -434,6 +449,10 @@ int main(int argc, char *argv[]) {
                     edfs_set_force_sctp(edfs_context, 1);
                 } else
 #endif
+                if (!strcmp(arg, "dir")) {
+                    // already parsed this parameter
+                    i ++;
+                } else
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -449,6 +468,7 @@ int main(int argc, char *argv[]) {
                         "    -genesis           initialize blockchain if not created\n"
                         "    -proxy             enable proxy mode (forward WANT requets)\n"
                         "    -shard id shards   set shard id, as id number of shard, eg.: -shards 1 2\n"
+                        "    -dir directory     set the edfs working directory (default is ./edfs)\n"
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
 #endif
