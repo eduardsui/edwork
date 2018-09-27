@@ -1588,10 +1588,16 @@ int read_file_json(struct edfs *edfs_context, uint64_t inode, uint64_t *parent, 
         *generation = (uint64_t)json_object_get_number(root_object, "version");
 
     int type = (int)json_object_get_number(root_object, "type");
+    if ((int)json_object_get_number(root_object, "deleted")) {
+        // ignore type for deleted objects
+        type = 0;
+    }
+
     if ((add_directory) || ((namebuf) && (len_namebuf > 0))) {
         const char *name = json_object_get_string(root_object, "name");
         if ((name) && (name[0])) {
-            if (add_directory)
+            // ignore deleted objects
+            if ((add_directory) && (type))
                 b->size += add_directory(name, inode, type, (int64_t)json_object_get_number(root_object, "size"), (time_t)json_object_get_number(root_object, "created"), (time_t)json_object_get_number(root_object, "modified"), (time_t)(json_object_get_number(root_object, "timestamp") / 1000000), b->userdata);
             if ((namebuf) && (len_namebuf)) {
                 int name_len = strlen(name);
@@ -1602,10 +1608,7 @@ int read_file_json(struct edfs *edfs_context, uint64_t inode, uint64_t *parent, 
             }
         }
     }
-    if ((int)json_object_get_number(root_object, "deleted")) {
-        // ignore type for deleted objects
-        type = 0;
-    }
+
 
     if (parent) {
         const char *parent_str = json_object_get_string(root_object, "parent");
@@ -1851,8 +1854,9 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     if (!type)
         return -EPERM;
 
+    computename(inode, b64name);
     // do not create directory by default
-    // EDFS_MKDIR(adjustpath(edfs_context, fullpath, computename(inode, b64name)), 0755);
+    // EDFS_MKDIR(adjustpath(edfs_context, fullpath, b64name), 0755);
 
     if (attr & S_IFDIR)
         attr |= 0755;
@@ -1883,7 +1887,6 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     sha256_final(&ctx, hash + 8);
 
     int err = edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 40, NULL, 1, NULL, NULL, NULL, NULL);
-
     if (err > 0) {
         pathhash(edfs_context, fullpath, new_hash);
         const char *update_data[] = {"iostamp", (const char *)new_hash, NULL, NULL};
@@ -2409,10 +2412,6 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
         char fullpath[MAX_PATH_LEN];
         adjustpath(edfs_context, fullpath, b64name);
 
-        tinydir_dir dir;
-        if (tinydir_open(&dir, fullpath))
-            return -EBUSY;
-
         struct dirbuf *b = dbuf;
         if (!b) {
             b = &dirbuf_container;
@@ -2428,6 +2427,10 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
         int64_t start_at = b->start;
 
         if (b->size < off + size) {
+            tinydir_dir dir;
+            if (tinydir_open(&dir, fullpath))
+                return 0;
+
             while (dir.has_next) {
                 tinydir_file file;
                 tinydir_readfile(&dir, &file);
@@ -2443,8 +2446,9 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
             }
             if (b->start < index)
                 b->start = index;
+
+            tinydir_close(&dir);
         }
-        tinydir_close(&dir);
     } else {
         return -ENOTDIR;
     }
@@ -2982,7 +2986,6 @@ int edfs_write_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *buf,
     int64_t chunk = off / BLOCK_SIZE;
     int64_t offset = off % BLOCK_SIZE;
     size_t bytes_written = 0;
-
     // ensure directory exists
     EDFS_MKDIR(fullpath, 0755);
 
@@ -3323,16 +3326,11 @@ int remove_node(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode, 
     char b64name[MAX_B64_HASH_LEN];
     char parentb64name[MAX_B64_HASH_LEN];
     int err;
-
     adjustpath(edfs_context, fullpath, computename(inode, b64name));
     if (recursive)
-        err = recursive_rmdir(fullpath);
+        recursive_rmdir(fullpath);
     else
-        err = rmdir(fullpath);
-    if (err) {
-        log_warn("error removing node %s", fullpath, err);
-        return 0;
-    }
+        rmdir(fullpath);
 
 #ifdef EDFS_USE_HARD_DELETE
     strcat(fullpath, ".json");

@@ -40,7 +40,7 @@ int base64_decode(size_t in_len, const char *in, size_t out_len, unsigned char *
             continue;
 		if ((in[ii]=='=') || (!in[ii]))
             break; /* stop at = or null character*/
-		ch = base64dec_tab[(unsigned)in[ii]];
+		ch = base64dec_tab[(unsigned char)in[ii]];
 		if (ch == 255)
             break; /* stop at a parse error */
 		v = (v<<6) | ch;
