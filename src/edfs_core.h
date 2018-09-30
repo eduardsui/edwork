@@ -153,9 +153,9 @@ int edwork_readonly(struct edfs *edfs_context);
 int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource, int resource_len, unsigned char *proof_str, int max_proof_len, unsigned char *proof_of_work);
 int edfs_proof_of_work_verify(int bits, const unsigned char *proof_str, int proof_len, const unsigned char *subject, int subject_len, const unsigned char *prefix, int prefix_len);
 
-int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t expires, uint64_t userdata_a, uint64_t userdata_b, int run_now, int update);
+int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t expires, uint64_t userdata_a, uint64_t userdata_b, int run_now, int update, int idle);
 int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t userdata_a, uint64_t userdata_b);
-int edfs_schedule_iterate(struct edfs *edfs_context);
+int edfs_schedule_iterate(struct edfs *edfs_context, unsigned int *idle_ref);
 
 struct edfs *edfs_create_context(const char *use_working_directory);
 void edfs_destroy_context(struct edfs *edfs_context);
