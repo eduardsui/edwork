@@ -137,6 +137,9 @@ void edfs_edwork_init(struct edfs *edfs_context, int port);
 void edfs_edwork_done(struct edfs *edfs_context);
 int edfs_file_exists(const char *name);
 
+ssize_t edfs_read_simple_key(struct edfs *edfs_context, void *ptr, size_t size, FILE *stream);
+ssize_t edfs_write_simple_key(struct edfs *edfs_context, const void *ptr, size_t size, FILE *stream);
+
 void edfs_set_resync(struct edfs *edfs_context, int resync_val);
 void edfs_set_rebroadcast(struct edfs *edfs_context, int rebroadcast_val);
 void edfs_set_readonly(struct edfs *edfs_context, int readonly_val);
@@ -145,6 +148,7 @@ void edfs_set_forward_chunks(struct edfs *edfs_context, int forward_chunks);
 void edfs_set_proxy(struct edfs *edfs_context, int proxy);
 void edfs_set_shard(struct edfs *edfs_context, int shard_id, int shards);
 void edfs_set_force_sctp(struct edfs *edfs_context, int force_sctp);
+void edfs_set_store_key(struct edfs *edfs_context, const unsigned char *key, int len);
 int edfs_genesis_if_new(struct edfs *edfs_context);
 
 const char *edfs_signature_path(struct edfs *edfs_context);

@@ -259,7 +259,7 @@ static int edfs_fuse_statfs(const char *path, struct statvfs *stbuf) {
 }
 #endif
 
-void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_directory) {
+void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_directory, const char *storage_key) {
     edfs_fuse->getattr      = edfs_fuse_getattr;
     edfs_fuse->readdir      = edfs_fuse_readdir;
     edfs_fuse->open         = edfs_fuse_open;
@@ -284,6 +284,8 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
 #endif
 
     edfs_context = edfs_create_context(working_directory);
+    if (storage_key)
+        edfs_set_store_key(edfs_context, (const unsigned char *)storage_key, strlen(storage_key));
     edfs_init(edfs_context);
 }
 
@@ -306,6 +308,7 @@ int main(int argc, char *argv[]) {
     struct fuse_chan *ch;
     char *mountpoint = NULL;
     char *working_directory = NULL;
+    char *storage_key = NULL;
     int err = -1;
     int port = EDWORK_PORT;
     int i;
@@ -333,17 +336,27 @@ int main(int argc, char *argv[]) {
     // first look for working directory
     for (i = 1; i < argc; i++) {
         char *arg = argv[i];
-        if ((arg) && (arg[0] == '-') && (!strcmp(arg, "-dir"))) {
-            if (i >= argc - 1) {
-                fprintf(stderr, "edfs: working directory name expected after -dir parameter. Try -help option.\n");
-                exit(-1);
+        if ((arg) && (arg[0] == '-')) {
+            if (!strcmp(arg, "-dir")) {
+                if (i >= argc - 1) {
+                    fprintf(stderr, "edfs: working directory name expected after -dir parameter. Try -help option.\n");
+                    exit(-1);
+                }
+                i ++;
+                working_directory = argv[i];
+            } else
+            if (!strcmp(arg, "-storagekey")) {
+                if (i >= argc - 1) {
+                    fprintf(stderr, "edfs: key expected after -storagekey parameter. Try -help option.\n");
+                    exit(-1);
+                }
+                i ++;
+                storage_key = argv[i];
             }
-            working_directory = argv[i + 1];
-            break;
         }
     }
 
-    edfs_fuse_init(&edfs_fuse, working_directory);
+    edfs_fuse_init(&edfs_fuse, working_directory, storage_key);
 
     for (i = 1; i < argc; i++) {
         char *arg = argv[i];
@@ -453,10 +466,14 @@ int main(int argc, char *argv[]) {
                     // already parsed this parameter
                     i ++;
                 } else
+                if (!strcmp(arg, "storagekey")) {
+                    // already parsed this parameter
+                    i ++;
+                } else
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
-                        "    -loglevel level    set log level, 0 to 5 or trace, debug, info, warning, error\n"
+                        "    -loglevel level    set log level, 0 to 5 or trace,debug,info,warning,error\n"
                         "    -logfile filename  set log filename\n"
                         "    -readonly          mount filesystem as read-only\n"
                         "    -newkey            generate a new key\n"
@@ -469,6 +486,7 @@ int main(int argc, char *argv[]) {
                         "    -proxy             enable proxy mode (forward WANT requets)\n"
                         "    -shard id shards   set shard id, as id number of shard, eg.: -shards 1 2\n"
                         "    -dir directory     set the edfs working directory (default is ./edfs)\n"
+                        "    -storagekey        set a storage key used for local encryption\n"
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
 #endif
@@ -516,7 +534,7 @@ int main(int argc, char *argv[]) {
         "}\n";
         FILE *f = fopen(edfs_signature_path(edfs_context), "w+b");
         if (f) {
-            fwrite(signature, 1, strlen(signature), f);
+            edfs_write_simple_key(edfs_context, signature, strlen(signature), f);
             fclose(f);
             edfs_set_resync(edfs_context, 1);
             log_warn("This is your first run of EdFS. Please wait 20 seconds for data to sync.");

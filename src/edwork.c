@@ -1367,9 +1367,9 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
     }
     uint64_t rand = edwork_random() % data->clients_count;
     int wrapped_to_first = 0;
-    time_t threshold = time(NULL) - 180;
+    time_t threshold = time(NULL) - 60;
 #ifdef WITH_SCTP
-    time_t sctp_threshold = time(NULL) - 10;
+    time_t sctp_threshold = time(NULL) - 40;
 #endif
     if ((ptr) && (len > 0)) {
         unsigned int i;

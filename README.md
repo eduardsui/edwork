@@ -1,5 +1,5 @@
 # edwork
-edwork is a lightweight decentralized, distributed read-write filesystem. It uses the UDP protocol for node sync. For now, it should not be used in production.
+edwork is a lightweight decentralized, distributed read-write filesystem. It uses UDP and SCTP/UDP protocol for node sync. For now, it should not be used in production.
 
 How it works
 ------------
@@ -10,8 +10,6 @@ The nodes discover each other by using 3 strategies:
 1. using the -use parameter to explicitly set the first node (eg.: `./edfs_mount -use someserver:4848`)
 2. hardcoding a node (by defining EDFS_DEFAULT_HOST at compile time)
 3. exchanging lists of addresses between them
-
-~~Note that for now, the content is randomly encrypted (about 25% of all the packages). In the early tests, I've noticed that some hops refused to forward some explicit UDP datagrams (I guess firewalls or other middleboxes). This was solved by randomly encrypting some packages using chacha20.~~
 
 All data traffic is encrypted using chacha20.
 

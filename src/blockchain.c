@@ -299,6 +299,10 @@ struct block *block_load_buffer(const unsigned char *buffer, int size) {
     newblock->nonce = ntohll(nonce);
     newblock->data_len = ntohl(data_len);
 
+    if (newblock->data_len > size - min_size) {
+        block_free(newblock);
+        return NULL;
+    }
     if (newblock->data_len) {
         newblock->data = (unsigned char *)malloc(newblock->data_len + 1);
         if (!newblock->data) {

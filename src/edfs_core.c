@@ -318,6 +318,9 @@ struct edfs {
 
     uint32_t chain_errors;
 
+    unsigned char storekey[32];
+    int has_storekey;
+
     int shard_id;
     int shards;
 #ifdef WITH_SCTP
@@ -938,8 +941,21 @@ size_t base64_encode_no_padding(const unsigned char *in, int in_size, unsigned c
     return encode_size;
 }
 
-int read_signature(const char *sig, unsigned char *sigdata, int verify, int *key_type, unsigned char *pubdata) {
-    JSON_Value *root_value = json_parse_file(sig);
+int read_signature(struct edfs *edfs_context, const char *sig, unsigned char *sigdata, int verify, int *key_type, unsigned char *pubdata) {
+    JSON_Value *root_value = NULL;
+    if ((edfs_context) && (edfs_context->has_storekey)) {
+        char keybuf[MAX_KEY_SIZE * 2];
+        FILE *f = fopen(sig, "rb");
+        if (f) {
+            ssize_t key_size = edfs_read_simple_key(edfs_context, keybuf, sizeof(keybuf) - 1, f);
+            fclose(f);
+            if (key_size > 0) {
+                keybuf[key_size] = 0;
+                root_value = json_parse_string(keybuf);
+            }
+        }
+    } else
+        root_value = json_parse_file(sig);
     if (key_type)
         *key_type = 0;
     if (!root_value)
@@ -1035,7 +1051,7 @@ int sign(struct edfs *edfs_context, const char *str, int len, unsigned char *has
         *info_key_type = 0;
     if (!edfs_context->key_loaded) {
         EDFS_THREAD_LOCK(edfs_context);
-        edfs_context->sig_len = read_signature(edfs_context->signature, edfs_context->sigkey, 0, &edfs_context->key_type, edfs_context->pubkey);
+        edfs_context->sig_len = read_signature(edfs_context, edfs_context->signature, edfs_context->sigkey, 0, &edfs_context->key_type, edfs_context->pubkey);
         EDFS_THREAD_UNLOCK(edfs_context);
     }
     if (!edfs_context->sig_len)
@@ -1064,7 +1080,9 @@ int verify(struct edfs *edfs_context, const char *str, int len, const unsigned c
       
     if (!edfs_context->pub_loaded) {
         EDFS_THREAD_LOCK(edfs_context);
-        edfs_context->pub_len = read_signature(edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
+        edfs_context->pub_len = read_signature(edfs_context, edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
+        if (edfs_context->pub_len)
+            edfs_context->pub_loaded = 1;
         EDFS_THREAD_UNLOCK(edfs_context);
     }
 
@@ -1105,7 +1123,164 @@ int verify(struct edfs *edfs_context, const char *str, int len, const unsigned c
     return 0;
 }
 
-int fwrite_signature(const unsigned char *data, int len, FILE *f, unsigned char *signature, int signature_size) {
+void derive_storage_key(struct edfs *edfs_context, unsigned char key[32], unsigned char ivector[32]) {
+    if (!edfs_context->pub_loaded) {
+        EDFS_THREAD_LOCK(edfs_context);
+        edfs_context->pub_len = read_signature(edfs_context, edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
+        if (edfs_context->pub_len > 0)
+            edfs_context->pub_loaded = 1;
+        EDFS_THREAD_UNLOCK(edfs_context);
+    }
+
+    hmac_sha256((const BYTE *)edfs_context->pubkey, edfs_context->pub_len, (const BYTE *)"EDFS STORAGEKEY:", 16, (const BYTE *)edfs_context->storekey, 32, (BYTE *)key);
+    hmac_sha256((const BYTE *)edfs_context->pubkey, edfs_context->pub_len, (const BYTE *)"EDFS STORAGE VECTOR:", 20, (const BYTE *)edfs_context->storekey, 32, (BYTE *)ivector);
+}
+
+void derive_simple_key(struct edfs *edfs_context, unsigned char key[32], unsigned char ivector[32]) {
+    hmac_sha256((const BYTE *)edfs_context->storekey, 32, (const BYTE *)"storekey", 8, NULL, 0, (BYTE *)key);
+    hmac_sha256((const BYTE *)edfs_context->storekey, 32, (const BYTE *)"store vector", 12, NULL, 0, (BYTE *)ivector);
+}
+
+ssize_t fread_with_key(struct edfs *edfs_context, void *ptr, size_t size, size_t nmemb, FILE *stream, int signature_prefix) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size > 0) && (nmemb > 0)) {
+        ssize_t err;
+        if ((signature_prefix) && (nmemb >= 64)) {
+            err = fread(ptr, 1, 64, stream);
+            if ((err != 64) || (nmemb == 64))
+                return err;
+
+            nmemb -= 64;
+            ptr = (unsigned char *)ptr + 64;
+        }
+        unsigned char *out = (unsigned char *)malloc(size * nmemb);
+        if (!out)
+            return -1;
+        err = fread(out, size, nmemb, stream);
+        if (err <= 0) {
+            free(out);
+            return err;
+        }
+
+        struct chacha_ctx ctx;
+        unsigned char key[32];
+        unsigned char ivector[32];
+
+        derive_storage_key(edfs_context, key, ivector);
+
+        chacha_keysetup(&ctx, key, 256);
+        chacha_ivsetup(&ctx, ivector, NULL);
+
+        chacha_encrypt_bytes(&ctx, (const unsigned char *)out, (unsigned char *)ptr, err);
+        free(out);
+        return err;
+    }
+    return fread(ptr, size, nmemb, stream);
+}
+
+ssize_t edfs_read_simple_key(struct edfs *edfs_context, void *ptr, size_t size, FILE *stream) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size > 0)) {
+        unsigned char *out = (unsigned char *)malloc(size);
+        if (!out)
+            return -1;
+        ssize_t err = fread(out, 1, size, stream);
+        if (err <= 0) {
+            free(out);
+            return err;
+        }
+
+        struct chacha_ctx ctx;
+        unsigned char key[32];
+        unsigned char ivector[32];
+
+        derive_simple_key(edfs_context, key, ivector);
+
+        chacha_keysetup(&ctx, key, 256);
+        chacha_ivsetup(&ctx, ivector, NULL);
+
+        chacha_encrypt_bytes(&ctx, (const unsigned char *)out, (unsigned char *)ptr, err);
+        free(out);
+
+        return err;
+    }
+    return fread(ptr, 1, size, stream);
+}
+
+ssize_t fwrite_with_key(struct edfs *edfs_context, const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size > 0) && (nmemb > 0)) {
+        struct chacha_ctx ctx;
+        unsigned char key[32];
+        unsigned char ivector[32];
+        unsigned char *out = (unsigned char *)malloc(size * nmemb);
+        if (!out)
+            return -1;
+
+        derive_storage_key(edfs_context, key, ivector);
+
+        chacha_keysetup(&ctx, key, 256);
+        chacha_ivsetup(&ctx, ivector, NULL);
+
+        chacha_encrypt_bytes(&ctx, (unsigned char *)ptr, out, size * nmemb);
+
+        ssize_t err = fwrite(out, size, nmemb, stream);
+        free(out);
+        return err;
+    }
+    return fwrite(ptr, size, nmemb, stream);
+}
+
+ssize_t edfs_write_simple_key(struct edfs *edfs_context, const void *ptr, size_t size, FILE *stream) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size > 0)) {
+        struct chacha_ctx ctx;
+        unsigned char key[32];
+        unsigned char ivector[32];
+        unsigned char *out = (unsigned char *)malloc(size);
+        if (!out)
+            return -1;
+
+        derive_simple_key(edfs_context, key, ivector);
+
+        chacha_keysetup(&ctx, key, 256);
+        chacha_ivsetup(&ctx, ivector, NULL);
+
+        chacha_encrypt_bytes(&ctx, (unsigned char *)ptr, out, size);
+
+        ssize_t err = fwrite(out, 1, size, stream);
+        free(out);
+        return err;
+    }
+    return fwrite(ptr, 1, size, stream);
+}
+
+ssize_t fwrite_block_with_key(struct edfs *edfs_context, const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size * nmemb >= 64)) {
+        ssize_t written = fwrite(ptr, 1, 64, stream);
+        if (written != 64)
+            return written;
+        ssize_t written_data = fwrite_with_key(edfs_context, (const unsigned char *)ptr + 64, 1, (nmemb * size) - 64, stream);
+        if (written_data < 0)
+            return written_data;
+
+        return written + written_data;
+    }
+    return fwrite(ptr, size, nmemb, stream);
+}
+
+ssize_t fread_block_with_key(struct edfs *edfs_context, void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size * nmemb >= 64)) {
+        ssize_t sig_size = fread(ptr, 1, 64, stream);
+        if (sig_size != 64)
+            return sig_size;
+        ssize_t read_data = fread_with_key(edfs_context, (unsigned char *)ptr + 64, 1, (nmemb * size) - 64, stream, 0);
+        if (read_data < 0)
+            return read_data;
+
+        return sig_size + read_data;
+    }
+    return fread(ptr, size, nmemb, stream);
+}
+
+
+int fwrite_signature(struct edfs *edfs_context, const unsigned char *data, int len, FILE *f, unsigned char *signature, int signature_size) {
     if ((signature) && (signature_size > 0)) {
         // static => initialized with 0
         static unsigned char dummy_buffer[64];
@@ -1118,12 +1293,12 @@ int fwrite_signature(const unsigned char *data, int len, FILE *f, unsigned char 
                 return -1;
         }
     }
-    return fwrite(data, 1, len, f);
+    return fwrite_with_key(edfs_context, data, 1, len, f);
 }
 
-int fwrite_compressed(const unsigned char *data, int len, FILE *f, unsigned char *signature, int signature_size, unsigned char *compressed_buffer, mz_ulong *max_len) {
+int fwrite_compressed(struct edfs *edfs_context, const unsigned char *data, int len, FILE *f, unsigned char *signature, int signature_size, unsigned char *compressed_buffer, mz_ulong *max_len) {
     if (compress(compressed_buffer, max_len, data, len) == Z_OK) {
-        int written = fwrite_signature(compressed_buffer, *max_len, f, signature, signature_size);
+        int written = fwrite_signature(edfs_context, compressed_buffer, *max_len, f, signature, signature_size);
         if (written > 0)
             written = len;
         return written;
@@ -1131,20 +1306,21 @@ int fwrite_compressed(const unsigned char *data, int len, FILE *f, unsigned char
     return -EIO;
 }
 
-int fread_signature(unsigned char *data, int len, FILE *f, unsigned char *signature) {
+int fread_signature(struct edfs *edfs_context, unsigned char *data, int len, FILE *f, unsigned char *signature, int signature_prefix) {
     if (signature) {
         int read_size = fread(signature, 1, 64, f);
         if (read_size != 64) {
             errno = EIO;
             return -EIO;
         }
+        signature_prefix = 0;
     }
-    return fread(data, 1, len, f);
+    return fread_with_key(edfs_context, data, 1, len, f, signature_prefix);
 }
 
-int fread_compressed(unsigned char *data, int len, FILE *f, unsigned char *signature) {
+int fread_compressed(struct edfs *edfs_context, unsigned char *data, int len, FILE *f, unsigned char *signature, int signature_prefix) {
     unsigned char compressed_buffer[BLOCK_SIZE_MAX];
-    int bytes_read = fread_signature(compressed_buffer, BLOCK_SIZE_MAX, f, signature);
+    int bytes_read = fread_signature(edfs_context, compressed_buffer, BLOCK_SIZE_MAX, f, signature, signature_prefix);
     if (bytes_read > 0) {
         mz_ulong max_len = len;
         if (uncompress(data, &max_len, compressed_buffer, bytes_read) == Z_OK)
@@ -1155,7 +1331,7 @@ int fread_compressed(unsigned char *data, int len, FILE *f, unsigned char *signa
     return bytes_read;
 }
 
-int edfs_write_file(struct edfs *edfs_context, const char *base_path, const char *name, const unsigned char *data, int len, const char *suffix, int do_sign, unsigned char *compressed_buffer, mz_ulong *max_len, unsigned char signature[64], int *sig_size) {
+int edfs_write_file(struct edfs *edfs_context, const char *base_path, const char *name, const unsigned char *data, int len, const char *suffix, int do_sign, unsigned char *compressed_buffer, mz_ulong *max_len, unsigned char signature[64], int *sig_size, int signature_prefix) {
     FILE *f;
     char fullpath[MAX_PATH_LEN];
     const char *fname;
@@ -1176,6 +1352,7 @@ int edfs_write_file(struct edfs *edfs_context, const char *base_path, const char
         return -errno;
 
     edfs_file_lock(edfs_context, f, 1);
+    int written_signature = 0;
     if (do_sign) {
         hash_size = sign(edfs_context, (const char *)data, len, hash, NULL);
         if (!hash_size) {
@@ -1190,13 +1367,19 @@ int edfs_write_file(struct edfs *edfs_context, const char *base_path, const char
         }
         if (sig_size)
             *sig_size = hash_size;
+    } else
+    if ((signature_prefix) && (len >= 64) && (edfs_context->has_storekey)) {
+        // write signature
+        written_signature = fwrite(data, 1, 64, f);
+        data += 64;
+        len -= 64;
     }
 
     int written;
     if ((compressed_buffer) && (max_len))
-        written = fwrite_compressed(data, len, f, hash, hash_size, compressed_buffer, max_len);
+        written = fwrite_compressed(edfs_context, data, len, f, hash, hash_size, compressed_buffer, max_len);
     else
-        written = fwrite_signature(data, len, f, hash, hash_size);
+        written = fwrite_signature(edfs_context, data, len, f, hash, hash_size);
 
     if (written < 0) {
         int err = -errno;
@@ -1206,7 +1389,7 @@ int edfs_write_file(struct edfs *edfs_context, const char *base_path, const char
     }
     edfs_file_unlock(edfs_context, f);
     fclose(f);
-    return written;
+    return written + written_signature;
 }
 
 int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t expires, uint64_t userdata_a, uint64_t userdata_b, int run_now, int update, int idle) {
@@ -1387,10 +1570,10 @@ int edfs_unlink_file(struct edfs *edfs_context, const char *base_path, const cha
     return unlink(fname);
 }
 
-int edfs_read_file(struct edfs *edfs_context, const char *base_path, const char *name, unsigned char *data, int len, const char *suffix, int as_text_file, int check_signature, int compression, int *filesize, uint32_t signature_hash) {
+int edfs_read_file(struct edfs *edfs_context, const char *base_path, const char *name, unsigned char *data, int len, const char *suffix, int as_text_file, int check_signature, int compression, int *filesize, uint32_t signature_hash, int signature_prefix) {
     FILE *f;
     char fullpath[MAX_PATH_LEN];
-    unsigned char sig_buf[BLOCK_SIZE];
+    unsigned char sig_buf[BLOCK_SIZE_MAX];
     unsigned char hash[64];
     unsigned char *sig_ptr = NULL;
     int sig_bytes_read = 0;
@@ -1419,9 +1602,9 @@ int edfs_read_file(struct edfs *edfs_context, const char *base_path, const char 
     int bytes_read;
     if ((compression) || ((check_signature) && ((len < BLOCK_SIZE) && (len > 0)))) {
         if (compression) {
-            sig_bytes_read = fread_compressed(sig_buf, BLOCK_SIZE, f, check_signature ? hash : NULL);
+            sig_bytes_read = fread_compressed(edfs_context, sig_buf, BLOCK_SIZE_MAX, f, check_signature ? hash : NULL, signature_prefix);
         } else {
-            sig_bytes_read = fread_signature(sig_buf, BLOCK_SIZE, f, check_signature ? hash : NULL);
+            sig_bytes_read = fread_signature(edfs_context, sig_buf, BLOCK_SIZE_MAX, f, check_signature ? hash : NULL, signature_prefix);
         }
         sig_ptr = sig_buf;
         if (sig_bytes_read <= 0) {
@@ -1431,7 +1614,7 @@ int edfs_read_file(struct edfs *edfs_context, const char *base_path, const char 
             memcpy(data, sig_buf, bytes_read);
         }
     } else {
-        bytes_read = fread_signature(data, len, f, check_signature ? hash : NULL);
+        bytes_read = fread_signature(edfs_context, data, len, f, check_signature ? hash : NULL, signature_prefix);
         sig_ptr = data;
         sig_bytes_read = bytes_read;
     }
@@ -1455,7 +1638,7 @@ int edfs_read_file(struct edfs *edfs_context, const char *base_path, const char 
             }
             return bytes_read;
         }
-        log_error("signature verify failed");
+        log_error("signature verify failed (%s)", fname);
         return -EIO;
     }
 
@@ -1467,7 +1650,7 @@ int edfs_read_file(struct edfs *edfs_context, const char *base_path, const char 
 
 int verify_file(struct edfs *edfs_context, const char *base_path, const char *name) {
     unsigned char data[BLOCK_SIZE];
-    if (edfs_read_file(edfs_context, base_path, name, data, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0) <= 0)
+    if (edfs_read_file(edfs_context, base_path, name, data, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0, 0) <= 0)
         return 0;
     return 1;
 }
@@ -1531,7 +1714,7 @@ void write_json(struct edfs *edfs_context, const char *base_path, const char *na
     }
     int string_len = strlen(serialized_string);
     unsigned char signature[64];
-    edfs_write_file(edfs_context, base_path, b64name, (const unsigned char *)serialized_string, string_len, ".json", 1, NULL, NULL, signature, NULL);
+    edfs_write_file(edfs_context, base_path, b64name, (const unsigned char *)serialized_string, string_len, ".json", 1, NULL, NULL, signature, NULL, 0);
 
     // do not broadcast root object
     if (parent != 0) {
@@ -1549,7 +1732,7 @@ JSON_Value *read_json(struct edfs *edfs_context, const char *base_path, uint64_t
     char b64name[MAX_B64_HASH_LEN];
     computename(inode, b64name);
 
-    int data_size = edfs_read_file(edfs_context, base_path, b64name, (unsigned char *)data, MAX_INODE_DESCRIPTOR_SIZE - 1, ".json", 1, 1, 0, NULL, 0);
+    int data_size = edfs_read_file(edfs_context, base_path, b64name, (unsigned char *)data, MAX_INODE_DESCRIPTOR_SIZE - 1, ".json", 1, 1, 0, NULL, 0, 0);
     if (data_size <= 0) {
         log_trace("invalid file %s/%s.json", base_path, b64name);
         return 0;
@@ -1575,7 +1758,7 @@ int write_json2(struct edfs *edfs_context, const char *base_path, uint64_t inode
 
     int string_len = strlen(serialized_string);
     unsigned char signature[64];
-    if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)serialized_string, string_len , ".json", 1, NULL, NULL, signature, NULL) == string_len) {
+    if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)serialized_string, string_len , ".json", 1, NULL, NULL, signature, NULL, 0) == string_len) {
         written = string_len;
 
         JSON_Object *root_object = json_value_get_object(root_value);
@@ -1833,7 +2016,7 @@ int makesyncnode(struct edfs *edfs_context, const char *parentb64name, const cha
     sha256_update(&ctx, (const BYTE *)&parentb64name, strlen(parentb64name));
     sha256_final(&ctx, hash);
 
-    return edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 32, NULL, 1, NULL, NULL, NULL, NULL);
+    return edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 32, NULL, 1, NULL, NULL, NULL, NULL, 0);
 }
 
 int pathhash(struct edfs *edfs_context, const char *path, unsigned char *hash) {
@@ -1910,7 +2093,7 @@ int makenode(struct edfs *edfs_context, edfs_ino_t parent, const char *name, int
     sha256_update(&ctx, (const BYTE *)&parentb64name, strlen(parentb64name));
     sha256_final(&ctx, hash + 8);
 
-    int err = edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 40, NULL, 1, NULL, NULL, NULL, NULL);
+    int err = edfs_write_file(edfs_context, fullpath, b64name, (const unsigned char *)hash, 40, NULL, 1, NULL, NULL, NULL, NULL, 0);
     if (err > 0) {
         pathhash(edfs_context, fullpath, new_hash);
         const char *update_data[] = {"iostamp", (const char *)new_hash, NULL, NULL};
@@ -2005,7 +2188,7 @@ int edfs_reply_chunk(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, 
         return -errno;
 
     edfs_file_lock(edfs_context, f, 0);
-    int err = fread(buf, 1, size, f);
+    int err = fread_block_with_key(edfs_context, buf, 1, size, f);
     edfs_file_unlock(edfs_context, f);
     fclose(f);
 
@@ -2036,7 +2219,7 @@ int edfs_reply_hash(struct edfs *edfs_context, edfs_ino_t ino, uint64_t chunk, u
         return -errno;
 
     edfs_file_lock(edfs_context, f, 0);
-    int err = fread(buf, 1, size, f);
+    int err = fread_block_with_key(edfs_context, buf, 1, size, f);
     edfs_file_unlock(edfs_context, f);
     fclose(f);
 
@@ -2155,7 +2338,7 @@ uint32_t edfs_get_hash(struct edfs *edfs_context, const char *path, edfs_ino_t i
     unsigned int chunk_offset = chunk % chunks_per_file;
 
     snprintf(hash_file, sizeof(hash_file), "hash.%" PRIu64, hash_chunk);
-    int read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0);
+    int read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0, 0);
     if (read_size < 0)
         read_size = 0;
     unsigned int offset = chunk_offset * sizeof(uint32_t);
@@ -2179,7 +2362,7 @@ int edfs_get_hash2(struct edfs *edfs_context, const char *path, edfs_ino_t ino, 
         *chunk_offset_ptr = chunk_offset;
 
     snprintf(hash_file, sizeof(hash_file), "hash.%" PRIu64, hash_chunk);
-    int read_size = edfs_read_file(edfs_context, path, hash_file, (unsigned char *)buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0);
+    int read_size = edfs_read_file(edfs_context, path, hash_file, (unsigned char *)buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0, 0);
     if (read_size < 0)
         read_size = 0;
 
@@ -2228,7 +2411,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, const char *path, const 
         // avoid I/O lock
         if (chunk_exists(path, chunk)) {
             int filesize;
-            read_size = edfs_read_file(edfs_context, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash);
+            read_size = edfs_read_file(edfs_context, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
 #ifdef EDFS_REMOVE_INCOMPLETE_CHUNKS
             if ((read_size > 0) && (read_size < size) && (chunk < filebuf->last_read_chunk)) {
                 // incomplete chunk, remove it
@@ -2733,7 +2916,7 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
         buffer = hash_buffer->buffer;
         if (((chunk < 0) || (hash_buffer->chunk != hash_chunk)) && (hash_buffer->read_size)) {
             snprintf(hash_file, sizeof(hash_file), "hash.%" PRIu64, hash_buffer->chunk);
-            edfs_write_file(edfs_context, path, hash_file, buffer, hash_buffer->read_size, NULL, 1, NULL, NULL, NULL, NULL);
+            edfs_write_file(edfs_context, path, hash_file, buffer, hash_buffer->read_size, NULL, 1, NULL, NULL, NULL, NULL, 0);
             hash_buffer->chunk = hash_chunk;
             hash_buffer->read_size = 0;
         }
@@ -2750,12 +2933,12 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
     if (hash_buffer) {
         read_size = hash_buffer->read_size;
         if (!read_size) {
-            read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0);
+            read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0, 0);
             if (read_size < 0)
                 read_size = 0;
         }
     } else {
-        read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0);
+        read_size = edfs_read_file(edfs_context, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0, 0);
         if (read_size < 0)
             read_size = 0;
     }
@@ -2769,7 +2952,7 @@ int edfs_update_hash(struct edfs *edfs_context, const char *path, int64_t chunk,
     if (hash_buffer)
         hash_buffer->read_size = read_size;
     else
-        edfs_write_file(edfs_context, path, hash_file, buffer, read_size, NULL, 1, NULL, NULL, NULL, NULL);
+        edfs_write_file(edfs_context, path, hash_file, buffer, read_size, NULL, 1, NULL, NULL, NULL, NULL, 0);
     return 0;
 }
 
@@ -2788,7 +2971,7 @@ int edfs_try_make_hash(struct edfs *edfs_context, const char *path, uint64_t fil
         unsigned char signature[64];
         char chunk_file[MAX_PATH_LEN];
         snprintf(chunk_file, MAX_PATH_LEN, "%" PRIu64, (uint64_t)chunk);
-        int read_size = edfs_read_file(edfs_context, path, chunk_file, signature, 64, NULL, 0, 0, 0, NULL, 0);
+        int read_size = edfs_read_file(edfs_context, path, chunk_file, signature, 64, NULL, 0, 0, 0, NULL, 0, 1);
         if (read_size != 64)
             return 0;
         edfs_update_hash(edfs_context, path, chunk, signature, 64, &hash_buffer);
@@ -2823,7 +3006,7 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
     unsigned char compressed_buffer[BLOCK_SIZE_MAX];
     mz_ulong max_len = sizeof(compressed_buffer);
 
-    int read_data = edfs_read_file(edfs_context, path, name, old_data, BLOCK_SIZE, NULL, 0, 1, USE_COMPRESSION, NULL, 0);
+    int read_data = edfs_read_file(edfs_context, path, name, old_data, BLOCK_SIZE, NULL, 0, 1, USE_COMPRESSION, NULL, 0, 0);
     const unsigned char *ptr;
 
     *(uint64_t *)additional_data = htonll(ino);
@@ -2847,7 +3030,7 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
         } else
             ptr = (const unsigned char *)buf;
 
-        block_written = edfs_write_file(edfs_context, path, name, (const unsigned char *)ptr, (int)to_write, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL);
+        block_written = edfs_write_file(edfs_context, path, name, (const unsigned char *)ptr, (int)to_write, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL, 0);
         if (block_written < 0)
             return block_written;
         if (block_written == to_write) {
@@ -2879,12 +3062,12 @@ int make_chunk(struct edfs *edfs_context, edfs_ino_t ino, const char *path, int6
             size = available;
         memcpy(old_data + offset, buf, size);
 
-        written_bytes = edfs_write_file(edfs_context, path, name, (const unsigned char *)old_data, (int)offset + size, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL);
+        written_bytes = edfs_write_file(edfs_context, path, name, (const unsigned char *)old_data, (int)offset + size, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL, 0);
     } else
     if (offset) {
         return -EBUSY;
     } else
-        written_bytes = edfs_write_file(edfs_context, path, name, (const unsigned char *)buf, (int)size, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL);
+        written_bytes = edfs_write_file(edfs_context, path, name, (const unsigned char *)buf, (int)size, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL, 0);
     if (written_bytes > 0) {
         *filesize += written_bytes;
 #ifdef EDFS_FORCE_BROADCAST
@@ -2941,7 +3124,7 @@ int edfs_write_block(struct edfs *edfs_context, uint64_t inode, int64_t chunk, c
         }
         fseek(f, 0, SEEK_SET);
     }
-    int written = fwrite(data, 1, size, f);
+    int written = fwrite_block_with_key(edfs_context, data, 1, size, f);
     if (written < 0)
         log_error("error writing %i bytes to file %s (errno: %i)", fullpath, errno);
 
@@ -2991,7 +3174,7 @@ int edfs_write_hash_block(struct edfs *edfs_context, uint64_t inode, int64_t chu
         }
         fseek(f, 0, SEEK_SET);
     }
-    int written = fwrite(data, 1, size, f);
+    int written = fwrite_block_with_key(edfs_context, data, 1, size, f);
     if (written < 0)
         log_error("error writing %i bytes to file %s (errno: %i)", fullpath, errno);
 
@@ -3577,7 +3760,7 @@ void edfs_ensure_data(struct edfs *edfs_context, uint64_t inode, uint64_t file_s
         }
         if (signature_hash) {
             snprintf(chunk_path, MAX_PATH_LEN, "%" PRIu64, chunk);
-            if (edfs_read_file(edfs_context, fullpath, chunk_path, sig_buffer, 64, NULL, 0, 0, 0, NULL, signature_hash) != 64) {
+            if (edfs_read_file(edfs_context, fullpath, chunk_path, sig_buffer, 64, NULL, 0, 0, 0, NULL, signature_hash, 1) != 64) {
                 log_debug("error reading local chunk %s:%" PRIu64, fullpath, chunk);
                 break;
             } else
@@ -3694,7 +3877,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                 json_value_free(root_value);
                 return 0;
             }
-            if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)payload, size , ".json", 0, NULL, NULL, NULL, NULL) != size ) {
+            if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)payload, size , ".json", 0, NULL, NULL, NULL, NULL, 1) != size ) {
                 log_warn("error writing root file %s", b64name);
                 written = -1;
             }
@@ -3747,7 +3930,7 @@ int edwork_process_json(struct edfs *edfs_context, const unsigned char *payload,
                     else
                         remove_node(edfs_context, parent, inode, 1, generation, 1);
                 }
-                if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)payload, size , ".json", 0, NULL, NULL, NULL, NULL) != size ) {
+                if (edfs_write_file(edfs_context, edfs_context->working_directory, b64name, (const unsigned char *)payload, size , ".json", 0, NULL, NULL, NULL, NULL, 1) != size ) {
                     log_warn("error writing file %s", b64name);
                     written = -1;
                 } else
@@ -4007,7 +4190,7 @@ int edwork_encrypt(struct edfs *edfs_context, const unsigned char *buffer, int s
 
     if (!edfs_context->pub_loaded) {
         EDFS_THREAD_LOCK(edfs_context);
-        edfs_context->pub_len = read_signature(edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
+        edfs_context->pub_len = read_signature(edfs_context, edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
         if (edfs_context->pub_len > 0)
             edfs_context->pub_loaded = 1;
         EDFS_THREAD_UNLOCK(edfs_context);
@@ -4091,7 +4274,7 @@ void edfs_broadcast_top(struct edfs *edfs_context, void *use_clientaddr, int cli
     }
     char b64name[MAX_B64_HASH_LEN];
     unsigned char buffer[EDWORK_PACKET_SIZE];
-    int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computeblockname(edfs_context->chain->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+    int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computeblockname(edfs_context->chain->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0, 1);
     if (len > 0) {
         notify_io(edfs_context, "topb", (const unsigned char *)buffer, len, NULL, 0, 0, 0, 0, edfs_context->edwork, 0, 0, use_clientaddr, clientaddr_len, NULL, NULL);
         log_info("broadcasting chain block");
@@ -4574,7 +4757,7 @@ one_loop:
         // add offset
         int size = BLOCK_SIZE - 4;
         memcpy(buffer, payload, 4);
-        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 24 * 3600);
+        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 180);
         log_info("%i records found (offset: %i)", records, offset);
         if (records > 0) {
             size += 4;
@@ -4884,7 +5067,7 @@ one_loop:
         // }
         char b64name[MAX_B64_HASH_LEN];
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
-        int len = edfs_read_file(edfs_context, edfs_context->working_directory, computename(ino, b64name), buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0);
+        int len = edfs_read_file(edfs_context, edfs_context->working_directory, computename(ino, b64name), buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0, 1);
         if (len > 0) {
             if (edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL) <= 0)
                 log_error("error sending DESC");
@@ -4949,7 +5132,7 @@ one_loop:
 
         char b64name[MAX_B64_HASH_LEN];
         computeblockname(index, b64name);
-        int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+        int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0, 1);
         if (len > 0) {
             if (edwork_send_to_peer(edfs_context->edwork, is_top ? "topb" : "blkd", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL) <= 0)
                 log_error("error sending chain block");
@@ -4977,7 +5160,7 @@ one_loop:
         uint64_t requested_block = htonll(newblock->index + 2);
         char b64name[MAX_B64_HASH_LEN];
         if ((!edfs_context->chain) && (!newblock->index)) {
-            edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+            edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL, 1);
             edfs_context->chain = newblock;
             edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
             edfs_new_chain_request_descriptors(edfs_context, 0);
@@ -4990,7 +5173,7 @@ one_loop:
             newblock->previous_block = edfs_context->chain;
             if (block_verify(newblock, BLOCKCHAIN_COMPLEXITY)) {
                 notify_io(edfs_context, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-                edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+                edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL, 1);
                 edfs_context->chain = newblock;
                 edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
                 edfs_new_chain_request_descriptors(edfs_context, 0);
@@ -5013,7 +5196,7 @@ one_loop:
         } else {
             char b64name[MAX_B64_HASH_LEN];
             computeblockname(newblock->index, b64name);
-            int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+            int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0, 1);
             if (len > 64) {
                 struct block *temp_block = block_load_buffer(buffer + 64, len - 64);
                 if ((temp_block) && (memcmp(temp_block->hash, newblock->hash, 32))) {
@@ -5036,7 +5219,7 @@ one_loop:
 
             if (newblock) {
                 computeblockname(newblock->index  + 1, b64name);
-                len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+                len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, b64name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0, 1);
                 if (len > 64) {
                     if (edwork_send_to_peer(edfs_context->edwork, "blkd", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL) <= 0)
                         log_error("error sending chain block");
@@ -5107,7 +5290,7 @@ one_loop:
                 if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
                     block_free(edfs_context->chain);
                     edfs_context->chain = topblock;
-                    edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+                    edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL, 1);
                     edwork_update_chain(edfs_context->edwork, edfs_context->chain->hash);
                     edfs_new_chain_request_descriptors(edfs_context, 0);
                     edfs_context->top_broadcast_timestamp = 0;
@@ -5175,7 +5358,7 @@ one_loop:
             block_free(topblock);
             return;
         }
-        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL);
+        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL, 1);
         topblock->previous_block = edfs_context->chain;
         edfs_context->chain = topblock;
         if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
@@ -5267,7 +5450,7 @@ void edwork_save_nodes(struct edfs *edfs_context) {
     unsigned char buffer[BLOCK_SIZE];
     int size = BLOCK_SIZE;
     unsigned int offset = 0;
-    int records = edwork_get_node_list(edfs_context->edwork, buffer, &size, (unsigned int)offset, 0);
+    int records = edwork_get_node_list(edfs_context->edwork, buffer, &size, (unsigned int)offset, 48 * 3600);
 
     if (records > 0) {
         FILE *out = fopen(edfs_context->nodes_file, "wb");
@@ -5276,7 +5459,7 @@ void edwork_save_nodes(struct edfs *edfs_context) {
                 uint32_t size_data = htonl(size);
                 fwrite(&size_data, 1, sizeof(uint32_t), out);
                 fwrite(buffer, 1, size, out);
-                records = edwork_get_node_list(edfs_context->edwork, buffer, &size, offset, 0);
+                records = edwork_get_node_list(edfs_context->edwork, buffer, &size, offset, 48 * 3600);
 
                 if (records > 0)
                     offset += records;
@@ -5394,7 +5577,7 @@ unsigned int edwork_resync(struct edfs *edfs_context, void *clientaddr, int clie
             if (string_ends_with(file.name, ".json", 5)) {
                 // && (strcmp(file.name, "AAAAAAAAAAE.json")))
                 unsigned char buffer[EDWORK_PACKET_SIZE];
-                int len = edfs_read_file(edfs_context, edfs_context->working_directory, file.name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0);
+                int len = edfs_read_file(edfs_context, edfs_context->working_directory, file.name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0, 1);
                 if (len > 0) {
                     if ((clientaddr) && (clientaddrlen)) {
                         edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL);
@@ -5415,7 +5598,7 @@ unsigned int edwork_resync_desc(struct edfs *edfs_context, uint64_t inode, void 
     unsigned char buffer[EDWORK_PACKET_SIZE];
     char b64name[MAX_B64_HASH_LEN];
 
-    int len = edfs_read_file(edfs_context, edfs_context->working_directory, computename(inode, b64name), buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0);
+    int len = edfs_read_file(edfs_context, edfs_context->working_directory, computename(inode, b64name), buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0, 1);
     if (len > 0) {
         if ((clientaddr) && (clientaddrlen))
             edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL);
@@ -5450,7 +5633,7 @@ unsigned int edwork_resync_dir_desc(struct edfs *edfs_context, uint64_t inode, v
         tinydir_readfile(&dir, &file);
 
         if (!file.is_dir) {
-            int len = edfs_read_file(edfs_context, edfs_context->working_directory, file.name, buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0);
+            int len = edfs_read_file(edfs_context, edfs_context->working_directory, file.name, buffer, EDWORK_PACKET_SIZE, ".json", 0, 0, 0, NULL, 0, 1);
             if (len > 0) {
                 if ((clientaddr) && (clientaddrlen)) {
                     edwork_send_to_peer(edfs_context->edwork, "desc", buffer, len, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL);
@@ -5545,7 +5728,9 @@ int edwork_thread(void *userdata) {
 
     if (!edfs_context->pub_loaded) {
         EDFS_THREAD_LOCK(edfs_context);
-        edfs_context->pub_len = read_signature(edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
+        edfs_context->pub_len = read_signature(edfs_context, edfs_context->signature, edfs_context->pubkey, 1, &edfs_context->key_type, NULL);
+        if (edfs_context->pub_len > 0)
+            edfs_context->pub_loaded = 1;
         EDFS_THREAD_UNLOCK(edfs_context);
     }
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
@@ -5826,7 +6011,7 @@ void edfs_block_save(struct edfs *edfs_context, struct block *chain) {
     char b64name[MAX_B64_HASH_LEN];
     unsigned char *buffer = block_save_buffer(chain, &size);
     if (buffer) {
-        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(chain->index, b64name), buffer, size, NULL, 1, NULL, NULL, NULL, NULL);
+        edfs_write_file(edfs_context, edfs_context->blockchain_directory, computeblockname(chain->index, b64name), buffer, size, NULL, 1, NULL, NULL, NULL, NULL, 0);
         free(buffer);
     }
 }
@@ -5840,7 +6025,7 @@ struct block *edfs_blockchain_load(struct edfs *edfs_context) {
 
         char b64name[MAX_B64_HASH_LEN];
         unsigned char buffer[BLOCK_SIZE_MAX];
-        int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computeblockname(i ++, b64name), buffer, BLOCK_SIZE_MAX, NULL, 0, 1, 0, NULL, 0);
+        int len = edfs_read_file(edfs_context, edfs_context->blockchain_directory, computeblockname(i ++, b64name), buffer, BLOCK_SIZE_MAX, NULL, 0, 1, 0, NULL, 0, 0);
         if (len <= 0)
             break;
 
@@ -5926,6 +6111,14 @@ int edfs_genesis_if_new(struct edfs *edfs_context) {
     log_info("done");
     edfs_broadcast_top(edfs_context, NULL, 0);
     return 1;
+}
+
+void edfs_set_store_key(struct edfs *edfs_context, const unsigned char *key, int len) {
+    if ((len) && (key)) {
+        hmac_sha256((const BYTE *)key, len, (const BYTE *)"localstorage key", 16, NULL, 0, (BYTE *)edfs_context->storekey);
+        edfs_context->has_storekey = 1;
+    } else
+        edfs_context->has_storekey = 0;
 }
 
 char *edfs_add_to_path(const char *path, const char *subpath) {
