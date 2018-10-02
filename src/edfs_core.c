@@ -853,7 +853,21 @@ int signature_allows_write(struct edfs *edfs_context) {
     if (!edfs_context)
         return 0;
 
-    JSON_Value *root_value = json_parse_file(edfs_context->signature);
+    JSON_Value *root_value = NULL;
+    if ((edfs_context) && (edfs_context->has_storekey)) {
+        char keybuf[MAX_KEY_SIZE * 2];
+        FILE *f = fopen(edfs_context->signature, "rb");
+        if (f) {
+            ssize_t key_size = edfs_read_simple_key(edfs_context, keybuf, sizeof(keybuf) - 1, f);
+            fclose(f);
+            if (key_size > 0) {
+                keybuf[key_size] = 0;
+                root_value = json_parse_string(keybuf);
+            }
+        }
+    } else
+        root_value = json_parse_file(edfs_context->signature);
+
     if (!root_value)
         return 0;
 
