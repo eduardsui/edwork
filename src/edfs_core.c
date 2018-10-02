@@ -842,8 +842,6 @@ const char *computeblockname(uint64_t inode, char *out) {
 #else
     inode = htonll(inode);
     size_t len = base32_encode((const BYTE *)&inode, sizeof(uint64_t), (BYTE *)out, MAX_B64_HASH_LEN);
-    if (len < 0)
-        len = 0;
     out[len] = 0;
     return (const char *)out;
 #endif
