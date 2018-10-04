@@ -29,7 +29,7 @@
         WaitForSingleObject(timer, INFINITE); 
         CloseHandle(timer); 
     }
-    #ifdef WITH_SCTP
+    #if defined(WITH_SCTP) && !defined(WITH_USRSCTP)
         #define WITH_USRSCTP
     #endif
 #else
@@ -110,7 +110,7 @@
 #include "sha256.h"
 #include "avl.h"
 #include "log.h"
-
+#include "xxhash.h"
 
 uint64_t microseconds();
 uint64_t switchorder(uint64_t input);
@@ -1087,9 +1087,12 @@ unsigned char *make_packet(struct edwork_data *data, const char type[4], const u
         timestamp = microseconds();
     timestamp = htonll(timestamp);
     memcpy(buf + 44, &timestamp, sizeof(timestamp));
-    // reserved bytes for future use
     memcpy(buf + 52, data->chain, 32);
-    edwork_random_bytes(buf + 84, 8);
+
+    // key id
+    uint64_t key_hash = htonll(XXH64(data->key_id, 32, 0));
+    memcpy(buf + 84, &key_hash, 8);
+
     hmac_sha256(data->key_id, 32, buf, 92, data_buffer, *len, buf + 92); 
 
     memcpy(buf + 124, &size, sizeof(uint32_t));
