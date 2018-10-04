@@ -1708,6 +1708,11 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
     memcpy(&timestamp, buffer + 44, sizeof(uint64_t));
     timestamp = ntohll(timestamp);
 
+    uint64_t key_id;
+    memcpy(&key_id, buffer + 84, sizeof(uint64_t));
+
+    key_id = ntohll(key_id);
+
     const unsigned char *blockhash = buffer + 52;
     
     memcpy(&size, buffer + 124, sizeof(uint32_t));
@@ -1757,7 +1762,7 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
         // ensure json is 0 terminated
         buffer[n] = 0;
         thread_mutex_lock(&data->callback_lock);
-        callback(data, sequence, timestamp, type, payload, size, clientaddr, clientaddrlen, who_am_i, blockhash, userdata, is_sctp, is_listen_socket);
+        callback(data, sequence, timestamp, type, payload, size, key_id, clientaddr, clientaddrlen, who_am_i, blockhash, userdata, is_sctp, is_listen_socket);
         thread_mutex_unlock(&data->callback_lock);        
     }
 
