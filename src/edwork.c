@@ -169,10 +169,8 @@ struct edwork_data {
 #endif
 
     unsigned char i_am[32];
-    unsigned char key_id[32];
-    unsigned char chain[32];
+    edwork_find_key_callback find_key;
 
-    char *log_dir;
     uint64_t sequence;
 
     struct client_data *clients;
@@ -215,7 +213,7 @@ struct edwork_data {
 #endif
 
 #ifdef WITH_SCTP
-int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int ttl);
+int edwork_send_to_sctp_socket(struct edwork_data *data, struct edfs_key_data *key, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int ttl);
 static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const struct sockaddr *addr, int addr_len, unsigned short encapsulation_port);
 #endif
 int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len);
@@ -416,11 +414,11 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                             log_error("error in sctp_getpaddrs (%i)", errno);
                         } else {
                             if (addrs->sa_family == AF_INET6)
-                                edwork_send_to_sctp_socket(edwork, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in6), 0);
+                                edwork_send_to_sctp_socket(edwork, NULL, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in6), 0);
                             else
                             if (addrs->sa_family == AF_INET) {
                                 log_trace("SCTP_COMM_UP (%s)", edwork_addr_ipv4(addrs));
-                                edwork_send_to_sctp_socket(edwork, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in), 0);
+                                edwork_send_to_sctp_socket(edwork, NULL, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in), 0);
                             }
                         }
                         edwork_sctp_update_socket(edwork, sock, rcvinfo, addrs);
@@ -833,7 +831,7 @@ uint64_t edwork_random() {
 }
 
 
-struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned char *key) {
+struct edwork_data *edwork_create(int port, edwork_find_key_callback find_key) {
     int optval;
     struct sockaddr_in serveraddr;
 
@@ -973,10 +971,7 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
         log_error("error creating SCTP socket");
 #endif
 
-    int len = log_dir ? strlen(log_dir) : 0;
-    data->log_dir = (char *)malloc(len + 1);
-    memcpy(data->log_dir, log_dir, len);
-    data->log_dir[len] = 0;
+    data->find_key = find_key;
 
     unsigned char random[32];
     uint64_t rand = edwork_random();
@@ -1003,9 +998,6 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     data->magnitude = 0;
     data->magnitude_stamp = 0;
 
-    if (key)
-        sha256(key, 32, data->key_id);
-
     thread_mutex_init(&data->sock_lock);
     thread_mutex_init(&data->clients_lock);
     thread_mutex_init(&data->lock);
@@ -1016,12 +1008,6 @@ struct edwork_data *edwork_create(int port, const char *log_dir, const unsigned 
     edwork_add_node(data, "255.255.255.255", port, 0, 0, 0);
 
     return data;
-}
-
-void edwork_update_chain(struct edwork_data *data, unsigned char *hash) {
-    if ((!data) || (!hash))
-        return;
-    memcpy(data->chain, hash, 32);
 }
 
 int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_work, int proof_of_work_size) {
@@ -1071,9 +1057,9 @@ int edwork_unspend(struct edwork_data *data, const unsigned char *proof_of_work,
     return 0;
 }
 
-unsigned char *make_packet(struct edwork_data *data, const char type[4], const unsigned char *data_buffer, int *len, int confirmed_acks, uint64_t force_timestamp, uint64_t ino) {
+unsigned char *make_packet(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *data_buffer, int *len, int confirmed_acks, uint64_t force_timestamp, uint64_t ino) {
     unsigned char *buf = (unsigned char *)malloc(128 + *len);
-    // static const char reserved_buf[40] = { 0 };
+    static unsigned char null_hash[32];
     if (!buf)
         return NULL;
 
@@ -1087,13 +1073,19 @@ unsigned char *make_packet(struct edwork_data *data, const char type[4], const u
         timestamp = microseconds();
     timestamp = htonll(timestamp);
     memcpy(buf + 44, &timestamp, sizeof(timestamp));
-    memcpy(buf + 52, data->chain, 32);
+    if ((key) && (key->chain))
+        memcpy(buf + 52, key->chain->hash, 32);
+    else
+        edwork_random_bytes(buf + 52, 32);
 
     // key id
-    uint64_t key_hash = htonll(XXH64(data->key_id, 32, 0));
+    uint64_t key_hash = key ? key->key_id_xxh64_be : 0;
     memcpy(buf + 84, &key_hash, 8);
 
-    hmac_sha256(data->key_id, 32, buf, 92, data_buffer, *len, buf + 92); 
+    if (key)
+        hmac_sha256(key->key_id, 32, buf, 92, data_buffer, *len, buf + 92); 
+    else
+        hmac_sha256(null_hash, 32, buf, 92, data_buffer, *len, buf + 92); 
 
     memcpy(buf + 124, &size, sizeof(uint32_t));
     if (data_buffer)
@@ -1101,10 +1093,10 @@ unsigned char *make_packet(struct edwork_data *data, const char type[4], const u
 
     *len += 128;
 
-    if (confirmed_acks > 0) {
+    if ((confirmed_acks > 0) && (key)) {
         char buf_path[4096];
         buf_path[0] = 0;
-        snprintf(buf_path, 4096, "%s/%" PRIu64, data->log_dir, ino);
+        snprintf(buf_path, 4096, "%s/%" PRIu64, key->cache_directory, ino);
         FILE *f = fopen(buf_path, "wb");
         if (f) {
             uint32_t acks_buffer = htonl(confirmed_acks);
@@ -1127,13 +1119,13 @@ unsigned char *make_packet(struct edwork_data *data, const char type[4], const u
     return buf;
 }
 
-void edwork_confirm_seq(struct edwork_data *data, uint64_t sequence, int acks) {
-    if (!acks)
+void edwork_confirm_seq(struct edwork_data *data, struct edfs_key_data *key, uint64_t sequence, int acks) {
+    if ((!acks) || (!key))
         return;
 
     char buf_path[4096];
     buf_path[0] = 0;
-    snprintf(buf_path, 4096, "%s/%" PRIu64, data->log_dir, sequence);
+    snprintf(buf_path, 4096, "%s/%" PRIu64, key->cache_directory, sequence);
     if (acks < 0) {
         log_debug("forcefully deleted edwork block %", buf_path);
         if (unlink(buf_path))
@@ -1201,10 +1193,10 @@ int edwork_set_info(void *clientinfo, uint64_t last_ino, uint64_t last_chunk, ui
 
 
 #ifdef WITH_SCTP
-int edwork_send_to_sctp_socket(struct edwork_data *data, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int ttl) {
+int edwork_send_to_sctp_socket(struct edwork_data *data, struct edfs_key_data *key, SCTP_SOCKET_TYPE socket, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int ttl) {
     if (!socket)
         return -1;
-    unsigned char *packet = make_packet(data, type, buf, &len, 0, 0, 0);
+    unsigned char *packet = make_packet(data, key, type, buf, &len, 0, 0, 0);
     int sent = -1;
     if ((packet) && (len > 0)) {
         if (data)
@@ -1348,7 +1340,7 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port, int i
     }
 }
 
-int edwork_private_broadcast(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, int buf_is_packet, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino, const void *clientaddr, int clientaddr_len, int sleep_us, int force_udp) {
+int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, int buf_is_packet, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino, const void *clientaddr, int clientaddr_len, int sleep_us, int force_udp) {
     if (!data)
         return -1;
 
@@ -1365,7 +1357,7 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
         ptr = buf;
     } else {
         log_trace("broadcasting %.4s", type);
-        packet = make_packet(data, type, buf, &len, confirmed_acks, force_timestamp, ino);
+        packet = make_packet(data, key, type, buf, &len, confirmed_acks, force_timestamp, ino);
         ptr = packet;
     }
     uint64_t rand = edwork_random() % data->clients_count;
@@ -1461,21 +1453,21 @@ int edwork_private_broadcast(struct edwork_data *data, const char type[4], const
     return 0;
 }
 
-int edwork_broadcast(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, int force_udp) {
-    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, NULL, 0, 0, force_udp);
+int edwork_broadcast(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, int force_udp) {
+    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, NULL, 0, 0, force_udp);
 }
 
-int edwork_broadcast_client(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, const void *clientaddr, int clientaddr_len) {
-    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, clientaddr, clientaddr_len, 0, 0);
+int edwork_broadcast_client(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, const void *clientaddr, int clientaddr_len) {
+    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, clientaddr, clientaddr_len, 0, 0);
 }
 
-int edwork_broadcast_except(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino) {
-    return edwork_private_broadcast(data, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 0, 0);
+int edwork_broadcast_except(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino) {
+    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 0, 0);
 }
 
-unsigned int edwork_jumbo(struct edwork_data *data, unsigned char *jumbo_buf, unsigned int max_jumbo_size, unsigned int jumbo_size, unsigned char *buf, int buf_size) {
+unsigned int edwork_jumbo(struct edwork_data *data, struct edfs_key_data *key, unsigned char *jumbo_buf, unsigned int max_jumbo_size, unsigned int jumbo_size, unsigned char *buf, int buf_size) {
     if ((jumbo_size + buf_size + 2 >= max_jumbo_size) && (jumbo_size)) {
-        edwork_private_broadcast(data, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0, NULL, 0, 0, 0);
+        edwork_private_broadcast(data, key, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0, NULL, 0, 0, 0);
         jumbo_size = 0;
     }
     unsigned short size_short = htons((unsigned short)buf_size);
@@ -1486,14 +1478,14 @@ unsigned int edwork_jumbo(struct edwork_data *data, unsigned char *jumbo_buf, un
     return jumbo_size;
 }
 
-unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count, unsigned int offset) {
-    if (!data)
+unsigned int edwork_rebroadcast(struct edwork_data *data, struct edfs_key_data *key, unsigned int max_count, unsigned int offset) {
+    if ((!data) || (!key))
         return 0;
 
     tinydir_dir dir;
     
-    if (tinydir_open(&dir, data->log_dir)) {
-        log_error("error opening log directory %s", data->log_dir);
+    if (tinydir_open(&dir, key->cache_directory)) {
+        log_error("error opening log directory %s", key->cache_directory);
         return 0;
     }
     unsigned int rebroadcast_count = 0;
@@ -1511,7 +1503,7 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
             }
             char buf_path[4096];
             buf_path[0] = 0;
-            snprintf(buf_path, 4096, "%s/%s", data->log_dir, file.name);
+            snprintf(buf_path, 4096, "%s/%s", key->cache_directory, file.name);
             FILE *f = fopen(buf_path, "rb");
             if (f) {
                 unsigned char buf[MAX_EDWORK_SYNC_BLOCK_SIZE];
@@ -1536,10 +1528,9 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
                         // re-timestamp
                         *(uint64_t *)(buf + 52) = htonll(microseconds());
 
-                        hmac_sha256(data->key_id, 32, buf + 8, 92, buf + 136, size - 136, buf + 100);
+                        hmac_sha256(key->key_id, 32, buf + 8, 92, buf + 136, size - 136, buf + 100);
                         
-                        // jumbo_size = edwork_jumbo(data, jumbo_buf, sizeof(jumbo_buf), jumbo_size, buf + 8, size - 8);
-                        edwork_private_broadcast(data, NULL, buf + 8, size - 8, 0, 0, 1, NULL, 0, 0, 0, NULL, 0, 0, 0);
+                        edwork_private_broadcast(data, key, NULL, buf + 8, size - 8, 0, 0, 1, NULL, 0, 0, 0, NULL, 0, 0, 0);
                         rebroadcast_count ++;
                     }
                 } else
@@ -1559,8 +1550,6 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, unsigned int max_count
         tinydir_next(&dir);
     }
     tinydir_close(&dir);
-    // if (jumbo_size)
-    //     edwork_private_broadcast(data, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0, NULL, 0, 0);
     return rebroadcast_count;
 }
 
@@ -1610,11 +1599,11 @@ int edworks_data_pending(struct edwork_data *data, int timeout_ms) {
 #endif
 }
 
-int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int is_sctp, int is_listen_socket, int ttl) {
+int edwork_send_to_peer(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int is_sctp, int is_listen_socket, int ttl) {
 #ifdef WITH_SCTP
     if (is_sctp) {
         if (is_listen_socket)
-            return edwork_send_to_sctp_socket(data, data->sctp_socket, type, buf, len, clientaddr, clientaddrlen, EDWORK_SCTP_TTL);
+            return edwork_send_to_sctp_socket(data, key, data->sctp_socket, type, buf, len, clientaddr, clientaddrlen, EDWORK_SCTP_TTL);
         uintptr_t data_index = (uintptr_t)avl_search(&data->tree, clientaddr);
         SCTP_SOCKET_TYPE socket = 0;
         if (data_index > 0) {
@@ -1624,10 +1613,10 @@ int edwork_send_to_peer(struct edwork_data *data, const char type[4], const unsi
                 socket = peer_data->socket;
             thread_mutex_unlock(&data->clients_lock);
         }
-        return edwork_send_to_sctp_socket(data, socket ? socket : data->sctp_socket, type, buf, len, clientaddr, clientaddrlen, EDWORK_SCTP_TTL);
+        return edwork_send_to_sctp_socket(data, key, socket ? socket : data->sctp_socket, type, buf, len, clientaddr, clientaddrlen, EDWORK_SCTP_TTL);
     }
 #endif
-    unsigned char *packet = make_packet(data, type, buf, &len, 0, 0, 0);
+    unsigned char *packet = make_packet(data, key, type, buf, &len, 0, 0, 0);
     int sent = -1;
     if ((packet) && (len > 0)) {
         if ((data) && (clientaddr) && (clientaddrlen))
@@ -1711,8 +1700,6 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
     uint64_t key_id;
     memcpy(&key_id, buffer + 84, sizeof(uint64_t));
 
-    key_id = ntohll(key_id);
-
     const unsigned char *blockhash = buffer + 52;
     
     memcpy(&size, buffer + 124, sizeof(uint32_t));
@@ -1725,18 +1712,26 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
         return 0;
     }
 
+    struct edfs_key_data *key_data = data->find_key(key_id, userdata);
     unsigned char hmac[32];
-    hmac_sha256(data->key_id, 32, buffer, 92, payload, size, hmac);
-    if (memcmp(hmac, buffer + 92, 32)) {
+    if (key_data)
+        hmac_sha256(key_data->key_id, 32, buffer, 92, payload, size, hmac);
+    if ((!key_data) || (memcmp(hmac, buffer + 92, 32))) {
         // invalid hmac
+        if ((memcmp(type, "ping", 4)) && (memcmp(type, "helo", 4))) {
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
-        if ((memcmp(type, "disc", 4)) && (memcmp(type, "add2", 4))) {
+            if ((memcmp(type, "disc", 4)) && (memcmp(type, "add2", 4))) {
 #endif
-            log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
-            return 0;
+                log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
+                return 0;
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
+            }
+#endif
         }
-#endif
+    }
+    if (!key_data) {
+        log_warn("unknown key id %" PRIu64 " (%s)", key_id, edwork_addr_ipv4(clientaddr));
+        return 0;
     }
 
     if ((callback) && (!memcmp(type, "jmbo", 4))) {
@@ -1762,7 +1757,7 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
         // ensure json is 0 terminated
         buffer[n] = 0;
         thread_mutex_lock(&data->callback_lock);
-        callback(data, sequence, timestamp, type, payload, size, key_id, clientaddr, clientaddrlen, who_am_i, blockhash, userdata, is_sctp, is_listen_socket);
+        callback(data, sequence, timestamp, type, payload, size, key_data, clientaddr, clientaddrlen, who_am_i, blockhash, userdata, is_sctp, is_listen_socket);
         thread_mutex_unlock(&data->callback_lock);        
     }
 
@@ -2008,7 +2003,6 @@ void edwork_destroy(struct edwork_data *data) {
 #endif
     thread_mutex_term(&data->callback_lock);
 
-    free(data->log_dir);
     free(data->clients);
     free(data);
 }

@@ -286,7 +286,6 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
     edfs_context = edfs_create_context(working_directory);
     if (storage_key)
         edfs_set_store_key(edfs_context, (const unsigned char *)storage_key, strlen(storage_key));
-    edfs_init(edfs_context);
 }
 
 static const char EDFS_BANNER[] =   " _______   ________  ___       __   ________  ________  ___  __       \n"
@@ -443,9 +442,6 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "daemonize")) {
                     foreground = 0;
                 } else
-                if (!strcmp(arg, "genesis")) {
-                    edfs_genesis_if_new(edfs_context);
-                } else
                 if (!strcmp(arg, "proxy")) {
                     edfs_set_proxy(edfs_context, 1);
                 } else
@@ -470,6 +466,14 @@ int main(int argc, char *argv[]) {
                     // already parsed this parameter
                     i ++;
                 } else
+                if (!strcmp(arg, "partition")) {
+                    if (i >= argc - 1) {
+                        fprintf(stderr, "edfs: partition id expected after -partition parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
+                    edfs_set_partition_key(edfs_context, argv[i]);
+                } else
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -477,12 +481,12 @@ int main(int argc, char *argv[]) {
                         "    -logfile filename  set log filename\n"
                         "    -readonly          mount filesystem as read-only\n"
                         "    -newkey            generate a new key\n"
+                        "    -partition id      mount given partition id\n"
                         "    -use host[:port]   use host:port as initial host\n"
                         "    -resync            request data resync\n"
                         "    -rebroadcast       force rebroadcast all local data\n"
                         "    -chunks n          set the number of forward chunks to be requested on read\n"
                         "    -daemonize         run as daemon/service\n"
-                        "    -genesis           initialize blockchain if not created\n"
                         "    -proxy             enable proxy mode (forward WANT requets)\n"
                         "    -shard id shards   set shard id, as id number of shard, eg.: -shards 1 2\n"
                         "    -dir directory     set the edfs working directory (default is ./edfs)\n"
@@ -524,29 +528,6 @@ int main(int argc, char *argv[]) {
     if (!initial_friend_set)
         edfs_set_initial_friend(edfs_context, EDFS_DEFAULT_HOST);
 #endif
-    if (!edfs_file_exists(edfs_signature_path(edfs_context))) {
-        log_info("using default signature");
-        const char *signature = "{\n"\
-        "    \"alg\": \"ED25519\",\n"\
-        "    \"kty\": \"EDD25519\",\n"\
-        "    \"k\": \"wG5RPGPCly9kNWs2_DZRMU8DtQGmXxRduafL9M-AMX-9H3n3V3udUagWE_HyDAMw5GOka8ppuzuO7pp_x5i5ew\",\n"\
-        "    \"pk\": \"siy3GXOHnVySVUlHUDVGt7v6nMKWjy39Hy23M40Toos\"\n"\
-        "}\n";
-        FILE *f = fopen(edfs_signature_path(edfs_context), "w+b");
-        if (f) {
-            edfs_write_simple_key(edfs_context, signature, strlen(signature), f);
-            fclose(f);
-            edfs_set_resync(edfs_context, 1);
-            log_warn("This is your first run of EdFS. Please wait 20 seconds for data to sync.");
-        } else
-            log_error("error writing signature: %i", errno);
-    }
-
-    if (!edfs_file_exists(edfs_signature_path(edfs_context))) {
-        log_info("creating signature");
-        edfs_create_key(edfs_context);
-    }
-
     log_info("starting edfs on port %i, mount point [%s]", port, mountpoint);
     if ((ch = fuse_mount(mountpoint, &args)) != NULL) {
         struct fuse *se;

@@ -57,7 +57,6 @@
 
 #define MAX_PATH_LEN                8192
 #define MAX_B64_HASH_LEN            16
-#define MAX_KEY_SIZE                8192
 #define MAX_INODE_DESCRIPTOR_SIZE   0x1FFF
 #define BLOCK_SIZE                  57280
 #define PROOF_OF_WORK_MAX_SIZE      0x1000
@@ -105,7 +104,7 @@ struct filewritebuf;
 struct edfs;
 
 typedef unsigned int (*edfs_add_directory)(const char *name, edfs_ino_t ino, int type, int64_t size, time_t created, time_t modified, time_t timestamp, void *userdata);
-typedef int (*edfs_schedule_callback)(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b);
+typedef int (*edfs_schedule_callback)(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data);
 
 uint64_t pathtoinode(const char *path, uint64_t *parentinode, const char **nameptr);
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name);
@@ -132,7 +131,7 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
 int edfs_setattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *attr, int to_set);
 
 int edfs_create_key(struct edfs *edfs_context);
-int edfs_init(struct edfs *edfs_context);
+int edfs_use_key(struct edfs *edfs_context, const char *public_key, const char *private_key);
 void edfs_edwork_init(struct edfs *edfs_context, int port);
 void edfs_edwork_done(struct edfs *edfs_context);
 int edfs_file_exists(const char *name);
@@ -149,15 +148,14 @@ void edfs_set_proxy(struct edfs *edfs_context, int proxy);
 void edfs_set_shard(struct edfs *edfs_context, int shard_id, int shards);
 void edfs_set_force_sctp(struct edfs *edfs_context, int force_sctp);
 void edfs_set_store_key(struct edfs *edfs_context, const unsigned char *key, int len);
-int edfs_genesis_if_new(struct edfs *edfs_context);
+void edfs_set_partition_key(struct edfs *edfs_context, char *key_id);
 
-const char *edfs_signature_path(struct edfs *edfs_context);
 int edwork_readonly(struct edfs *edfs_context);
 
 int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource, int resource_len, unsigned char *proof_str, int max_proof_len, unsigned char *proof_of_work);
 int edfs_proof_of_work_verify(int bits, const unsigned char *proof_str, int proof_len, const unsigned char *subject, int subject_len, const unsigned char *prefix, int prefix_len);
 
-int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t expires, uint64_t userdata_a, uint64_t userdata_b, int run_now, int update, int idle);
+int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t when, uint64_t expires, uint64_t userdata_a, uint64_t userdata_b, int run_now, int update, int idle, void *data);
 int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t userdata_a, uint64_t userdata_b);
 int edfs_schedule_iterate(struct edfs *edfs_context, unsigned int *idle_ref);
 
