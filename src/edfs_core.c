@@ -172,6 +172,14 @@ struct filewritebuf {
     int64_t file_size;
 
     uint64_t last_read_chunk;
+    unsigned char *read_buffer;
+    int read_buffer_size;
+    uint64_t expires;
+
+    uint64_t read_hash_cunk;
+    unsigned char *read_hash_buffer;
+    int read_hash_buffer_size;
+    uint64_t read_hash_expires;
 
     int last_read_size;
     int size;
@@ -2250,7 +2258,7 @@ int chunk_exists2(struct edfs_key_data *key, uint64_t inode, uint64_t chunk) {
     return (stat(fullpath, &statbuf) == 0);
 }
 
-uint32_t edfs_get_hash(struct edfs *edfs_context, struct edfs_key_data *key, const char *path, edfs_ino_t ino, uint64_t chunk) {
+uint32_t edfs_get_hash(struct edfs *edfs_context, struct edfs_key_data *key, const char *path, edfs_ino_t ino, uint64_t chunk, struct filewritebuf *filebuf) {
     uint32_t hash = 0;
     char hash_file[0x100];
     unsigned char buffer[BLOCK_SIZE];
@@ -2260,15 +2268,31 @@ uint32_t edfs_get_hash(struct edfs *edfs_context, struct edfs_key_data *key, con
     uint64_t hash_chunk = chunk / chunks_per_file;
     unsigned int chunk_offset = chunk % chunks_per_file;
 
-    snprintf(hash_file, sizeof(hash_file), "hash.%" PRIu64, hash_chunk);
-    int read_size = edfs_read_file(edfs_context, key, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0, 0);
-    if (read_size < 0)
-        read_size = 0;
     unsigned int offset = chunk_offset * sizeof(uint32_t);
-    if (read_size < offset + sizeof(uint32_t))
-        return 0;
 
-    memcpy(&hash, buffer + offset, sizeof(uint32_t));
+    if ((filebuf) && (filebuf->read_hash_buffer) && (filebuf->read_hash_buffer_size) && (filebuf->read_hash_cunk == hash_chunk) && (filebuf->read_hash_expires >= microseconds()) && (filebuf->read_hash_buffer_size >= offset + sizeof(uint32_t))) {
+        memcpy(&hash, filebuf->read_hash_buffer + offset, sizeof(uint32_t));
+    } else {
+        snprintf(hash_file, sizeof(hash_file), "hash.%" PRIu64, hash_chunk);
+        int read_size = edfs_read_file(edfs_context, key, path, hash_file, buffer, BLOCK_SIZE, NULL, 0, 1, 0, NULL, 0, 0);
+        if (read_size < 0)
+            read_size = 0;
+        if (read_size < offset + sizeof(uint32_t))
+            return 0;
+
+        memcpy(&hash, buffer + offset, sizeof(uint32_t));
+
+        if (filebuf) {
+            free(filebuf->read_hash_buffer);
+            filebuf->read_hash_buffer = (unsigned char *)malloc(read_size);
+            if (filebuf->read_hash_buffer) {
+                memcpy(filebuf->read_hash_buffer, buffer, read_size);
+                filebuf->read_hash_buffer_size = read_size;
+                filebuf->read_hash_cunk = hash_chunk;
+                filebuf->read_hash_expires = microseconds() + 1000000;
+            }
+        }
+    }
 
     return ntohl(hash);
 }
@@ -2320,8 +2344,12 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
             char fullpath[MAX_PATH_LEN];
             adjustpath(key, fullpath, computename(ino, b64name));
             edfs_update_hash(edfs_context, key, fullpath, -1, NULL, 0, filebuf->hash_buffer);
+            free(filebuf->read_hash_buffer);
+            filebuf->read_hash_buffer = NULL;
+            filebuf->read_hash_buffer_size = 0;
+            filebuf->read_hash_cunk = 0;
         }
-        sig_hash = edfs_get_hash(edfs_context, key, path, ino, chunk);
+        sig_hash = edfs_get_hash(edfs_context, key, path, ino, chunk, ((filebuf->flags & 3) == O_RDONLY) ? filebuf : NULL);
     }
     int use_addr_cache = 1;
     int requested = 0;
@@ -2334,7 +2362,26 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
         // avoid I/O lock
         if (chunk_exists(path, chunk)) {
             int filesize;
-            read_size = edfs_read_file(edfs_context, key, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
+            if (!filebuf->read_buffer)
+                filebuf->read_buffer = (unsigned char *)malloc(BLOCK_SIZE);
+
+            if ((filebuf->read_buffer) && (size < BLOCK_SIZE) && ((filebuf->flags & 3) == O_RDONLY)) {
+                read_size = edfs_read_file(edfs_context, key, path, name, (unsigned char *)filebuf->read_buffer, (int)BLOCK_SIZE, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
+                if (read_size > 0) {
+                    filebuf->read_buffer_size = read_size;
+                    if (size > read_size) {
+                        memcpy(buf, filebuf->read_buffer, read_size);
+                    } else {
+                        memcpy(buf, filebuf->read_buffer, size);
+                        read_size = size;
+                    }
+                    filebuf->expires = microseconds() + 500000;
+                } else
+                    filebuf->read_buffer_size = 0;
+            } else {
+                read_size = edfs_read_file(edfs_context, key, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
+                filebuf->read_buffer_size = 0;
+            }
 #ifdef EDFS_REMOVE_INCOMPLETE_CHUNKS
             if ((read_size > 0) && (read_size < size) && (chunk < filebuf->last_read_chunk)) {
                 // incomplete chunk, remove it
@@ -2432,6 +2479,16 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
 }
 
 int read_chunk(struct edfs *edfs_context, struct edfs_key_data *key, const char *path, int64_t chunk, char *buf, size_t size, edfs_ino_t ino, int64_t offset, struct filewritebuf *filebuf) {
+    if ((chunk == filebuf->last_read_chunk) && (offset < filebuf->read_buffer_size) && (filebuf->read_buffer) && (filebuf->expires > microseconds())) {
+        int read_size = filebuf->read_buffer_size - offset;
+        if (size < read_size)
+            read_size = size;
+        memcpy(buf, filebuf->read_buffer + offset, read_size);
+        return read_size;
+    } else {
+        filebuf->read_buffer_size = 0;
+    }
+
     if (offset > 0) {
         int max_size = BLOCK_SIZE - offset;
         if (size > max_size)
@@ -2788,11 +2845,12 @@ int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t of
     ++ filebuf->in_read;
     edfs_flush_chunk(edfs_context, ino, filebuf);
 
-    adjustpath(filebuf->key, fullpath, computename(ino, b64name));
 
     int64_t chunk = off / BLOCK_SIZE;
     int64_t offset = off % BLOCK_SIZE;
     size_t bytes_read = 0;
+
+    adjustpath(filebuf->key, fullpath, computename(ino, b64name));
 
     char *buf = ptr;
     while (size > 0) {
@@ -3220,6 +3278,13 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
         }
         free(fbuf->p);
         fbuf->p = NULL;
+        free(fbuf->read_buffer);
+        fbuf->read_buffer = NULL;
+        free(fbuf->read_hash_buffer);
+        fbuf->read_hash_buffer = NULL;
+        fbuf->read_buffer_size = 0;
+        fbuf->read_hash_buffer_size = 0;
+        fbuf->read_hash_cunk = 0;
         fbuf->size = 0;
         fbuf->offset = 0;
 
@@ -3302,6 +3367,8 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
 
         free(ino_cache);
         free(fbuf->p);
+        free(fbuf->read_buffer);
+        free(fbuf->read_hash_buffer);
         free(fbuf->hash_buffer);
         free(fbuf);
     }
@@ -6451,7 +6518,7 @@ void edfs_set_partition_key(struct edfs *edfs_context, char *key_id) {
     if (key_id) {
         if (strlen(key_id) > 32) {
             unsigned char public_key[MAX_KEY_SIZE];
-            size_t len = base64_decode_no_padding(key_id, public_key, MAX_KEY_SIZE);
+            size_t len = base64_decode_no_padding((const BYTE *)key_id, public_key, MAX_KEY_SIZE);
             if (len >= 32) {
                 unsigned char hash[32];
                 sha256(public_key, 32, hash);
