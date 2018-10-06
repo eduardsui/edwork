@@ -1718,20 +1718,19 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
         hmac_sha256(key_data->key_id, 32, buffer, 92, payload, size, hmac);
     if ((!key_data) || (memcmp(hmac, buffer + 92, 32))) {
         // invalid hmac
-        if ((memcmp(type, "ping", 4)) && (memcmp(type, "helo", 4))) {
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
-            if ((memcmp(type, "disc", 4)) && (memcmp(type, "add2", 4))) {
+        if ((memcmp(type, "disc", 4)) && (memcmp(type, "add2", 4))) {
 #endif
-                log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
+            if (!key_data) {
+                log_warn("unknown key id %" PRIu64 " (%s)", key_id, edwork_addr_ipv4(clientaddr));
                 return 0;
-#ifdef EDWORK_PEER_DISCOVERY_SERVICE
             }
-#endif
+
+            log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
+            return 0;
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
         }
-    }
-    if (!key_data) {
-        log_warn("unknown key id %" PRIu64 " (%s)", key_id, edwork_addr_ipv4(clientaddr));
-        return 0;
+#endif
     }
 
     if ((callback) && (!memcmp(type, "jmbo", 4))) {

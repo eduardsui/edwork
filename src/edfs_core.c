@@ -965,22 +965,22 @@ int sign(struct edfs *edfs_context, struct edfs_key_data *key, const char *str, 
         *info_key_type = 0;
     if (!key->key_loaded) {
         EDFS_THREAD_LOCK(edfs_context);
-        key->sig_len = read_signature(edfs_context, key->signature, key->sigkey, 0, &key->key_type, key->pubkey);
+        key->sig_len = read_signature(edfs_context, key->signature, key->sigkey, 0, &key->sign_key_type, key->pubkey);
         EDFS_THREAD_UNLOCK(edfs_context);
     }
     if (!key->sig_len)
         return 0;
-    switch (key->key_type) {
+    switch (key->sign_key_type) {
         case KEY_HS256:
             if (info_key_type)
-                *info_key_type = key->key_type;
+                *info_key_type = key->sign_key_type;
             hmac_sha256((const BYTE *)key->sigkey, key->sig_len, (const BYTE *)str, len, NULL, 0, (BYTE *)hash);
             key->signature_size = 32;
             key->key_loaded = 1;
             break;
         case KEY_EDD25519:
             if (info_key_type)
-                *info_key_type = key->key_type;
+                *info_key_type = key->sign_key_type;
             ed25519_sign(hash, (const unsigned char *)str, len, key->pubkey, key->sigkey);
             key->signature_size = 64;
             key->key_loaded = 1;
@@ -1033,7 +1033,7 @@ int verify(struct edfs *edfs_context, struct edfs_key_data *key, const char *str
             return 0;
             break;
     }
-    log_error("unsupported key type");
+    log_error("unsupported key type (%i)", (int)key->key_type);
     return 0;
 }
 
@@ -2626,11 +2626,12 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
                 tinydir_readfile(&dir, &file);
                 index ++;
                 if ((start_at < index) && (!file.is_dir)) {
-                    if (verify_file(edfs_context, b->key, fullpath, file.name)) {
+                    if ((verify_file(edfs_context, b->key, fullpath, file.name)) || (dbuf->key->read_only)) {
                         read_file_json(edfs_context, b->key, unpacked_ino(file.name), NULL, NULL, NULL, add_directory, b, NULL, 0, NULL, NULL, NULL, NULL);
                         if (b->size >= off + size)
                             break;
-                    }
+                    } else
+                        log_error("%s verification failed", file.name);
                 }
                 tinydir_next(&dir);
             }
@@ -3777,10 +3778,14 @@ int edfs_create_key(struct edfs *edfs_context) {
 }
 
 int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char *public_key) {
-    if ((!public_key) || (!edfs_context))
+    if (((!public_key) && (!private_key)) || (!edfs_context))
         return -1;
 
     char b64buffer[128];
+    char public_key_b64[64];
+    unsigned char public_key_buffer[64];
+    unsigned char keydata[128];
+    size_t len;
 
     JSON_Value *root_value = json_value_init_object();
     JSON_Object *root_object = json_value_get_object(root_value);
@@ -3788,11 +3793,30 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
     json_object_set_string(root_object, "alg", "ED25519");
     json_object_set_string(root_object, "kty", "EDD25519");
     
-    if (private_key)
+    if (private_key) {
         json_object_set_string(root_object, "k", private_key);
+
+        if (!public_key) {
+            len = base64_decode_no_padding((const BYTE *)private_key, (BYTE *)keydata, 128);
+            if (len != 64) {
+                log_error("invalid key");
+                json_value_free(root_value);
+                return -1;
+            }
+            
+            keydata[0] &= 248;
+            keydata[31] &= 63;
+            keydata[31] |= 64;
+
+            ed25519_get_pubkey(public_key_buffer, keydata);
+
+            len = base64_encode_no_padding((const unsigned char *)public_key_buffer, 32, (unsigned char *)public_key_b64, 64);
+            public_key_b64[len] = 0;
+            public_key = public_key_b64;
+        }
+    }
     json_object_set_string(root_object, "pk", public_key);
 
-    unsigned char keydata[MAX_KEY_SIZE];
     base64_decode_no_padding((const BYTE *)public_key, (BYTE *)keydata, MAX_KEY_SIZE);
 
     unsigned char hash[32];
@@ -3800,7 +3824,7 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
     uint64_t key_id = htonll(XXH64(hash, 32, 0));
 
     b64buffer[0] = 0;
-    size_t len = base32_encode((const BYTE *)&key_id, sizeof(uint64_t), (BYTE *)b64buffer, sizeof(b64buffer) - 1);
+    len = base32_encode((const BYTE *)&key_id, sizeof(uint64_t), (BYTE *)b64buffer, sizeof(b64buffer) - 1);
     b64buffer[len] = 0;
 
     char fullpath[MAX_PATH_LEN];
@@ -4468,7 +4492,7 @@ int edfs_block_contains_descriptor(struct block *blockchain, uint64_t inode, uin
 }
 
 void edfs_try_new_block(struct edfs *edfs_context, struct edfs_key_data *key) {
-    if ((key->chain) && (!edfs_context->read_only_fs) && (key->proof_inodes_len)) {
+    if ((key->chain) && (!edfs_context->read_only_fs)  && (!key->read_only) && (key->proof_inodes_len)) {
         uint64_t chain_timestamp = key->chain->timestamp;
 
         if (edfs_context->start_timestamp > chain_timestamp)
@@ -5219,7 +5243,7 @@ one_loop:
         }
 
         uint64_t ino = ntohll(*(uint64_t *)payload);
-        if ((!ino) || (ino == 1)) {
+        if ((!ino)/* || (ino == 1)*/) {
             log_warn("invalid WAND request");
             return;
         }
@@ -5923,6 +5947,24 @@ int edwork_load_key(struct edfs *edfs_context, const char *filename) {
         }
 
         sha256(key->pubkey, 32, key->key_id);
+
+        key->read_only = 1;
+
+        key->sig_len = read_signature(edfs_context, key->signature, key->sigkey, 0, &key->sign_key_type, key->pubkey);
+        if (key->sig_len) {
+            switch (key->sign_key_type) {
+                case KEY_HS256:
+                    key->signature_size = 32;
+                    key->key_loaded = 1;
+                    key->read_only = 0;
+                    break;
+                case KEY_EDD25519:
+                    key->signature_size = 64;
+                    key->key_loaded = 1;
+                    key->read_only = 0;
+                    break;
+            }
+        }
     } else {
         log_error("error loading key %s", key->signature);
         edfs_key_data_deinit(key);
@@ -6084,7 +6126,11 @@ int edwork_thread(void *userdata) {
             edfs_context->force_rebroadcast = 0;
         }
         if (time(NULL) - ping > EDWORK_PING_INTERVAL) {
-            edwork_broadcast(edwork, edfs_context->primary_key, "ping", NULL, 0, 0, EDWORK_NODES, 0, 1);
+            key = edfs_context->key_data;
+            while (key) {
+                edwork_broadcast(edwork, key, "ping", NULL, 0, 0, EDWORK_NODES, 0, 1);
+                key = (struct edfs_key_data *)key->next_key;
+            }
             ping = time(NULL);
         }
 
@@ -6520,6 +6566,13 @@ void edfs_set_partition_key(struct edfs *edfs_context, char *key_id) {
             unsigned char public_key[MAX_KEY_SIZE];
             size_t len = base64_decode_no_padding((const BYTE *)key_id, public_key, MAX_KEY_SIZE);
             if (len >= 32) {
+                if (len == 64) {
+                    public_key[0] &= 248;
+                    public_key[31] &= 63;
+                    public_key[31] |= 64;
+
+                    ed25519_get_pubkey(public_key, public_key);
+                }
                 unsigned char hash[32];
                 sha256(public_key, 32, hash);
                 edfs_context->use_key_id = htonll(XXH64(hash, 32, 0));

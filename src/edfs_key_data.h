@@ -39,6 +39,7 @@ struct edfs_key_data {
     size_t pub_len;
     int pubkey_size;
     int key_type;
+    int sign_key_type;
     int signature_size;
     size_t sig_len;
 

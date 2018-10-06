@@ -474,6 +474,17 @@ int main(int argc, char *argv[]) {
                     i++;
                     edfs_set_partition_key(edfs_context, argv[i]);
                 } else
+                if (!strcmp(arg, "key")) {
+                    if (i >= argc - 1) {
+                        fprintf(stderr, "edfs: url-friendly, base64 encoding expected after -key parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
+                    if (strlen(argv[i]) > 64)
+                        edfs_use_key(edfs_context, argv[i], NULL);
+                    else
+                        edfs_use_key(edfs_context, NULL, argv[i]);
+                } else
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -481,6 +492,7 @@ int main(int argc, char *argv[]) {
                         "    -logfile filename  set log filename\n"
                         "    -readonly          mount filesystem as read-only\n"
                         "    -newkey            generate a new key\n"
+                        "    -key key           add given key (private or public), base64(url-friendly) encoded\n"
                         "    -partition id      mount given partition id\n"
                         "    -use host[:port]   use host:port as initial host\n"
                         "    -resync            request data resync\n"
