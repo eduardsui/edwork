@@ -3063,9 +3063,9 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
             if (to_write == BLOCK_SIZE) {
                 if (USE_COMPRESSION) {
                     *(uint64_t *)(additional_data + 24) = htonll(max_len);
-                    notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
+                    notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
                 } else
-                    notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)ptr, to_write, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
+                    notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)ptr, to_write, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
             }
 #endif
             edfs_update_hash(edfs_context, key, path, chunk, additional_data + 32, 64, hash_buffer);
@@ -3092,9 +3092,9 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
         if (written_bytes == BLOCK_SIZE) {
             if (USE_COMPRESSION) {
                 *(uint64_t *)(additional_data + 24) = htonll(max_len);
-                notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
+                notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
             } else
-                notify_io(edfs_context, "data", additional_data, sizeof(additional_data), (const unsigned char *)buf, size, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
+                notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)buf, size, 3, 1, ino, edfs_context->edwork, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
         }
 #endif
         edfs_update_hash(edfs_context, key, path, chunk, additional_data + 32, 64, hash_buffer);
