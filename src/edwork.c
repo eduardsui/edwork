@@ -1722,7 +1722,7 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
         if ((memcmp(type, "disc", 4)) && (memcmp(type, "add2", 4))) {
 #endif
             if (!key_data) {
-                log_warn("unknown key id %" PRIu64 " (%s)", key_id, edwork_addr_ipv4(clientaddr));
+                log_info("unknown key id %" PRIu64 " (%s)", key_id, edwork_addr_ipv4(clientaddr));
                 return 0;
             }
 

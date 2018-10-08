@@ -5592,8 +5592,10 @@ one_loop:
         struct edfs_peer_discovery_data *peers = (struct edfs_peer_discovery_data *)avl_search(&edfs_context->peer_discovery, (void *)(uintptr_t)key_checksum);
         if (!peers) {
             peers = (struct edfs_peer_discovery_data *)malloc(sizeof(struct edfs_peer_discovery_data));
-            if (peers)
+            if (peers) {
                 memset(peers, 0, sizeof(struct edfs_peer_discovery_data));
+                avl_insert(&edfs_context->peer_discovery, (void *)(uintptr_t)key_checksum, peers);
+            }
         }
 
         if (!peers)
@@ -5604,7 +5606,8 @@ one_loop:
         if (records > 0) {
             if (edwork_send_to_peer(edwork, key, "add2", buffer, size, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL * 10) <= 0) {
                 log_warn("error sending address list");
-            }
+            } else
+                log_info("sent %i peer addresses", records);
         }
 
         edfs_add_to_peer_discovery(peers, clientaddr, clientaddrlen);
