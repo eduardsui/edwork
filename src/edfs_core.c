@@ -3854,6 +3854,58 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
     return 0;
 }
 
+int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
+    if (!edfs_context)
+        return -1;
+
+    uint64_t use_key_id = 0;
+    if (strlen(key_id) > 32) {
+        unsigned char public_key[MAX_KEY_SIZE];
+        size_t len = base64_decode_no_padding((const BYTE *)key_id, public_key, MAX_KEY_SIZE);
+        if (len >= 32) {
+            if (len == 64) {
+                public_key[0] &= 248;
+                public_key[31] &= 63;
+                public_key[31] |= 64;
+
+                ed25519_get_pubkey(public_key, public_key);
+            }
+            unsigned char hash[32];
+            sha256(public_key, 32, hash);
+            use_key_id = htonll(XXH64(hash, 32, 0));
+        }
+    } else
+        base32_decode((const BYTE *)key_id, (BYTE *)&use_key_id, sizeof(uint64_t));
+
+    struct edfs_key_data *key = edfs_context->key_data;
+    while (key) {
+        if (key->key_id_xxh64_be == use_key_id) {
+            edfs_context->primary_key = key;
+            return 0;
+        }
+        key = (struct edfs_key_data *)key->next_key;
+    }
+    return -1;
+}
+
+int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size) {
+    if (!edfs_context)
+        return -1;
+
+    struct edfs_key_data *key = edfs_context->key_data;
+    char *ptr = buffer;
+    int ptr_size = buffer_size;
+    while ((key) && (ptr) && (ptr_size > 12)) {
+        int encode_len = base32_encode((const unsigned char *)&key->key_id_xxh64_be, sizeof(uint64_t), (unsigned char *)ptr, ptr_size);
+        ptr[encode_len] = '\n';
+        ptr[encode_len + 1] = 0;
+        ptr += encode_len + 1;
+        ptr_size -= encode_len + 1;
+        key = (struct edfs_key_data *)key->next_key;
+    }
+    return key ? 1 : 0;
+}
+
 int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data) {
     struct edfs_key_data *key = (struct edfs_key_data *)data;
     if (!key)
@@ -6021,6 +6073,7 @@ int edwork_thread(void *userdata) {
             edfs_context->network_done = 1;
             return 0;
         }
+        edfs_set_resync(edfs_context, 1);
     }
 
     if (!edfs_context->primary_key) {

@@ -23,12 +23,12 @@ static struct edfs *edfs_context;
 unsigned int add_directory(const char *name, edfs_ino_t ino, int type, int64_t size, time_t created, time_t modified, time_t timestamp, void *userdata) {
     if (type & S_IFDIR) {
         if ((strcmp(name, ".")) && (strcmp(name, "..")))
-            fprintf(stderr, "\x1b[35m%s\x1b[0m\n", name);
+            fprintf(stdout, "\x1b[35m%s\x1b[0m\n", name);
     } else
     if (type & S_IXUSR) {
-        fprintf(stderr, "\x1b[32m%s\x1b[0m\n", name);
+        fprintf(stdout, "\x1b[32m%s\x1b[0m\n", name);
     } else {
-        fprintf(stderr, "%s\n", name);
+        fprintf(stdout, "%s\n", name);
     }
     return 1;
 }
@@ -112,7 +112,7 @@ static int edfs_console_download(const char *path, const char *name, edfs_ino_t 
         unlink(name);
         return -EIO;
     } else
-        fprintf(stderr, "\nedfs console: %s: done\n", name);
+        fprintf(stdout, "\nedfs console: %s: done\n", name);
     return 0;
 }
 
@@ -172,7 +172,7 @@ static int edfs_console_upload(const char *path, const char *fname) {
     fclose(f);
     edfs_close(edfs_context, buf);
     edfs_set_size(edfs_context, inode, offset);
-    fprintf(stderr, "\nedfs console: %s: done\n", name);
+    fprintf(stdout, "\nedfs console: %s: done\n", name);
     return 0;
 }
 
@@ -204,28 +204,6 @@ int main(int argc, char *argv[]) {
     fprintf(stdout, "%s\n", EDFS_BANNER);
 
     edfs_context = edfs_create_context(NULL);
-    edfs_init(edfs_context);
-
-    if (!edfs_file_exists(edfs_signature_path(edfs_context))) {
-        log_info("using default signature");
-        char *signature = "{\n"\
-        "    \"alg\": \"ED25519\",\n"\
-        "    \"kty\": \"EDD25519\",\n"\
-        "    \"k\": \"wG5RPGPCly9kNWs2_DZRMU8DtQGmXxRduafL9M-AMX-9H3n3V3udUagWE_HyDAMw5GOka8ppuzuO7pp_x5i5ew\",\n"\
-        "    \"pk\": \"siy3GXOHnVySVUlHUDVGt7v6nMKWjy39Hy23M40Toos\"\n"\
-        "}\n";
-        FILE *f = fopen(edfs_signature_path(edfs_context), "w+b");
-        if (f) {
-            fwrite(signature, 1, strlen(signature), f);
-            fclose(f);
-#ifdef EDFS_DEFAULT_HOST
-            edfs_set_initial_friend(edfs_context, EDFS_DEFAULT_HOST);
-#endif
-            edfs_set_resync(edfs_context, 1);
-            log_warn("This is your first run of EdFS. Please wait 20 seconds for data to sync.");
-        } else
-            log_error("error writing signature: %i", errno);
-    }
 
     log_set_level(5);
 
@@ -284,7 +262,7 @@ int main(int argc, char *argv[]) {
 
     log_info("starting edfs on port %i", port);
 
-    fprintf(stdout, "Welcome to edwork 0.1BETA console\nSupported commands are: ls, cd, get, put, rmdir, rm, open, exit\n");
+    fprintf(stdout, "Welcome to edwork 0.1BETA console\nSupported commands are: ls, cd, get, put, rmdir, rm, open, lk, chkey, newkey, addkey, exit\n");
     char buffer[0x100];
     edfs_edwork_init(edfs_context, port);
     char working_dir[4096];
@@ -293,8 +271,10 @@ int main(int argc, char *argv[]) {
     edfs_stat stbuf;
     char full_path[4096];
     const char *name = NULL;
+    char key_buffer[0x100] = "$" ;
+
     do {
-        fprintf(stdout, "%s> ", working_dir);
+        fprintf(stdout, "\x1b[32m%s\x1b[0m %s> ", key_buffer, working_dir);
         char *cmd = fgets(buffer, sizeof(buffer), stdin);
         if (!cmd)
             break;
@@ -319,6 +299,59 @@ int main(int argc, char *argv[]) {
                     edfs_console_ls(parameters);
                 else
                     edfs_console_ls(working_dir);
+                continue;
+            }
+            if (!strcmp(cmd, "lk")) {
+                char keys[0xFFFF];
+                if (edfs_list_keys(edfs_context, keys, sizeof(keys)))
+                    fprintf(stderr, "edfs console: %s: canot list keys\n", cmd);
+                else {
+                    if (keys[0])
+                        fprintf(stdout, "Available keys are:\n\x1b[32m%s\x1b[0m", keys);
+                    else
+                        fprintf(stderr, "No available keys");
+                }
+                continue;
+            }
+            if (!strcmp(cmd, "chkey")) {
+                if ((!parameters) || (!parameters[0])) {
+                    fprintf(stderr, "edfs console: %s: key expected\n", cmd);
+                    continue;
+                }
+                if (edfs_chkey(edfs_context, parameters)) {
+                    fprintf(stderr, "edfs console: %s: cannot change key to %s\n", cmd, parameters);
+                } else {
+                    fprintf(stdout, "Using key %s\n", parameters);
+                    // include null character at the end of parameters
+                    memcpy(key_buffer, parameters, strlen(parameters) + 1);
+                }
+                continue;
+            }
+            if (!strcmp(cmd, "newkey")) {
+                fprintf(stdout, "Please wait while creating new key ... \n");
+                if (edfs_create_key(edfs_context))
+                    fprintf(stderr, "edfs console: error creating new key pair\n");
+                else
+                    fprintf(stdout, "New key created\n");
+                continue;
+            }
+            if (!strcmp(cmd, "addkey")) {
+                if ((!parameters) || (!parameters[0])) {
+                    fprintf(stderr, "edfs console: %s: key expected\n", cmd);
+                    continue;
+                }
+                int key_err;
+                if (strlen(parameters) > 64)
+                    key_err = edfs_use_key(edfs_context, parameters, NULL);
+                else
+                    key_err = edfs_use_key(edfs_context, NULL, parameters);
+
+                if (key_err) {
+                    fprintf(stderr, "edfs console: %s: cannot add key %s\n", cmd, parameters);
+                } else {
+                    edfs_set_resync(edfs_context, 1);
+                    fprintf(stdout, "Added key %s\n", parameters);
+                }
                 continue;
             }
             if (!strcmp(cmd, "rm")) {

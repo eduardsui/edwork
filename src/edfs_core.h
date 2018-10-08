@@ -150,6 +150,9 @@ void edfs_set_force_sctp(struct edfs *edfs_context, int force_sctp);
 void edfs_set_store_key(struct edfs *edfs_context, const unsigned char *key, int len);
 void edfs_set_partition_key(struct edfs *edfs_context, char *key_id);
 
+int edfs_chkey(struct edfs *edfs_context, const char *key_id);
+int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size);
+
 int edwork_readonly(struct edfs *edfs_context);
 
 int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource, int resource_len, unsigned char *proof_str, int max_proof_len, unsigned char *proof_of_work);
