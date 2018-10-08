@@ -296,7 +296,6 @@ struct edfs {
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
     avl_tree_t peer_discovery;
     time_t disc_timestamp;
-    unsigned char key_hash[32];
 #endif
 
     int forward_chunks;
@@ -764,9 +763,17 @@ int edfs_get_peer_list(struct edfs_peer_discovery_data *peers, unsigned char *bu
 
 
 void edwork_broadcast_discovery(struct edfs *edfs_context) {
-    unsigned char hash[32];
-    sha256(edfs_context->key_hash, 32, hash);
-    notify_io(edfs_context, NULL, "disc", hash, 32, NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+    unsigned char key_hash[32];
+    struct edfs_key_data *key = edfs_context->key_data;
+    while (key) {
+        if (key->pubkey) {
+            sha256(key->pubkey, key->pub_len, key_hash);
+            hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
+            notify_io(edfs_context, NULL, "disc", key_hash, 32, NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        }
+        key = (struct edfs_key_data *)key->next_key;
+    }
+
     edfs_context->disc_timestamp = time(NULL);
 }
 #endif
@@ -5635,10 +5642,20 @@ one_loop:
             return;
         }
 
+        unsigned char key_hash[32];
         uint64_t key_checksum = XXH64(payload, 32, 0);
-        if (XXH64(edfs_context->key_hash, 32, 0) == key_checksum) {
-            log_trace("ignoring discovery request for own key");
-            return;
+
+        struct edfs_key_data *key = edfs_context->key_data;
+        while (key) {
+            if (key->pubkey) {
+                sha256(key->pubkey, key->pub_len, key_hash);
+                hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
+                if (XXH64(key_hash, 32, 0) == key_checksum) {
+                    log_trace("ignoring discovery request for own key");
+                    return;
+                }
+            }
+            key = (struct edfs_key_data *)key->next_key;
         }
 
         struct edfs_peer_discovery_data *peers = (struct edfs_peer_discovery_data *)avl_search(&edfs_context->peer_discovery, (void *)(uintptr_t)key_checksum);
@@ -6089,14 +6106,6 @@ int edwork_thread(void *userdata) {
     }
 
     edfs_init(edfs_context);
-
-#ifdef EDWORK_PEER_DISCOVERY_SERVICE
-    if (edfs_context->primary_key->pub_len > 0) {
-        unsigned char key_hash[32];
-        sha256(edfs_context->primary_key->pubkey, edfs_context->primary_key->pub_len, key_hash);
-        hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)edfs_context->key_hash);
-    }
-#endif
 
     struct edwork_data *edwork = edwork_create(edfs_context->port, edfs_find_key);
     if (!edwork) {
