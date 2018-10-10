@@ -29,19 +29,19 @@
 static struct edfs *edfs_context;
 
 static int edfs_fuse_getattr(const char *path, edfs_stat *stbuf) {
-    uint64_t inode = pathtoinode(path, NULL, NULL);
+    uint64_t inode = edfs_pathtoinode(edfs_context, path, NULL, NULL);
     return edfs_getattr(edfs_context, inode, stbuf);
 }
 
 static int edfs_fuse_truncate(const char *path, off_t offset) {
-    if (!edfs_set_size(edfs_context, pathtoinode(path, NULL, NULL), offset))
+    if (!edfs_set_size(edfs_context, edfs_pathtoinode(edfs_context, path, NULL, NULL), offset))
         return -ENOENT;
 
     return 0;
 }
 
 static int edfs_fuse_utimens(const char *path, const struct timespec tv[2]) {
-    uint64_t inode = pathtoinode(path, NULL, NULL);
+    uint64_t inode = edfs_pathtoinode(edfs_context, path, NULL, NULL);
 
     edfs_stat attr;
     memset(&attr, 0, sizeof(edfs_stat));
@@ -77,7 +77,7 @@ unsigned int add_directory(const char *name, edfs_ino_t ino, int type, int64_t s
 }
 
 static int edfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
-    uint64_t ino = pathtoinode(path, NULL, NULL);
+    uint64_t ino = edfs_pathtoinode(edfs_context, path, NULL, NULL);
     struct dirbuf *dirbuf = NULL;
     if ((fi) && (fi->fh))
         dirbuf = (struct dirbuf *)fi->fh;
@@ -91,7 +91,7 @@ static int edfs_fuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler
 
 static int edfs_fuse_open(const char *path, struct fuse_file_info *fi) {
     const char *nameptr = NULL;
-    edfs_ino_t inode = pathtoinode(path, NULL, &nameptr);
+    edfs_ino_t inode = edfs_pathtoinode(edfs_context, path, NULL, &nameptr);
     int type = edfs_lookup_inode(edfs_context, inode, nameptr);
     if (!type)
         return -ENOENT;
@@ -118,7 +118,7 @@ static int edfs_fuse_read(const char *path, char *buf, size_t size, off_t offset
         return -ENOENT;
 
     if (!ino)
-        ino = pathtoinode(path, NULL, NULL);
+        ino = edfs_pathtoinode(edfs_context, path, NULL, NULL);
 
 	return edfs_read(edfs_context, ino, size, offset, buf, filebuf);
 }
@@ -131,7 +131,7 @@ static int edfs_fuse_write(const char *path, const char *buf, size_t size, off_t
         ino = edfs_inode(filebuf);
     }
     if (!ino)
-        ino = pathtoinode(path, NULL, NULL);
+        ino = edfs_pathtoinode(edfs_context, path, NULL, NULL);
     return edfs_write(edfs_context, ino, buf, size, offset, filebuf);
 }
 
@@ -151,20 +151,20 @@ static int edfs_fuse_fsync(const char *path, int datasync, struct fuse_file_info
 
 static int edfs_fuse_unlink(const char *path) {
     uint64_t parent;
-    uint64_t inode = pathtoinode(path, &parent, NULL);
+    uint64_t inode = edfs_pathtoinode(edfs_context, path, &parent, NULL);
     return edfs_unlink_inode(edfs_context, parent, inode);
 }
 
 static int edfs_fuse_rmdir(const char *path) {
     uint64_t parent;
-    uint64_t inode = pathtoinode(path, &parent, NULL);
+    uint64_t inode = edfs_pathtoinode(edfs_context, path, &parent, NULL);
     return edfs_rmdir_inode(edfs_context, parent, inode);
 }
 
 static int edfs_fuse_mkdir(const char *path, mode_t mode) {
     uint64_t parent;
     const char *name = NULL;
-    pathtoinode(path, &parent, &name);
+    edfs_pathtoinode(edfs_context, path, &parent, &name);
     if (!name)
         return -EEXIST;
 #ifdef _WIN32
@@ -179,7 +179,7 @@ static int edfs_fuse_mkdir(const char *path, mode_t mode) {
 static int edfs_fuse_mknod(const char *path, mode_t mode, dev_t dev) {
     uint64_t parent;
     const char *name = NULL;
-    uint64_t inode = pathtoinode(path, &parent, &name);
+    uint64_t inode = edfs_pathtoinode(edfs_context, path, &parent, &name);
     if (inode == 1)
         return -EEXIST;
     return edfs_mknod(edfs_context, parent, name, mode, NULL);
@@ -187,7 +187,7 @@ static int edfs_fuse_mknod(const char *path, mode_t mode, dev_t dev) {
 
 static int edfs_fuse_opendir(const char *path, struct fuse_file_info *fi) {
     const char *nameptr = NULL;
-    uint64_t inode = pathtoinode(path, NULL, &nameptr);
+    uint64_t inode = edfs_pathtoinode(edfs_context, path, NULL, &nameptr);
     int type = edfs_lookup_inode(edfs_context, inode, nameptr);
     if (!type)
         return -ENOENT;
@@ -217,7 +217,7 @@ static int edfs_fuse_close(const char *path, struct fuse_file_info *fi) {
 static int edfs_fuse_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
     edfs_ino_t parent;
     const char *name = NULL;
-    uint64_t inode = pathtoinode(path, &parent, &name);
+    uint64_t inode = edfs_pathtoinode(edfs_context, path, &parent, &name);
     struct filewritebuf *buf = NULL;
     int err = edfs_create(edfs_context, parent, name, mode, &inode, &buf);
     if (err)
@@ -228,7 +228,7 @@ static int edfs_fuse_create(const char *path, mode_t mode, struct fuse_file_info
 }
 
 int edfs_fuse_chmod(const char *name, mode_t mode) {
-    edfs_ino_t ino = pathtoinode(name, NULL, NULL);
+    edfs_ino_t ino = edfs_pathtoinode(edfs_context, name, NULL, NULL);
 
     edfs_stat attr;
     memset(&attr, 0, sizeof(edfs_stat));

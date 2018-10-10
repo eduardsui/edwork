@@ -106,7 +106,7 @@ struct edfs;
 typedef unsigned int (*edfs_add_directory)(const char *name, edfs_ino_t ino, int type, int64_t size, time_t created, time_t modified, time_t timestamp, void *userdata);
 typedef int (*edfs_schedule_callback)(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data);
 
-uint64_t pathtoinode(const char *path, uint64_t *parentinode, const char **nameptr);
+uint64_t edfs_pathtoinode(struct edfs *edfs_context, const char *path, uint64_t *parentinode, const char **nameptr);
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name);
 edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char *name, edfs_stat *stbuf);
 int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode);

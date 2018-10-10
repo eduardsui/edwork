@@ -48,7 +48,7 @@
 
 #ifdef DEBUG
 #define DEBUG_PRINT(...)            fprintf(stderr, __VA_ARGS__)
-#define DEBUG_DUMP_HEX(buf, len)    {int __i__; for (__i__ = 0; __i__ < len; __i__++) { DEBUG_PRINT("%02X ", (unsigned int)(buf)[__i__]); } }
+#define DEBUG_DUMP_HEX(buf, len)    {int _i_; for (_i_ = 0; _i_ < len; _i_++) { DEBUG_PRINT("%02X ", (unsigned int)(buf)[_i_]); } }
 #define DEBUG_DUMP(buf, length)     fwrite(buf, 1, length, stderr);
 #define DEBUG_DUMP_HEX_LABEL(title, buf, len)    {fprintf(stderr, "%s (%i): ", title, (int)len); DEBUG_DUMP_HEX(buf, len); fprintf(stderr, "\n");}
 #else
@@ -804,14 +804,28 @@ char *adjustpath3(struct edfs_key_data *key_data, char *fullpath, const char *na
     return fullpath;
 }
 
-uint64_t computeinode2(uint64_t parent_inode, const char *name, int name_len) {
+uint64_t computeinode2(struct edfs_key_data *key, uint64_t parent_inode, const char *name, int name_len) {
     unsigned char hash[32];
     uint64_t inode;
+
+#ifndef EDFS_SKIP_DEFAULT_KEY
+    // default key ?
+    if ((!parent_inode) && (key)) {
+        static unsigned char default_key_id[8] = { 0x37, 0x9E, 0xA2, 0x49, 0xAC, 0xD1, 0x21, 0xB7 };
+        if (!memcmp(&key->key_id_xxh64_be, default_key_id, sizeof(uint64_t))) {
+            key = NULL;
+            if ((!name) || (!name_len))
+                return 1;
+        }
+    }
+#endif
 
     parent_inode = htonll(parent_inode);
 
     SHA256_CTX ctx;
     sha256_init(&ctx);
+    if ((key) && (!parent_inode))
+        sha256_update(&ctx, (const BYTE *)&key->key_id_xxh64_be, sizeof(uint64_t));
     sha256_update(&ctx, (const BYTE *)&parent_inode, sizeof(parent_inode));
     if (name)
         sha256_update(&ctx, (const BYTE *)name, name_len);
@@ -821,8 +835,8 @@ uint64_t computeinode2(uint64_t parent_inode, const char *name, int name_len) {
     return ntohll(inode);
 }
 
-uint64_t computeinode(uint64_t parent_inode, const char *name) {
-    return computeinode2(parent_inode, name, strlen(name));
+uint64_t computeinode(struct edfs_key_data *key, uint64_t parent_inode, const char *name) {
+    return computeinode2(key, parent_inode, name, strlen(name));
 }
 
 const char *computename(uint64_t inode, char *out) {
@@ -1695,10 +1709,18 @@ int write_json2(struct edfs *edfs_context, struct edfs_key_data *key, const char
     return written;
 }
 
+uint64_t edfs_root_inode(struct edfs_key_data *key) {
+    uint64_t root = 1;
+    if (key)
+        root = computeinode2(key, 0, NULL, 0);
+
+    return root;
+}
+
 int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, uint64_t *parent, int64_t *size, uint64_t *timestamp, edfs_add_directory add_directory, struct dirbuf *b, char *namebuf, int len_namebuf, time_t *created, time_t *modified, uint64_t *generation, unsigned char *iohash) {
     JSON_Value *root_value = read_json(edfs_context, key, key->working_directory, inode);
     if (!root_value) {
-        if (inode == 1) {
+        if (inode == edfs_root_inode(key)) {
             // first time root
             char fullpath[MAX_PATH_LEN];
             char b64name[MAX_B64_HASH_LEN];
@@ -1975,7 +1997,7 @@ int makenode(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t pa
     unsigned char old_hash[32];
     unsigned char new_hash[32];
     
-    uint64_t inode = computeinode(parent, name);
+    uint64_t inode = computeinode(key, parent, name);
     if (inode_ref)
         *inode_ref = inode;
     
@@ -2091,7 +2113,7 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
     if (!key)
         return 0;
 
-    uint64_t inode = computeinode(parent, name);
+    uint64_t inode = computeinode(key, parent, name);
     int type = read_file_json(edfs_context, key, inode, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
     if (!type)
         return 0;
@@ -3649,7 +3671,7 @@ int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t in
 }
 
 int edfs_rmdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name) {
-    return edfs_rmdir_inode(edfs_context, parent, computeinode(parent, name));
+    return edfs_rmdir_inode(edfs_context, parent, computeinode(edfs_context->primary_key, parent, name));
 }
 
 int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode) {
@@ -3671,7 +3693,7 @@ int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t i
 }
 
 int edfs_unlink(struct edfs *edfs_context, edfs_ino_t parent, const char *name) {
-    return edfs_unlink_inode(edfs_context, parent, computeinode(parent, name));
+    return edfs_unlink_inode(edfs_context, parent, computeinode(edfs_context->primary_key, parent, name));
 }
 
 int edfs_flush(struct edfs *edfs_context, struct filewritebuf *fbuf) {
@@ -4115,7 +4137,7 @@ int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, co
         int deleted = (int)json_object_get_number(root_object, "deleted");
         uint64_t current_generation = 0;
         uint64_t current_timestamp = 0;
-        if ((parent == 0) && (inode == 1) && (!deleted) && (b64name)) {
+        if ((parent == 0) && (inode == edfs_root_inode(key)) && (!deleted) && (b64name)) {
             read_file_json(edfs_context, key, inode, NULL, NULL, &current_timestamp, NULL, NULL, NULL, 0, NULL, NULL, &current_generation, NULL);
             if ((current_generation > generation) || ((current_generation == generation) && (current_timestamp >= timestamp))) {
                 if (current_generation != generation)
@@ -5302,7 +5324,7 @@ one_loop:
         }
 
         uint64_t ino = ntohll(*(uint64_t *)payload);
-        if ((!ino)/* || (ino == 1)*/) {
+        if (!ino) {
             log_warn("invalid WAND request");
             return;
         }
@@ -5830,7 +5852,6 @@ unsigned int edwork_resync(struct edfs *edfs_context, struct edfs_key_data *key,
         if (!file.is_dir) {
             // do not send root object
             if (string_ends_with(file.name, ".json", 5)) {
-                // && (strcmp(file.name, "AAAAAAAAAAE.json")))
                 unsigned char buffer[EDWORK_PACKET_SIZE];
                 int len = edfs_read_file(edfs_context, key, key->working_directory, file.name, buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0, 1);
                 if (len > 0) {
@@ -6255,20 +6276,21 @@ int edwork_thread(void *userdata) {
     return 0;
 }
 
-uint64_t pathtoinode(const char *path, uint64_t *parentinode, const char **nameptr) {
+uint64_t edfs_pathtoinode(struct edfs *edfs_context, const char *path, uint64_t *parentinode, const char **nameptr) {
+    uint64_t inode = edfs_context ? edfs_root_inode(edfs_context->primary_key) : 1;
+
     if (parentinode)
         *parentinode = 0;
     if (nameptr)
         *nameptr = NULL;
     if (!path)
-        return 1;
+        return inode;
     int len = strlen(path);
     if (!len)
-        return 1;
+        return inode;
 
     int i;
     int chunk_len;
-    uint64_t inode = 1;
     int start = 0;
 
     if (path[start] == '/')
@@ -6280,7 +6302,7 @@ uint64_t pathtoinode(const char *path, uint64_t *parentinode, const char **namep
             if (chunk_len > 0) {
                 if (parentinode)
                     *parentinode = inode;
-                inode = computeinode2(inode, path + start, chunk_len);
+                inode = computeinode2(edfs_context ? edfs_context->primary_key : NULL, inode, path + start, chunk_len);
                 if (nameptr)
                     *nameptr = path + start;
                 start = i + 1;
@@ -6291,7 +6313,7 @@ uint64_t pathtoinode(const char *path, uint64_t *parentinode, const char **namep
     if (chunk_len > 0) {
         if (parentinode)
             *parentinode = inode;
-        inode = computeinode2(inode, path + start, chunk_len);
+        inode = computeinode2(edfs_context ? edfs_context->primary_key : NULL, inode, path + start, chunk_len);
         if (nameptr)
             *nameptr = path + start;
         start = i + 1;

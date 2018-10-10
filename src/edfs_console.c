@@ -36,7 +36,7 @@ unsigned int add_directory(const char *name, edfs_ino_t ino, int type, int64_t s
 
 static int edfs_console_ls(const char *path) {
     const char *nameptr = NULL;
-    uint64_t inode = pathtoinode(path, NULL, &nameptr);
+    uint64_t inode = edfs_pathtoinode(edfs_context, path, NULL, &nameptr);
     int type = edfs_lookup_inode(edfs_context, inode, nameptr);
     if (!type) {
         fprintf(stderr, "edfs console: %s: No such file or directory\n", path);
@@ -144,7 +144,7 @@ static int edfs_console_upload(const char *path, const char *fname) {
     }
 
     uint64_t parent;
-    uint64_t inode = pathtoinode(full_path, &parent, &name);
+    uint64_t inode = edfs_pathtoinode(edfs_context, full_path, &parent, &name);
     int type = edfs_lookup_inode(edfs_context, inode, name);
     if (type) {
         fclose(f);
@@ -369,7 +369,7 @@ int main(int argc, char *argv[]) {
                 }
                 uint64_t parent = 0;
 
-                uint64_t inode = pathtoinode(path, &parent, NULL);
+                uint64_t inode = edfs_pathtoinode(edfs_context, path, &parent, NULL);
                 if (inode > 1) {
                     int err = edfs_unlink_inode(edfs_context, parent, inode);
                     if (err < 0) {
@@ -401,7 +401,7 @@ int main(int argc, char *argv[]) {
                 }
                 uint64_t parent = 0;
 
-                uint64_t inode = pathtoinode(path, &parent, NULL);
+                uint64_t inode = edfs_pathtoinode(edfs_context, path, &parent, NULL);
                 if (inode > 1) {
                     int err = edfs_rmdir_inode(edfs_context, parent, inode);
                     if (err < 0) {
@@ -432,7 +432,7 @@ int main(int argc, char *argv[]) {
                     path = full_path;
                 }
                 uint64_t parent = 0;
-                uint64_t inode = pathtoinode(path, &parent, &name);
+                uint64_t inode = edfs_pathtoinode(edfs_context, path, &parent, &name);
 
                 if (!edfs_getattr(edfs_context, inode, &stbuf)) {
                     fprintf(stderr, "edfs console: %s: file/directory exists\n", parameters);
@@ -475,7 +475,7 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
                 if (parameters[0] == '/') {
-                    if (edfs_getattr(edfs_context, pathtoinode(parameters, NULL, NULL), &stbuf)) {
+                    if (edfs_getattr(edfs_context, edfs_pathtoinode(edfs_context, parameters, NULL, NULL), &stbuf)) {
                         fprintf(stderr, "edfs console: %s: No such file or directory\n", parameters);
                         continue;
                     }
@@ -489,7 +489,7 @@ int main(int argc, char *argv[]) {
                         snprintf(full_path, 4096, "%s/%s", working_dir, parameters);
                     else
                         snprintf(full_path, 4096, "/%s", parameters);
-                    if (edfs_getattr(edfs_context, pathtoinode(full_path, NULL, NULL), &stbuf)) {
+                    if (edfs_getattr(edfs_context, edfs_pathtoinode(edfs_context, full_path, NULL, NULL), &stbuf)) {
                         fprintf(stderr, "edfs console: %s: No such file or directory\n", full_path);
                         continue;
                     }
@@ -515,7 +515,7 @@ int main(int argc, char *argv[]) {
                     path = full_path;
                 }
                 uint64_t parent;
-                uint64_t inode = pathtoinode(path, &parent, &name);
+                uint64_t inode = edfs_pathtoinode(edfs_context, path, &parent, &name);
                 if ((!edfs_console_download(path, name, inode)) && (!strcmp(cmd, "open"))) {
                     snprintf(full_path, 4096, "\"%s\"", name);
                     system(full_path);
