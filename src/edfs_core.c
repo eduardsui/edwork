@@ -3800,8 +3800,11 @@ int edfs_create_key(struct edfs *edfs_context) {
         json_serialize_to_file_pretty(root_value, fullpath);
     json_value_free(root_value);
 
-    if ((edwork_load_key(edfs_context, b64buffer)) && (edfs_context->key_data))
+    if ((edwork_load_key(edfs_context, b64buffer)) && (edfs_context->key_data)) {
         edfs_genesis_if_new(edfs_context, edfs_context->key_data);
+        if (!edfs_context->primary_key)
+            edfs_context->primary_key = edfs_context->key_data;
+    }
 
     return 0;
 }
@@ -3879,6 +3882,9 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
     json_value_free(root_value);
 
     edwork_load_key(edfs_context, b64buffer);
+
+    if (!edfs_context->primary_key)
+        edfs_context->primary_key = edfs_context->key_data;
 
     return 0;
 }

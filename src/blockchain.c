@@ -347,16 +347,33 @@ struct block *block_load(const char *path, uint64_t index) {
         fclose(f);
         return 0;
     }
-    fread(&index, 1, sizeof(uint64_t), f);
-    fread(&timestamp, 1, sizeof(uint64_t), f);
-    fread(&nonce, 1, sizeof(uint64_t), f);
+    if (fread(&index, 1, sizeof(uint64_t), f) != sizeof(uint64_t)) {
+        fclose(f);
+        return 0;
+    }
+    if (fread(&timestamp, 1, sizeof(uint64_t), f) != sizeof(uint64_t)) {
+        fclose(f);
+        return 0;
+    }
+    if (fread(&nonce, 1, sizeof(uint64_t), f) != sizeof(uint64_t)) {
+        fclose(f);
+        return 0;
+    }
     newblock = block_new(NULL, NULL, 0);
     if (newblock) {
         newblock->index = ntohll(index);
         newblock->timestamp = ntohl(timestamp);
         newblock->nonce = ntohll(nonce);
-        fread(&newblock->hash, 1, 32, f);
-        fread(&data_len, 1, sizeof(unsigned int), f);
+        if (fread(&newblock->hash, 1, 32, f) != 32) {
+            block_free(newblock);
+            fclose(f);
+            return 0;
+        }
+        if (fread(&data_len, 1, sizeof(unsigned int), f) != sizeof(unsigned int)) {
+            block_free(newblock);
+            fclose(f);
+            return 0;
+        }
         newblock->data_len = ntohl(data_len);
         if (newblock->data_len) {
             newblock->data = (unsigned char *)malloc(newblock->data_len + 1);
@@ -367,7 +384,11 @@ struct block *block_load(const char *path, uint64_t index) {
                 block_free(newblock);
                 return NULL;
             }
-            fread(newblock->data, 1, newblock->data_len, f);
+            if (fread(newblock->data, 1, newblock->data_len, f) != newblock->data_len) {
+                block_free(newblock);
+                fclose(f);
+                return 0;
+            }
         }
     }
     fclose(f);
