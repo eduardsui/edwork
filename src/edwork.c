@@ -202,6 +202,7 @@ struct edwork_data {
     #endif
     int force_sctp;
 #endif
+    int default_port;
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -997,6 +998,7 @@ struct edwork_data *edwork_create(int port, edwork_find_key_callback find_key) {
 
     data->magnitude = 0;
     data->magnitude_stamp = 0;
+    data->default_port = port;
 
     thread_mutex_init(&data->sock_lock);
     thread_mutex_init(&data->clients_lock);
@@ -1303,6 +1305,23 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     }
 
     thread_mutex_unlock(&data->clients_lock);
+#ifdef WITH_SCTP
+    // get reverse route for remote SCTP sockets
+    if ((is_sctp) && (is_listen_socket)) {
+        struct sockaddr addr2;
+        memcpy(&addr2, sin, client_len);
+        if (addr2.sa_family == AF_INET)
+            ((struct sockaddr_in *)&addr2)->sin_port = htons(data->default_port);
+        else
+        if (addr2.sa_family == AF_INET6)
+            ((struct sockaddr_in6 *)&addr2)->sin6_port = htons(data->default_port);
+
+        if (!encapsulation_port)
+            encapsulation_port = edword_sctp_get_remote_encapsulation_port(data->sctp_socket, NULL, (struct sockaddr *)sin);
+
+        add_node(data, (struct sockaddr_in *)&addr2, sizeof(struct sockaddr_in), 0, 0, is_sctp, 0, encapsulation_port, 0);
+    }
+#endif
     return &data->clients[data->clients_count - 1];
 }
 
@@ -1901,6 +1920,9 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
                 if (size == 9) {
                     memcpy(&encapsulation_port, buf + 7, 2);
                     encapsulation_port = ntohs(encapsulation_port);
+                    // ignore port for SCTP encapsulated traffic
+                    if ((sctp) && (encapsulation_port))
+                        port = data->default_port;
                 }
             }
 

@@ -259,6 +259,69 @@ static int edfs_fuse_statfs(const char *path, struct statvfs *stbuf) {
 }
 #endif
 
+#ifdef _WIN32
+int edfs_register_uri() {
+    HKEY key;
+    char edfs_path[MAX_PATH];
+    char edfs_temp[MAX_PATH + 5];
+    char *edfs_name = NULL;
+    static const char protocol_description[] = "edwork protocol";
+    
+    if (!GetModuleFileNameA(NULL, edfs_path, MAX_PATH)) {
+        log_warn("error in getting module name");
+        RegCloseKey(key);
+    }
+    edfs_name = strrchr(edfs_path, '\\');
+    if (edfs_name)
+        edfs_name ++;
+    else
+        edfs_name = edfs_path;
+
+    // re-create key (program moved ?)
+    if (RegOpenKeyA(HKEY_CURRENT_USER, TEXT("Software\\Classes\\edwork\\"), &key) == ERROR_SUCCESS) {
+        log_trace("protocol already registered");
+        RegDeleteKeyA(key, NULL);
+        RegCloseKey(key);
+    }
+    int error = RegCreateKeyA(HKEY_CURRENT_USER, TEXT("Software\\Classes\\edwork\\"), &key);
+    if (error != ERROR_SUCCESS) {
+        log_warn("cannot create registry key (error: %i)", error);
+        return 0;
+    }
+    RegSetValueExA(key, NULL, 0, REG_SZ, (LPBYTE)protocol_description, strlen(protocol_description) + 1);
+    RegSetValueExA(key, TEXT("URL Protocol"), 0, REG_SZ, (LPBYTE)"", 0);
+    RegCloseKey(key);
+    
+    error = RegCreateKeyA(HKEY_CURRENT_USER, TEXT("Software\\Classes\\edwork\\DefaultIcon\\"), &key);
+    if (error) {
+        log_warn("cannot create registry key (error: %i)", error);
+        return 0;
+    }
+    
+    edfs_temp[0] = 0;
+    snprintf(edfs_temp, sizeof(edfs_temp), "%s,1", edfs_name);
+    RegSetValueExA(key, NULL, 0, REG_SZ, (LPBYTE)edfs_temp, strlen(edfs_temp) + 1);
+    RegCloseKey(key);
+
+    error = RegCreateKeyA(HKEY_CURRENT_USER, TEXT("Software\\Classes\\edwork\\shell\\open\\command\\"), &key);
+    if (error) {
+        log_warn("cannot create registry key (error: %i)", error);
+        return 0;
+    }
+    edfs_temp[0] = 0;
+    snprintf(edfs_temp, sizeof(edfs_temp), "\"%s\" \"-uri\" \"%%1\"", edfs_path);
+    RegSetValueExA(key, NULL, 0, REG_SZ, (LPBYTE)edfs_temp, strlen(edfs_temp) + 1);
+    RegCloseKey(key);
+
+    edfs_name = strrchr(edfs_path, '\\');
+    if (edfs_name) {
+        edfs_name[0] = 0;
+        chdir(edfs_path);
+    }
+    return 1;
+}
+#endif
+
 void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_directory, const char *storage_key) {
     edfs_fuse->getattr      = edfs_fuse_getattr;
     edfs_fuse->readdir      = edfs_fuse_readdir;
@@ -281,6 +344,8 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
     edfs_fuse->chown        = edfs_fuse_chown;
 #ifdef _WIN32
     edfs_fuse->statfs       = edfs_fuse_statfs;
+
+    edfs_register_uri();
 #endif
 
     edfs_context = edfs_create_context(working_directory);
@@ -356,7 +421,7 @@ int main(int argc, char *argv[]) {
     }
 
     edfs_fuse_init(&edfs_fuse, working_directory, storage_key);
-
+    int uri_parameters = 0;
     for (i = 1; i < argc; i++) {
         char *arg = argv[i];
         if (arg) {
@@ -480,10 +545,40 @@ int main(int argc, char *argv[]) {
                         exit(-1);
                     }
                     i++;
+                    int err;
                     if (strlen(argv[i]) > 64)
-                        edfs_use_key(edfs_context, argv[i], NULL);
+                        err = edfs_use_key(edfs_context, argv[i], NULL);
                     else
-                        edfs_use_key(edfs_context, NULL, argv[i]);
+                        err = edfs_use_key(edfs_context, NULL, argv[i]);
+                    if (err) {
+                        fprintf(stderr, "edfs: invalid key: %s\n", argv[i]);
+                        exit(-1);
+                    }
+                } else
+                if (!strcmp(arg, "uri")) {
+                    if (i >= argc - 1) {
+                        fprintf(stderr, "edfs: uri string expected after -uri parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
+                    char *uri = argv[i];
+                    int len = strlen(uri);
+                    if ((len <= 7) || (memcmp(uri, "edwork:", 7))) {
+                        fprintf(stderr, "edfs: invalid uri\n");
+                        exit(-1);
+                    }
+                    uri += 7;
+                    int err;
+                    if (strlen(argv[i]) > 64)
+                        err = edfs_use_key(edfs_context, uri, NULL);
+                    else
+                        err = edfs_use_key(edfs_context, NULL, uri);
+                    if (err) {
+                        fprintf(stderr, "edfs: invalid uri key\n");
+                        exit(-1);
+                    }
+                    edfs_set_partition_key(edfs_context, uri);
+                    uri_parameters += 2;
                 } else
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
@@ -503,6 +598,7 @@ int main(int argc, char *argv[]) {
                         "    -shard id shards   set shard id, as id number of shard, eg.: -shards 1 2\n"
                         "    -dir directory     set the edfs working directory (default is ./edfs)\n"
                         "    -storagekey        set a storage key used for local encryption\n"
+                        "    -uri               edfs uri (key)\n"
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
 #endif
@@ -550,7 +646,7 @@ int main(int argc, char *argv[]) {
             fuse_set_signal_handlers(fuse_get_session(se));
 #ifdef _WIN32
             // on windows, if no parameters, detach console
-            if ((!foreground) || (argc == 1))
+            if ((!foreground) || (argc == (uri_parameters + 1)))
                 FreeConsole();
 #endif
 #ifdef EDFS_MULTITHREADED

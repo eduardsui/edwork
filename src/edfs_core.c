@@ -3850,7 +3850,10 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
     }
     json_object_set_string(root_object, "pk", public_key);
 
-    base64_decode_no_padding((const BYTE *)public_key, (BYTE *)keydata, MAX_KEY_SIZE);
+    if (base64_decode_no_padding((const BYTE *)public_key, (BYTE *)keydata, MAX_KEY_SIZE) != 32) {
+        log_error("invalid key");
+        return -1;
+    }
 
     unsigned char hash[32];
     sha256(keydata, 32, hash);
