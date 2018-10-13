@@ -544,10 +544,10 @@ int main(int argc, char *argv[]) {
     if ((ch = fuse_mount(mountpoint, &args)) != NULL) {
         struct fuse *se;
 
+        edfs_edwork_init(edfs_context, port);
         se = fuse_new(ch, &args, &edfs_fuse, sizeof(edfs_fuse), NULL);
         if (se != NULL) {
             fuse_set_signal_handlers(fuse_get_session(se));
-            edfs_edwork_init(edfs_context, port);
 #ifdef _WIN32
             // on windows, if no parameters, detach console
             if ((!foreground) || (argc == 1))
@@ -563,6 +563,10 @@ int main(int argc, char *argv[]) {
             edfs_context = NULL;
             fuse_unmount(mountpoint, ch);
             fuse_destroy(se);
+        } else {
+            edfs_edwork_done(edfs_context);
+            edfs_destroy_context(edfs_context);
+            edfs_context = NULL;
         }
 #ifdef __APPLE__
         rmdir(mountpoint);

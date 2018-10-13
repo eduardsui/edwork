@@ -766,11 +766,9 @@ void edwork_broadcast_discovery(struct edfs *edfs_context) {
     unsigned char key_hash[32];
     struct edfs_key_data *key = edfs_context->key_data;
     while (key) {
-        if (key->pubkey) {
-            sha256(key->pubkey, key->pub_len, key_hash);
-            hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
-            notify_io(edfs_context, NULL, "disc", key_hash, 32, NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
-        }
+        sha256(key->pubkey, key->pub_len, key_hash);
+        hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
+        notify_io(edfs_context, NULL, "disc", key_hash, 32, NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
         key = (struct edfs_key_data *)key->next_key;
     }
 
@@ -5675,13 +5673,11 @@ one_loop:
 
         struct edfs_key_data *key = edfs_context->key_data;
         while (key) {
-            if (key->pubkey) {
-                sha256(key->pubkey, key->pub_len, key_hash);
-                hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
-                if (XXH64(key_hash, 32, 0) == key_checksum) {
-                    log_trace("ignoring discovery request for own key");
-                    return;
-                }
+            sha256(key->pubkey, key->pub_len, key_hash);
+            hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
+            if (XXH64(key_hash, 32, 0) == key_checksum) {
+                log_trace("ignoring discovery request for own key");
+                return;
             }
             key = (struct edfs_key_data *)key->next_key;
         }

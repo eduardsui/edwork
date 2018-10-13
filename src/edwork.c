@@ -325,6 +325,7 @@ void edwork_done() {
 }
 
 #ifdef WITH_SCTP
+#ifdef WITH_USRSCTP
 
 unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, struct sctp_rcvinfo *rcvinfo, struct sockaddr *addrs) {
     unsigned short port = 0;
@@ -745,7 +746,6 @@ ssize_t safe_sctp_recvfrom(struct edwork_data *data, SCTP_SOCKET_TYPE socket, vo
     return err;
 }
 
-#ifdef WITH_SCTP
 int edwork_is_sctp(struct edwork_data *data, const void *clientaddr_ptr) {
     int is_sctp = 0;
     thread_mutex_lock(&data->clients_lock);
@@ -1835,12 +1835,14 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
         if (data->clients[i].last_seen >= threshold) {
             if (found >= offset) {
                 records ++;
+#ifdef WITH_SCTP
                 if (data->clients[i].sctp_socket) {
                     if (data->clients[i].encapsulation_port)
                         *buf ++ = 9;
                     else
                         *buf ++ = 7;
                 } else
+#endif
                     *buf ++ = 6;
                 memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
                 buf += 4;
@@ -1850,6 +1852,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
                 } else
                     memcpy(buf, &data->clients[i].clientaddr.sin_port, 2);
                 buf += 2;
+#ifdef WITH_SCTP
                 if (data->clients[i].sctp_socket) {
                     *buf ++ = data->clients[i].sctp_socket;
                     if (data->clients[i].encapsulation_port) {
@@ -1860,6 +1863,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
                     } else
                         *buf_size -= 8;
                 } else
+#endif
                     *buf_size -= 7;
             }
             found ++;
