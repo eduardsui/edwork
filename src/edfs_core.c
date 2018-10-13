@@ -2061,6 +2061,9 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
     time_t modified = 0;
     time_t created = 0;
 
+    if ((!edfs_context->mutex_initialized) && (!edfs_context->primary_key))
+        usleep(10000000);
+
     struct edfs_key_data *key = edfs_context->primary_key;
     if (!key)
         return -ENOENT;
