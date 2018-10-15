@@ -678,10 +678,12 @@ void UnEmbedBrowserObject(HWND hwnd) {
         browserObject->lpVtbl->Close(browserObject, OLECLOSE_NOSAVE);
         browserObject->lpVtbl->Release(browserObject);
         GlobalFree(browserHandle);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
         return;
     }
 }
 
+#include <stdio.h>
 long DisplayHTMLStr(HWND hwnd, LPCTSTR string) {    
     IWebBrowser2    *webBrowser2;
     LPDISPATCH        lpDispatch;
@@ -866,11 +868,33 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 }
 
 int ui_app_init(ui_trigger_event event_handler) {
+    HKEY key;
+    char app_path[MAX_PATH];
+    char *app_name;
+
     callback_event = event_handler;
     if (OleInitialize(NULL) != S_OK) {
         MessageBox(0, "Can't open OLE!", "ERROR", MB_OK);
         return -1;
     }
+
+    if (!GetModuleFileNameA(NULL, app_path, MAX_PATH))
+        return 0;
+
+    if (RegOpenKeyA(HKEY_CURRENT_USER, TEXT("Software\\Microsoft\\Internet Explorer\\Main\\FeatureControl\\FEATURE_BROWSER_EMULATION"), &key) != ERROR_SUCCESS)
+        return 0;
+
+    app_name = strrchr(app_path, '\\');
+    if (app_name)
+        app_name ++;
+    else
+        app_name = app_path;
+
+    DWORD version = 11000;
+    RegSetValueExA(key, TEXT(app_name), 0, REG_DWORD, (LPBYTE)&version, sizeof(DWORD));
+    RegCloseKey(key);
+
+    return 1;
 }
 
 int ui_app_done() {
@@ -883,6 +907,10 @@ void ui_app_run() {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+}
+
+void ui_app_quit() {
+    PostQuitMessage(0);
 }
 
 void ui_message(const char *title, const char *body, int level) {
@@ -899,6 +927,28 @@ void ui_message(const char *title, const char *body, int level) {
         default:
             MessageBox(0, body, title, MB_OK);
     }
+}
+
+int ui_question(const char *title, const char *body, int level) {
+    int yes_or_no = 0;
+    switch (level) {
+        case 1:
+            yes_or_no = MessageBox(0, body, title, MB_YESNO | MB_ICONINFORMATION);
+            break;
+        case 2:
+            yes_or_no = MessageBox(0, body, title, MB_YESNO | MB_ICONWARNING);
+            break;
+        case 3:
+            yes_or_no = MessageBox(0, body, title, MB_YESNO | MB_ICONEXCLAMATION);
+            break;
+        default:
+            yes_or_no = MessageBox(0, body, title, MB_YESNO);
+    }
+
+    if (yes_or_no == IDYES)
+        return 1;
+
+    return 0;
 }
 
 BSTR MakeBSTR(const char *js) {
@@ -1036,18 +1086,28 @@ void ui_free_string(void *ptr) {
     free(ptr);
 }
 
-void *ui_window(void *hInstance, const char *title, const char *body) {
+void ui_window_set_content(void *wnd, const char *body) {
+    if (wnd) {
+        UnEmbedBrowserObject((HWND)wnd);
+        EmbedBrowserObject((HWND)wnd);
+        DisplayHTMLStr((HWND)wnd, body);
+    }
+}
+
+void *ui_window(const char *title, const char *body) {
     WNDCLASSEX wc;
     HWND hwnd;
 
     ZeroMemory(&wc, sizeof(WNDCLASSEX));
     wc.cbSize = sizeof(WNDCLASSEX);
-    wc.hInstance = (HINSTANCE)hInstance;
+    wc.hInstance = (HINSTANCE)GetModuleHandle(NULL);
     wc.lpfnWndProc = WindowProc;
     wc.lpszClassName = &ClassName[0];
+    wc.hIcon = LoadIcon(NULL, MAKEINTRESOURCE(32518));
+    wc.hIconSm = LoadIcon(NULL, MAKEINTRESOURCE(32518));
     RegisterClassEx(&wc);
 
-    if ((hwnd = CreateWindowEx(0, ClassName, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, HWND_DESKTOP, NULL, hInstance, 0))) {
+    if ((hwnd = CreateWindowEx(0, ClassName, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, HWND_DESKTOP, NULL, GetModuleHandle(NULL), 0))) {
         DisplayHTMLStr(hwnd, body);
         ShowWindow(hwnd, SW_SHOWNORMAL);
         UpdateWindow(hwnd);

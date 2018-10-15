@@ -3592,6 +3592,55 @@ int recursive_rmdir(const char *path) {
     return r;
 }
 
+int recursive_dir_size(const char *path, uint64_t *size, uint64_t *files, uint64_t *directories) {
+    tinydir_dir dir;
+    size_t path_len = strlen(path);
+    int r = -1;
+
+    if (!tinydir_open(&dir, path)) {
+        r = 0;
+        int  i = 0;
+        if (directories)
+            (*directories) ++;
+        while (dir.has_next) {
+            tinydir_file file;
+            tinydir_readfile(&dir, &file);
+            int r2 = -1;
+            char *buf;
+            size_t len;
+
+            if ((strcmp(file.name, ".")) && (strcmp(file.name, ".."))) {
+                len = path_len + strlen(file.name) + 2; 
+                buf = (char *)malloc(len);
+
+                if (buf) {
+                    struct stat statbuf;
+                    snprintf(buf, len, "%s/%s", path, file.name);
+                    if (!stat(buf, &statbuf)) {
+                        if (!S_ISLNK(statbuf.st_mode)) {
+                            if (S_ISDIR(statbuf.st_mode)) {
+                                r2 = recursive_dir_size(buf, size, files, directories);
+                                if (size)
+                                    (*size) += statbuf.st_size;
+                            } else {
+                                if (files)
+                                    (*files) ++;
+                                if (size)
+                                    (*size) += statbuf.st_size;
+                            }
+                        }
+                    }
+                    free(buf);
+                }
+                r = r2;
+            }
+            tinydir_next(&dir);
+        }
+        tinydir_close(&dir);
+    }
+    return r;
+}
+
 void rehash_parent(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t parent) {
     char parentb64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
@@ -3803,8 +3852,7 @@ int edfs_create_key(struct edfs *edfs_context) {
 
     if ((edwork_load_key(edfs_context, b64buffer)) && (edfs_context->key_data)) {
         edfs_genesis_if_new(edfs_context, edfs_context->key_data);
-        if (!edfs_context->primary_key)
-            edfs_context->primary_key = edfs_context->key_data;
+        edfs_context->primary_key = edfs_context->key_data;
     }
 
     return 0;
@@ -3894,7 +3942,7 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
 }
 
 int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
-    if (!edfs_context)
+    if ((!edfs_context) || (!key_id))
         return -1;
 
     uint64_t use_key_id = 0;
@@ -3927,6 +3975,101 @@ int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
     return -1;
 }
 
+int edfs_rmkey(struct edfs *edfs_context, const char *key_id) {
+    if ((!edfs_context) || (!key_id))
+        return -1;
+
+    uint64_t use_key_id = 0;
+    if (strlen(key_id) > 32) {
+        unsigned char public_key[MAX_KEY_SIZE];
+        size_t len = base64_decode_no_padding((const BYTE *)key_id, public_key, MAX_KEY_SIZE);
+        if (len >= 32) {
+            if (len == 64) {
+                public_key[0] &= 248;
+                public_key[31] &= 63;
+                public_key[31] |= 64;
+
+                ed25519_get_pubkey(public_key, public_key);
+            }
+            unsigned char hash[32];
+            sha256(public_key, 32, hash);
+            use_key_id = htonll(XXH64(hash, 32, 0));
+        }
+    } else
+        base32_decode((const BYTE *)key_id, (BYTE *)&use_key_id, sizeof(uint64_t));
+
+    struct edfs_key_data *key = edfs_context->key_data;
+    struct edfs_key_data *prev_key = NULL;
+    while (key) {
+        if (key->key_id_xxh64_be == use_key_id) {
+            if (edfs_context->primary_key == key) {
+                log_error("cannot delete primary key");
+                return -1;
+            }
+            avl_remove(&edfs_context->key_tree, (void *)(uintptr_t)key->key_id_xxh64_be);
+            if (prev_key)
+                prev_key->next_key = key->next_key;
+            else
+                edfs_context->key_data = (struct edfs_key_data *)key->next_key;
+
+            edfs_key_data_deinit(key);
+            free(key);
+
+            char fullpath[MAX_PATH_LEN];
+            fullpath[0] = 0;
+            snprintf(fullpath, MAX_PATH_LEN, "%s/%s", edfs_context->edfs_directory, key_id);
+            recursive_rmdir(fullpath);
+
+            return 0;
+        }
+        prev_key = key;
+        key = (struct edfs_key_data *)key->next_key;
+    }
+    return -1;
+}
+
+int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *size, uint64_t *files, uint64_t *directories) {
+    if ((!edfs_context) || (!key_id))
+        return -1;
+
+    if ((!edfs_context) || (!key_id))
+        return -1;
+
+    uint64_t use_key_id = 0;
+    if (strlen(key_id) > 32) {
+        unsigned char public_key[MAX_KEY_SIZE];
+        size_t len = base64_decode_no_padding((const BYTE *)key_id, public_key, MAX_KEY_SIZE);
+        if (len >= 32) {
+            if (len == 64) {
+                public_key[0] &= 248;
+                public_key[31] &= 63;
+                public_key[31] |= 64;
+
+                ed25519_get_pubkey(public_key, public_key);
+            }
+            unsigned char hash[32];
+            sha256(public_key, 32, hash);
+            use_key_id = htonll(XXH64(hash, 32, 0));
+        }
+    } else
+        base32_decode((const BYTE *)key_id, (BYTE *)&use_key_id, sizeof(uint64_t));
+
+    struct edfs_key_data *key = edfs_context->key_data;
+    struct edfs_key_data *prev_key = NULL;
+    while (key) {
+        if (key->key_id_xxh64_be == use_key_id) {
+            char fullpath[MAX_PATH_LEN];
+            fullpath[0] = 0;
+            snprintf(fullpath, MAX_PATH_LEN, "%s/%s", edfs_context->edfs_directory, key_id);
+            
+            return recursive_dir_size(fullpath, size, files, directories);
+        }
+        prev_key = key;
+        key = (struct edfs_key_data *)key->next_key;
+    }
+    return -1;
+}
+
 int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size) {
     if (!edfs_context)
         return -1;
@@ -3944,6 +4087,65 @@ int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size) {
     }
     return key ? 1 : 0;
 }
+
+void *edfs_get_key(struct edfs *edfs_context) {
+   if (!edfs_context)
+       return NULL;
+
+   return edfs_context->key_data;
+ }
+
+void *edfs_next_key(void *key) {
+   if (!key)
+       return NULL;
+
+   return ((struct edfs_key_data *)key)->next_key;
+ }
+
+void *edfs_get_primary_key(struct edfs *edfs_context) {
+   if (!edfs_context)
+       return NULL;
+
+   return edfs_context->primary_key;
+}
+
+char *edfs_key_id(void *key, char *buffer) {
+    if ((!key) || (!buffer))
+        return NULL;
+
+    buffer[0] = 0;
+    int encode_len = base32_encode((const unsigned char *)&((struct edfs_key_data *)key)->key_id_xxh64_be, sizeof(uint64_t), (unsigned char *)buffer, 16);
+    buffer[encode_len] = 0;
+
+    return buffer;
+}
+
+char *edfs_public_key(void *key, char *buffer) {
+    if ((!key) || (!buffer))
+        return NULL;
+
+    buffer[0] = 0;
+    if (((struct edfs_key_data *)key)->pub_len > 0) {
+        int encode_len = base64_encode_no_padding(((struct edfs_key_data *)key)->pubkey, ((struct edfs_key_data *)key)->pub_len, (unsigned char *)buffer, 128);
+        buffer[encode_len] = 0;
+    }
+
+    return buffer;
+}
+
+char *edfs_private_key(void *key, char *buffer) {
+    if ((!key) || (!buffer))
+        return NULL;
+
+    buffer[0] = 0;
+    if (((struct edfs_key_data *)key)->sig_len > 0) {
+        int encode_len = base64_encode_no_padding(((struct edfs_key_data *)key)->sigkey, ((struct edfs_key_data *)key)->sig_len, (unsigned char *)buffer, 128);
+        buffer[encode_len] = 0;
+    }
+
+    return buffer;
+}
+
 
 int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data) {
     struct edfs_key_data *key = (struct edfs_key_data *)data;

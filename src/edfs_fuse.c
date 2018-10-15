@@ -11,6 +11,8 @@
     #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
         #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
     #endif
+    #include "ui/win32/htmlwindow.h"
+    #include "ui/edwork_settings_form.h"
 #ifndef HAVE_TIMESPEC
     struct timespec {
         time_t tv_sec;
@@ -269,7 +271,7 @@ int edfs_register_uri() {
     
     if (!GetModuleFileNameA(NULL, edfs_path, MAX_PATH)) {
         log_warn("error in getting module name");
-        RegCloseKey(key);
+        return -1;
     }
     edfs_name = strrchr(edfs_path, '\\');
     if (edfs_name)
@@ -353,6 +355,86 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
         edfs_set_store_key(edfs_context, (const unsigned char *)storage_key, strlen(storage_key));
 }
 
+#ifdef _WIN32
+void edfs_gui_load(void *window) {
+    char buffer1[0x100];
+    char buffer2[0x100];
+    char buffer3[0x100];
+
+    void *primary_key = edfs_get_primary_key(edfs_context);
+    void *key = edfs_get_key(edfs_context);
+    if (key) {
+        ui_call(window, "clear_keys", NULL);
+        const char *key_arguments[] = {"", "", "", "", NULL};
+        while (key) {
+            key_arguments[0] = edfs_key_id(key, buffer1);
+            key_arguments[1] = edfs_public_key(key, buffer2);
+            key_arguments[2] = edfs_private_key(key, buffer3);
+            if (key == primary_key)
+                key_arguments[3] = "true";
+            else
+                key_arguments[3] = "";
+
+            ui_call(window, "add_key", key_arguments);
+
+            key = edfs_next_key(key);
+        }
+    }
+}
+
+void edfs_gui_callback(void *window) {
+    char *foo = ui_call(window, "lastevent", NULL);
+    uint64_t size = 0;
+    uint64_t files = 0;
+    uint64_t directories = 0;
+    if (foo) {
+        switch (foo[0]) {
+            case '@':
+                if (edfs_chkey(edfs_context, foo + 1))
+                    ui_message("Error", "Error switching key", 3);
+                else
+                    edfs_gui_load(window);
+                break;
+            case '-':
+                if (ui_question("Warning", "Are you sure you want to delete this key?\nAccessing the data will not longer be possible.", 2)) {
+                    if (edfs_rmkey(edfs_context, foo + 1))
+                        ui_message("Error", "Error deleting key", 3);
+                    else
+                        edfs_gui_load(window);
+                }
+                break;
+            case '!':
+                if (edfs_create_key(edfs_context))
+                    ui_message("Error", "Error creating new key", 3);
+                else
+                    edfs_gui_load(window);
+                break;
+            case '*':
+                edfs_storage_info(edfs_context, foo + 1, &size, &files, &directories);
+
+                char buf[0x1000];
+                snprintf(buf, sizeof(buf), " %.3f GB in %" PRIu64 " files and %" PRIu64 " directories", (double)size / (1024 * 1024 * 1024), files, directories);
+                const char *arg[] = { foo + 1, buf, NULL };
+                ui_call(window, "filesystem_usage", arg);
+                break;
+        }
+        ui_free_string(foo);
+    }
+}
+
+int edfs_gui_thread(void *userdata) {
+    ui_app_init(edfs_gui_callback);
+    void *window = ui_window("edowork settings", edwork_settings_form);
+    edfs_gui_load(window);
+    ui_app_run();
+    ui_app_done();
+}
+
+thread_ptr_t edfs_gui() {
+    return thread_create(edfs_gui_thread, (void *)edfs_context, "edwork gui", 8192 * 1024);
+}
+#endif
+
 static const char EDFS_BANNER[] =   " _______   ________  ___       __   ________  ________  ___  __       \n"
                                     "|\\  ___ \\ |\\   ___ \\|\\  \\     |\\  \\|\\   __  \\|\\   __  \\|\\  \\|\\  \\     \n"
                                     "\\ \\   __/|\\ \\  \\_|\\ \\ \\  \\    \\ \\  \\ \\  \\|\\  \\ \\  \\|\\  \\ \\  \\/  /|_   \n"
@@ -384,6 +466,7 @@ int main(int argc, char *argv[]) {
 #endif
 
 #ifdef _WIN32
+    int gui = 0;
     // enable colors
     HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD fdwSaveOldMode;
@@ -580,6 +663,11 @@ int main(int argc, char *argv[]) {
                     edfs_set_partition_key(edfs_context, uri);
                     uri_parameters += 2;
                 } else
+#ifdef _WIN32
+                if (!strcmp(arg, "gui")) {
+                    gui = 1;
+                } else
+#endif
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -599,6 +687,9 @@ int main(int argc, char *argv[]) {
                         "    -dir directory     set the edfs working directory (default is ./edfs)\n"
                         "    -storagekey        set a storage key used for local encryption\n"
                         "    -uri               edfs uri (key)\n"
+#ifdef _WIN32
+                        "    -gui               open GUI\n"
+#endif
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
 #endif
@@ -645,14 +736,27 @@ int main(int argc, char *argv[]) {
         if (se != NULL) {
             fuse_set_signal_handlers(fuse_get_session(se));
 #ifdef _WIN32
+            thread_ptr_t gui_thread;
             // on windows, if no parameters, detach console
-            if ((!foreground) || (argc == (uri_parameters + 1)))
+            if ((!foreground) || (argc == (uri_parameters + 1))) {
                 FreeConsole();
+                if (!gui)
+                    gui = 1;
+            }
+            if (gui)
+                gui_thread = edfs_gui();
 #endif
 #ifdef EDFS_MULTITHREADED
             err = fuse_loop_mt(se);
 #else
             err = fuse_loop(se);
+#endif
+#ifdef _WIN32
+            if (gui) {
+                ui_app_quit();
+                thread_join(gui_thread);
+                thread_destroy(gui_thread);
+            }
 #endif
             edfs_edwork_done(edfs_context);
             edfs_destroy_context(edfs_context);

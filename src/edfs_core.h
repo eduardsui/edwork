@@ -151,7 +151,16 @@ void edfs_set_store_key(struct edfs *edfs_context, const unsigned char *key, int
 void edfs_set_partition_key(struct edfs *edfs_context, char *key_id);
 
 int edfs_chkey(struct edfs *edfs_context, const char *key_id);
+int edfs_rmkey(struct edfs *edfs_context, const char *key_id);
+int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *size, uint64_t *files, uint64_t *directories);
 int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size);
+
+void *edfs_get_key(struct edfs *edfs_context);
+void *edfs_next_key(void *key);
+void *edfs_get_primary_key(struct edfs *edfs_context);
+char *edfs_key_id(void *key, char *buffer);
+char *edfs_public_key(void *key, char *buffer);
+char *edfs_private_key(void *key, char *buffer);
 
 int edwork_readonly(struct edfs *edfs_context);
 
