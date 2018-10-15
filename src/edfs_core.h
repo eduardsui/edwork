@@ -152,7 +152,7 @@ void edfs_set_partition_key(struct edfs *edfs_context, char *key_id);
 
 int edfs_chkey(struct edfs *edfs_context, const char *key_id);
 int edfs_rmkey(struct edfs *edfs_context, const char *key_id);
-int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *size, uint64_t *files, uint64_t *directories);
+int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *size, uint64_t *files, uint64_t *directories, uint64_t *top_block, uint64_t *timestamp);
 int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size);
 
 void *edfs_get_key(struct edfs *edfs_context);

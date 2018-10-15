@@ -387,6 +387,8 @@ void edfs_gui_callback(void *window) {
     uint64_t size = 0;
     uint64_t files = 0;
     uint64_t directories = 0;
+    uint64_t index = 0;
+    uint64_t timestamp = 0;
     if (foo) {
         switch (foo[0]) {
             case '@':
@@ -410,10 +412,15 @@ void edfs_gui_callback(void *window) {
                     edfs_gui_load(window);
                 break;
             case '*':
-                edfs_storage_info(edfs_context, foo + 1, &size, &files, &directories);
+                edfs_storage_info(edfs_context, foo + 1, &size, &files, &directories, &index, &timestamp);
 
                 char buf[0x1000];
-                snprintf(buf, sizeof(buf), " %.3f GB in %" PRIu64 " files and %" PRIu64 " directories", (double)size / (1024 * 1024 * 1024), files, directories);
+                if ((index) && (timestamp)) {
+                    time_t timestamp_32bit = (time_t)(timestamp / 1000000ULL);
+                    struct tm *blocktimestamp = gmtime(&timestamp_32bit);
+                    snprintf(buf, sizeof(buf), " %.3f GB in %" PRIu64 " files and %" PRIu64 " directories, blockchain has %" PRIu64 " blocks, last block was created on %s UTC", (double)size / (1024 * 1024 * 1024), files, directories, index, asctime(blocktimestamp));
+                } else
+                    snprintf(buf, sizeof(buf), " %.3f GB in %" PRIu64 " files and %" PRIu64 " directories", (double)size / (1024 * 1024 * 1024), files, directories);
                 const char *arg[] = { foo + 1, buf, NULL };
                 ui_call(window, "filesystem_usage", arg);
                 break;

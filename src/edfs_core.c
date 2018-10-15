@@ -4028,7 +4028,7 @@ int edfs_rmkey(struct edfs *edfs_context, const char *key_id) {
     return -1;
 }
 
-int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *size, uint64_t *files, uint64_t *directories) {
+int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *size, uint64_t *files, uint64_t *directories, uint64_t *top_block, uint64_t *timestamp) {
     if ((!edfs_context) || (!key_id))
         return -1;
 
@@ -4061,7 +4061,16 @@ int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *s
             char fullpath[MAX_PATH_LEN];
             fullpath[0] = 0;
             snprintf(fullpath, MAX_PATH_LEN, "%s/%s", edfs_context->edfs_directory, key_id);
-            
+            if (top_block) {
+                *top_block = 0;
+                if (key->chain)
+                    *top_block = key->chain->index;
+            }
+            if (timestamp) {
+                *timestamp = 0;
+                if (key->chain)
+                    *timestamp = key->chain->timestamp;
+            }
             return recursive_dir_size(fullpath, size, files, directories);
         }
         prev_key = key;
