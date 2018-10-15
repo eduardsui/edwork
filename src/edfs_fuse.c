@@ -29,6 +29,10 @@
 #include "edfs_core.h"
 
 static struct edfs *edfs_context;
+#ifdef _WIN32
+static int server_pipe_is_valid = 1;
+static int reload_keys = 0;
+#endif
 
 static int edfs_fuse_getattr(const char *path, edfs_stat *stbuf) {
     uint64_t inode = edfs_pathtoinode(edfs_context, path, NULL, NULL);
@@ -429,12 +433,83 @@ void edfs_gui_callback(void *window) {
     }
 }
 
+void edfs_gui_notify(void *window) {
+    if (reload_keys) {
+        edfs_gui_load(window);
+        reload_keys = 0;
+    }
+}
+
 int edfs_gui_thread(void *userdata) {
     ui_app_init(edfs_gui_callback);
-    void *window = ui_window("edowork settings", edwork_settings_form);
+    void *window = ui_window("edwork settings", edwork_settings_form);
     edfs_gui_load(window);
-    ui_app_run();
+    ui_app_run_with_notify(edfs_gui_notify, window);
     ui_app_done();
+    return 0;
+}
+
+HANDLE edfs_create_named_pipe() {
+    HANDLE hpipe = CreateNamedPipeA("\\\\.\\pipe\\edwork", PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE |  PIPE_WAIT, PIPE_UNLIMITED_INSTANCES, 1024 * 16, 1024 * 16, 0, NULL);
+    if (hpipe == INVALID_HANDLE_VALUE) {
+        log_error("error creating named pipe");
+        return hpipe;
+    }
+
+    return hpipe;
+}
+
+int edfs_loop_named_pipe() {
+    HANDLE server_pipe = edfs_create_named_pipe();
+    if (server_pipe == INVALID_HANDLE_VALUE) {
+        server_pipe_is_valid = 0;
+        return 0;
+    }
+    if (ConnectNamedPipe(server_pipe, NULL)) {
+        char buffer[0x100];
+        DWORD bytes_read = 0;
+        if ((ReadFile(server_pipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL)) && (bytes_read > 0)) {
+            buffer[bytes_read] = 0;
+            int err;
+            if (bytes_read > 64)
+                err = edfs_use_key(edfs_context, buffer, NULL);
+            else
+                err = edfs_use_key(edfs_context, NULL, buffer);
+            if (err)
+                log_error("invalid key received via pipe");
+            else
+                reload_keys = 1;
+        }
+        CloseHandle(server_pipe); 
+        return 1;
+    }
+    CloseHandle(server_pipe); 
+    return 0;
+}
+
+int edfs_pipe_thread(void *userdata) {
+    while (server_pipe_is_valid)
+        edfs_loop_named_pipe();
+
+    return 0;
+}
+
+thread_ptr_t edfs_pipe() {
+    return thread_create(edfs_pipe_thread, (void *)edfs_context, "edwork pipe", 8192 * 1024);
+}
+
+int edfs_notify_edwork(char *uri) {
+    HANDLE hpipe = CreateFileA("\\\\.\\pipe\\edwork", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (hpipe == INVALID_HANDLE_VALUE) 
+        return 0;
+
+    DWORD dwMode = PIPE_READMODE_MESSAGE; 
+    SetNamedPipeHandleState(hpipe, &dwMode, NULL, NULL);
+    DWORD cbWritten;
+    WriteFile(hpipe, uri, strlen(uri), &cbWritten, NULL);
+    CloseHandle(hpipe);
+
+    return 1;
 }
 
 thread_ptr_t edfs_gui() {
@@ -512,6 +587,7 @@ int main(int argc, char *argv[]) {
 
     edfs_fuse_init(&edfs_fuse, working_directory, storage_key);
     int uri_parameters = 0;
+    int uri_sent = 0;
     for (i = 1; i < argc; i++) {
         char *arg = argv[i];
         if (arg) {
@@ -658,6 +734,9 @@ int main(int argc, char *argv[]) {
                         exit(-1);
                     }
                     uri += 7;
+#ifdef _WIN32
+                    uri_sent += edfs_notify_edwork(uri);
+#endif
                     int err;
                     if (strlen(argv[i]) > 64)
                         err = edfs_use_key(edfs_context, uri, NULL);
@@ -715,6 +794,10 @@ int main(int argc, char *argv[]) {
             }
         }
     }
+    if (uri_sent) {
+        log_warn("application already running, forwarded uri parameters");
+        exit(0);
+    }
     if (!mountpoint) {
         fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nTo list all options, run with -help option\n");
 #ifdef _WIN32
@@ -750,20 +833,32 @@ int main(int argc, char *argv[]) {
                 if (!gui)
                     gui = 1;
             }
-            if (gui)
-                gui_thread = edfs_gui();
+            HANDLE mutex = CreateMutexA(0, FALSE, "Local\\$edwork$");
+            if (GetLastError() == ERROR_ALREADY_EXISTS) {
+                log_error("edwork already running");
+                gui = 0;
+            } else {
+                if (gui)
+                    gui_thread = edfs_gui();
+                thread_ptr_t pipe_thread = edfs_pipe();
 #endif
 #ifdef EDFS_MULTITHREADED
-            err = fuse_loop_mt(se);
+                err = fuse_loop_mt(se);
 #else
-            err = fuse_loop(se);
+                err = fuse_loop(se);
 #endif
 #ifdef _WIN32
+                server_pipe_is_valid = 0;
+                thread_join(pipe_thread);
+                thread_destroy(pipe_thread);
+            }
             if (gui) {
-                ui_app_quit();
+                PostThreadMessage(GetThreadId(gui_thread), WM_QUIT, 0, 0);
                 thread_join(gui_thread);
                 thread_destroy(gui_thread);
             }
+            if (mutex)
+                CloseHandle(mutex);
 #endif
             edfs_edwork_done(edfs_context);
             edfs_destroy_context(edfs_context);

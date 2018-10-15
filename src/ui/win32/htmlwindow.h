@@ -2,8 +2,10 @@
 #define __HTMLWINDOW_H
 
 typedef void (*ui_trigger_event)(void *window);
+typedef void (*ui_idle_event)(void *userdata);
 
 int ui_app_init(ui_trigger_event event_handler);
+void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata);
 void ui_app_run();
 int ui_app_done();
 void ui_app_quit();

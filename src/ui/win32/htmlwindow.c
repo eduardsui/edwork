@@ -901,12 +901,18 @@ int ui_app_done() {
     OleUninitialize();
 }
 
-void ui_app_run() {
+void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
     MSG msg;
     while (GetMessage(&msg, 0, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
+        if (event_idle)
+            event_idle(userdata);
     }
+}
+
+void ui_app_run() {
+    ui_app_run_with_notify(NULL, NULL);
 }
 
 void ui_app_quit() {

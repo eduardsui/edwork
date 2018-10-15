@@ -761,6 +761,15 @@ int edfs_get_peer_list(struct edfs_peer_discovery_data *peers, unsigned char *bu
     return records;
 }
 
+void edwork_broadcast_discovery_key(struct edfs *edfs_context, struct edfs_key_data *key) {
+    unsigned char key_hash[32];
+    if (key) {
+        sha256(key->pubkey, key->pub_len, key_hash);
+        hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
+        notify_io(edfs_context, NULL, "disc", key_hash, 32, NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        edfs_context->disc_timestamp = time(NULL);
+    }
+}
 
 void edwork_broadcast_discovery(struct edfs *edfs_context) {
     unsigned char key_hash[32];
@@ -3853,6 +3862,9 @@ int edfs_create_key(struct edfs *edfs_context) {
     if ((edwork_load_key(edfs_context, b64buffer)) && (edfs_context->key_data)) {
         edfs_genesis_if_new(edfs_context, edfs_context->key_data);
         edfs_context->primary_key = edfs_context->key_data;
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+        edwork_broadcast_discovery_key(edfs_context, edfs_context->key_data);
+#endif
     }
 
     return 0;
@@ -3933,7 +3945,11 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
 
     json_value_free(root_value);
 
-    edwork_load_key(edfs_context, b64buffer);
+    if (edwork_load_key(edfs_context, b64buffer)) {
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+        edwork_broadcast_discovery_key(edfs_context, edfs_context->key_data);
+#endif
+    }
 
     if (!edfs_context->primary_key)
         edfs_context->primary_key = edfs_context->key_data;
@@ -3968,6 +3984,9 @@ int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
     while (key) {
         if (key->key_id_xxh64_be == use_key_id) {
             edfs_context->primary_key = key;
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+            edwork_broadcast_discovery_key(edfs_context, key);
+#endif
             return 0;
         }
         key = (struct edfs_key_data *)key->next_key;
