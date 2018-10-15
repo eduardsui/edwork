@@ -404,7 +404,7 @@ void edfs_gui_callback(void *window) {
             case '-':
                 if (ui_question("Warning", "Are you sure you want to delete this key?\nAccessing the data will not longer be possible.", 2)) {
                     if (edfs_rmkey(edfs_context, foo + 1))
-                        ui_message("Error", "Error deleting key", 3);
+                        ui_message("Error", "Error deleting key (key in use)", 3);
                     else
                         edfs_gui_load(window);
                 }

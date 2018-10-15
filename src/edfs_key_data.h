@@ -57,6 +57,8 @@ struct edfs_key_data {
 
     unsigned char read_only;
 
+    int opened_files;
+
     void *next_key;
 };
 

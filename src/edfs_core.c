@@ -2686,8 +2686,11 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
 }
 
 int edfs_releasedir(struct dirbuf *buf) {
-    if (buf)
+    if (buf) {
+        if (buf->key)
+            buf->key->opened_files --;
         free(buf);
+    }
     return 0;
 }
 
@@ -2835,6 +2838,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             (*fbuf)->file_size = size;
             (*fbuf)->check_hash = check_hash;
             (*fbuf)->key = key;
+            key->opened_files ++;
             (*fbuf)->flags = flags;
 
         }
@@ -2863,6 +2867,7 @@ int edfs_create(struct edfs *edfs_context, edfs_ino_t parent, const char *name, 
             memset(*buf, 0, sizeof(struct filewritebuf));
             (*buf)->ino = *inode;
             (*buf)->key = key;
+            key->opened_files ++;
             (*buf)->flags = O_WRONLY;
         }
     }
@@ -3405,6 +3410,8 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
         if (edfs_context->mutex_initialized)
             thread_mutex_unlock(&fbuf->key->ino_cache_lock);
 
+        if (fbuf->key)
+            fbuf->key->opened_files --;
         free(ino_cache);
         free(fbuf->p);
         free(fbuf->read_buffer);
@@ -3552,6 +3559,7 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
         memset(buf, 0, sizeof(struct dirbuf));
         buf->ino = ino;
         buf->key = key;
+        key->opened_files ++;
     }
     return buf;
 }
@@ -4023,6 +4031,10 @@ int edfs_rmkey(struct edfs *edfs_context, const char *key_id) {
         if (key->key_id_xxh64_be == use_key_id) {
             if (edfs_context->primary_key == key) {
                 log_error("cannot delete primary key");
+                return -1;
+            }
+            if (key->opened_files > 0) {
+                log_error("key is in use");
                 return -1;
             }
             avl_remove(&edfs_context->key_tree, (void *)(uintptr_t)key->key_id_xxh64_be);
