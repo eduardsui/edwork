@@ -472,14 +472,14 @@ void edfs_gui_callback(void *window) {
                 break;
             case 'q':
                 log_trace("edwork disconnect requested");
-                if (server_pipe_is_valid) {
+                if (server_pipe_is_valid)
                     server_pipe_is_valid = 0;
-                    edfs_notify_edwork("stop");
-                }
+
                 if (fuse_session) {
                     fuse_exit(fuse_session);
-                    // fuse_session = NULL;
+                    fuse_session = NULL;
                     ui_window_close(gui_window);
+                    gui_window = NULL;
                 }
                 break;
             case 'a':
@@ -512,9 +512,8 @@ int edfs_gui_thread(void *userdata) {
     ui_app_init(edfs_gui_callback);
     ui_app_tray_icon("Open edwork settings", edfs_tray_notify);
     if (!userdata) {
-        void *window = ui_window("edwork settings", edwork_settings_form);
-        gui_window = window;
-        edfs_gui_load(window);
+        gui_window = ui_window("edwork settings", edwork_settings_form);
+        edfs_gui_load(gui_window);
     }
     ui_app_run_with_notify(edfs_gui_notify, NULL);
     ui_app_done();
@@ -911,7 +910,7 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
             thread_ptr_t gui_thread;
             // on windows, if no parameters, detach console
-            if ((!foreground) || (argc == (uri_parameters + 1))) {
+            if ((!foreground) || (argc == (uri_parameters + 1)) || (gui == 2)) {
                 FreeConsole();
                 if (!gui)
                     gui = 1;
@@ -930,14 +929,12 @@ int main(int argc, char *argv[]) {
 #else
                 err = fuse_loop(se);
 #endif
-                fuse_session = NULL;
 #ifdef _WIN32
-                if (server_pipe_is_valid) {
+                if (server_pipe_is_valid)
                     server_pipe_is_valid = 0;
-                    edfs_notify_edwork("stop");
-                }
-                thread_join(pipe_thread);
-                thread_destroy(pipe_thread);
+                // sometimes hangs
+                // thread_join(pipe_thread);
+                // thread_destroy(pipe_thread);
             }
             if (gui) {
                 PostThreadMessage(GetThreadId(gui_thread), WM_QUIT, 0, 0);
@@ -947,6 +944,7 @@ int main(int argc, char *argv[]) {
             if (mutex)
                 CloseHandle(mutex);
 #endif
+            fuse_session = NULL;
             edfs_edwork_done(edfs_context);
             edfs_destroy_context(edfs_context);
             edfs_context = NULL;

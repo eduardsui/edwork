@@ -1087,7 +1087,7 @@ int ui_window_count() {
 
 void ui_window_close(void *wnd) {
     if (wnd)
-        DestroyWindow((HWND)wnd);
+        PostMessage((HWND)wnd, WM_CLOSE, 0, 0);
 }
 
 char *ui_call(void *wnd, const char *function, const char *arguments[]) {
