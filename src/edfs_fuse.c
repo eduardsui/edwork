@@ -450,6 +450,8 @@ int edfs_notify_edwork(char *uri) {
 
 void edfs_gui_callback(void *window) {
     char *foo = ui_call(window, "lastevent", NULL);
+    char *use;
+
     uint64_t size = 0;
     uint64_t files = 0;
     uint64_t directories = 0;
@@ -507,6 +509,17 @@ void edfs_gui_callback(void *window) {
                     edfs_register_startup(1);
                 else
                     edfs_register_startup(0);
+                break;
+            case '?':
+                use = ui_call(window, "getpeer", NULL);
+                if (use) {
+                    if (use[0]) {
+                        log_trace("manually adding peer %s", use);
+                        edfs_set_initial_friend(edfs_context, use);
+                    }
+                    edfs_gui_load(window);
+                    ui_free_string(use);
+                }
                 break;
         }
         ui_free_string(foo);

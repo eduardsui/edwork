@@ -6859,6 +6859,30 @@ void edfs_set_initial_friend(struct edfs *edfs_context, const char *peer) {
     if ((!edfs_context) || (!peer))
         return;
 
+    if (edfs_context->edwork) {
+        if ((peer) && (peer[0])) {
+            int add_port = EDWORK_PORT;
+            char *port_ptr = NULL;
+            if (peer[0] == '[') {
+                peer ++;
+                char *ipv6_port = strchr(peer, ']');
+                if (ipv6_port) {
+                    port_ptr = strchr(ipv6_port, ':');
+                    ipv6_port[0] = 0;
+                }
+            } else
+                port_ptr = strchr(peer, ':');
+            if (port_ptr) {
+                *port_ptr = 0;
+                port_ptr++;
+                add_port = atoi(port_ptr);
+                if (add_port <= 0)
+                    add_port = EDWORK_PORT;
+            }
+            if (peer[0])
+                edwork_add_node(edfs_context->edwork, peer, add_port, 0, 3, 0);
+        }
+    }
     int len = strlen(peer);
     if (len <= 0)
         return;
