@@ -33,6 +33,7 @@ static const char *edwork_settings_form =
     "                <h4>No available keys</h4>\n"
     "              </dl>\n"
     "              <a class=\"button button--filled button--xxxs\" href='javascript: window.edworkData = \"!\"; window.external.notify();'>new partition</a>"
+    "              <a class=\"button button--filled button--xxxs\" href='javascript: window.edworkData = \"q\"; window.external.notify();'>stop edwork service</a>"
     "            </div>\n"
     "          </div>\n"
     "        </form>\n"

@@ -7,11 +7,15 @@
 #include <crtdbg.h>
 
 #include "htmlwindow.h"
+#include "resource.h"
+
 
 static unsigned int WindowCount = 0;
 static const TCHAR *ClassName = "edwork Window";
 static const SAFEARRAYBOUND ArrayBound = {1, 0};
 static ui_trigger_event callback_event;
+static ui_tray_event event_tray_event;
+static NOTIFYICONDATA tray_icon; 
 
 HRESULT STDMETHODCALLTYPE Storage_QueryInterface(IStorage FAR* This, REFIID riid, LPVOID FAR* ppvObj);
 ULONG STDMETHODCALLTYPE Storage_AddRef(IStorage FAR* This);
@@ -651,7 +655,7 @@ HRESULT STDMETHODCALLTYPE Dispatch_Invoke(IDispatch *This, DISPID dispIdMember, 
     if ((browserObject) && (!browserObject->lpVtbl->QueryInterface(browserObject, &IID_IWebBrowser2, (void**)&webBrowser2))) {
         webBrowser2->lpVtbl->get_Document(webBrowser2, &disp);
         if (disp) {
-            if (!disp->lpVtbl->QueryInterface(disp, &IID_IHTMLDocument2, &document)) {
+            if (!disp->lpVtbl->QueryInterface(disp, &IID_IHTMLDocument2, (void **)&document)) {
                 IHTMLWindow2 *window = NULL;
                 document->lpVtbl->get_parentWindow(document, &window);
                 if (window) {
@@ -845,6 +849,32 @@ void WindowResize(HWND hwnd, int width, int height) {
     }
 }
 
+LRESULT CALLBACK MenuWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+   switch (uMsg) {
+        case WM_CREATE:
+            WindowCount ++;
+            return 0;
+
+        case WM_DESTROY:
+            WindowCount --;
+            if (!WindowCount)
+                PostQuitMessage(0);
+            return 1;
+
+        case WM_APP + 1:
+		    switch (lParam)  {
+		        case WM_LBUTTONUP:
+                case WM_RBUTTONUP:
+                  if (event_tray_event)
+                      event_tray_event(hwnd);
+		          break;
+
+		    }
+            return 1;
+   }
+   return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE:
@@ -901,6 +931,41 @@ int ui_app_done() {
     OleUninitialize();
 }
 
+void ui_app_tray_icon(const char *tooltip, ui_tray_event event_tray) {
+    int exists = tray_icon.uID;
+
+    if (!exists) {
+        WNDCLASS wc;
+        ZeroMemory(&wc, sizeof(WNDCLASS));
+	    wc.lpfnWndProc = MenuWindowProc;			
+	    wc.lpszClassName = "EdwordkTrayWindow";			
+
+	    RegisterClass(&wc);
+
+        tray_icon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        tray_icon.cbSize = sizeof(tray_icon);
+        tray_icon.uCallbackMessage = WM_APP + 1;
+        tray_icon.hWnd = CreateWindow("EdwordkTrayWindow", "EdwordkTrayWindow", 0, 0, 0, 0, 0, NULL, NULL, NULL, NULL);
+        tray_icon.hIcon = LoadIcon((HINSTANCE)GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON1)); 
+        tray_icon.uID = 1;
+        tray_icon.uFlags |= NIF_INFO;
+    }
+
+    if (tooltip)
+        strncpy(tray_icon.szTip, tooltip, sizeof(tray_icon.szTip));
+    else
+        tray_icon.szTip[0] = 0;
+
+    if (Shell_NotifyIcon(exists ? NIM_MODIFY : NIM_ADD, &tray_icon))
+        event_tray_event = event_tray;
+}
+
+void ui_app_tray_remove() {
+    int exists = tray_icon.uID;
+    if (exists)
+        Shell_NotifyIcon(NIM_DELETE, &tray_icon);
+}
+
 void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
     MSG msg;
     while (GetMessage(&msg, 0, 0, 0)) {
@@ -909,6 +974,7 @@ void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
         if (event_idle)
             event_idle(userdata);
     }
+    ui_app_tray_remove();
 }
 
 void ui_app_run() {
@@ -991,7 +1057,7 @@ void ui_js(void *wnd, const char *js) {
     if ((browserObject) && (!browserObject->lpVtbl->QueryInterface(browserObject, &IID_IWebBrowser2, (void**)&webBrowser2))) {
         webBrowser2->lpVtbl->get_Document(webBrowser2, &disp);
         if (disp) {
-            if (!disp->lpVtbl->QueryInterface(disp, &IID_IHTMLDocument2, &document)) {
+            if (!disp->lpVtbl->QueryInterface(disp, &IID_IHTMLDocument2, (void **)&document)) {
                 IHTMLWindow2 *window = NULL;
                 document->lpVtbl->get_parentWindow(document, &window);
                 if (window) {
@@ -1015,6 +1081,15 @@ void ui_js(void *wnd, const char *js) {
     }
 }
 
+int ui_window_count() {
+    return WindowCount;
+}
+
+void ui_window_close(void *wnd) {
+    if (wnd)
+        DestroyWindow((HWND)wnd);
+}
+
 char *ui_call(void *wnd, const char *function, const char *arguments[]) {
     IWebBrowser2    *webBrowser2;
     IOleObject        *browserObject;
@@ -1029,7 +1104,7 @@ char *ui_call(void *wnd, const char *function, const char *arguments[]) {
     if ((browserObject) && (!browserObject->lpVtbl->QueryInterface(browserObject, &IID_IWebBrowser2, (void**)&webBrowser2))) {
         webBrowser2->lpVtbl->get_Document(webBrowser2, &disp);
         if (disp) {
-            if (!disp->lpVtbl->QueryInterface(disp, &IID_IHTMLDocument2, &document)) {
+            if (!disp->lpVtbl->QueryInterface(disp, &IID_IHTMLDocument2, (void **)&document)) {
                 IDispatch *script = 0;
                 document->lpVtbl->get_Script(document, &script);
                 if (script) {
@@ -1109,8 +1184,8 @@ void *ui_window(const char *title, const char *body) {
     wc.hInstance = (HINSTANCE)GetModuleHandle(NULL);
     wc.lpfnWndProc = WindowProc;
     wc.lpszClassName = &ClassName[0];
-    wc.hIcon = LoadIcon(NULL, MAKEINTRESOURCE(32518));
-    wc.hIconSm = LoadIcon(NULL, MAKEINTRESOURCE(32518));
+    wc.hIcon = LoadIcon(wc.hInstance, MAKEINTRESOURCE(IDI_ICON1));
+    wc.hIconSm = LoadIcon(wc.hInstance, MAKEINTRESOURCE(IDI_ICON1));
     RegisterClassEx(&wc);
 
     if ((hwnd = CreateWindowEx(0, ClassName, title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, HWND_DESKTOP, NULL, GetModuleHandle(NULL), 0))) {

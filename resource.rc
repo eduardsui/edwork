@@ -1,0 +1,29 @@
+#include "src/ui/win32/resource.h"
+
+1 VERSIONINFO
+ FILEVERSION 1,0,0,1
+ PRODUCTVERSION 1,0,0,1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "Comments", "This program is in the public domain"
+            VALUE "CompanyName", "Eduard Suica"
+            VALUE "FileDescription", "edwork client"
+            VALUE "FileVersion", "1, 0, 0, 1"
+            VALUE "InternalName", "edwork"
+            VALUE "LegalCopyright", "put in the public domain in 2018 by Eduard Suica"
+            VALUE "OriginalFilename", "edwork_mount.exe"
+            VALUE "ProductName", "edwork client"
+            VALUE "ProductVersion", "1, 0, 0, 1"
+            VALUE "SpecialBuild", ""
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+IDI_ICON1               ICON                    "edwork.ico"

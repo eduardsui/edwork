@@ -32,7 +32,9 @@ static struct edfs *edfs_context;
 #ifdef _WIN32
 static int server_pipe_is_valid = 1;
 static int reload_keys = 0;
+static void *gui_window = 0;
 #endif
+static struct fuse *fuse_session = NULL;
 
 static int edfs_fuse_getattr(const char *path, edfs_stat *stbuf) {
     uint64_t inode = edfs_pathtoinode(edfs_context, path, NULL, NULL);
@@ -428,23 +430,41 @@ void edfs_gui_callback(void *window) {
                 const char *arg[] = { foo + 1, buf, NULL };
                 ui_call(window, "filesystem_usage", arg);
                 break;
+            case 'q':
+                log_trace("edwork disconnect requested");
+                server_pipe_is_valid = 0;
+                if (fuse_session) {
+                    ui_window_close(gui_window);
+                    fuse_exit(fuse_get_session(fuse_session));
+                    fuse_session = NULL;
+                }
+                break;
         }
         ui_free_string(foo);
     }
 }
 
-void edfs_gui_notify(void *window) {
+void edfs_gui_notify(void *userdata) {
     if (reload_keys) {
-        edfs_gui_load(window);
+        edfs_gui_load(userdata ? userdata : gui_window);
         reload_keys = 0;
+    }
+}
+
+void edfs_try_notify(void *menuwindow) {
+    if (ui_window_count() <= 1) {
+        gui_window = ui_window("edwork settings", edwork_settings_form);
+        edfs_gui_load(gui_window);
     }
 }
 
 int edfs_gui_thread(void *userdata) {
     ui_app_init(edfs_gui_callback);
     void *window = ui_window("edwork settings", edwork_settings_form);
+    gui_window = window;
+    ui_app_tray_icon("Open edwork settings", edfs_try_notify);
     edfs_gui_load(window);
-    ui_app_run_with_notify(edfs_gui_notify, window);
+    ui_app_run_with_notify(edfs_gui_notify, NULL);
     ui_app_done();
     return 0;
 }
@@ -455,7 +475,6 @@ HANDLE edfs_create_named_pipe() {
         log_error("error creating named pipe");
         return hpipe;
     }
-
     return hpipe;
 }
 
@@ -470,15 +489,26 @@ int edfs_loop_named_pipe() {
         DWORD bytes_read = 0;
         if ((ReadFile(server_pipe, buffer, sizeof(buffer) - 1, &bytes_read, NULL)) && (bytes_read > 0)) {
             buffer[bytes_read] = 0;
-            int err;
-            if (bytes_read > 64)
-                err = edfs_use_key(edfs_context, buffer, NULL);
-            else
-                err = edfs_use_key(edfs_context, NULL, buffer);
-            if (err)
-                log_error("invalid key received via pipe");
-            else
-                reload_keys = 1;
+            if (bytes_read < 10) {
+                log_debug("%s command received", buffer);
+                if (!strcmp(buffer, "stop")) {
+                    server_pipe_is_valid = 0;
+                    if (fuse_session) {
+                        fuse_exit(fuse_get_session(fuse_session));
+                        fuse_session = NULL;
+                    }
+                }
+            } else {
+                int err;
+                if (bytes_read > 64)
+                    err = edfs_use_key(edfs_context, buffer, NULL);
+                else
+                    err = edfs_use_key(edfs_context, NULL, buffer);
+                if (err)
+                    log_error("invalid key received via pipe");
+                else
+                    reload_keys = 1;
+            }
         }
         CloseHandle(server_pipe); 
         return 1;
@@ -753,6 +783,15 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "gui")) {
                     gui = 1;
                 } else
+                if (!strcmp(arg, "stop")) {
+                    if (!edfs_notify_edwork(arg)) {
+                        fprintf(stderr, "edfs: no other instance found.\n");
+                        exit(-1);
+                    } else {
+                        fprintf(stdout, "edfs: sent stop request to service\n");
+                        exit(0);
+                    }
+                } else
 #endif
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
@@ -775,6 +814,7 @@ int main(int argc, char *argv[]) {
                         "    -uri               edfs uri (key)\n"
 #ifdef _WIN32
                         "    -gui               open GUI\n"
+                        "    -stop              stop other instances of the application\n"
 #endif
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
@@ -824,6 +864,7 @@ int main(int argc, char *argv[]) {
         edfs_edwork_init(edfs_context, port);
         se = fuse_new(ch, &args, &edfs_fuse, sizeof(edfs_fuse), NULL);
         if (se != NULL) {
+            fuse_session = se;
             fuse_set_signal_handlers(fuse_get_session(se));
 #ifdef _WIN32
             thread_ptr_t gui_thread;
@@ -847,6 +888,7 @@ int main(int argc, char *argv[]) {
 #else
                 err = fuse_loop(se);
 #endif
+                fuse_session = NULL;
 #ifdef _WIN32
                 server_pipe_is_valid = 0;
                 thread_join(pipe_thread);
