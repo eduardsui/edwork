@@ -336,6 +336,12 @@ unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, st
 #ifdef SCTP_UDP_ENCAPSULATION
     struct sctp_udpencaps encaps;
 	memset(&encaps, 0, sizeof(struct sctp_udpencaps));
+    int addrs_is_local = 0;
+    if (!addrs) {
+        if ((SCTP_getpaddrs(sock, encaps.sue_assoc_id, &addrs) <= 0) || (!addrs))
+            return 0;
+        addrs_is_local = 1;
+    }
     socklen_t len = sizeof(struct sctp_udpencaps);
     if (rcvinfo)
         encaps.sue_assoc_id = rcvinfo->rcv_assoc_id;
@@ -343,12 +349,6 @@ unsigned short edword_sctp_get_remote_encapsulation_port(struct socket *sock, st
         encaps.sue_assoc_id = SCTP_getassocid(sock, addrs);
 
     struct sockaddr addrs2;
-    int addrs_is_local = 0;
-    if (!addrs) {
-        if ((SCTP_getpaddrs(sock, encaps.sue_assoc_id, &addrs) <= 0) || (!addrs))
-            return 0;
-        addrs_is_local = 1;
-    }
     memcpy(&encaps.sue_address, addrs, sizeof(struct sockaddr));
     if (SCTP_getsockopt(sock, IPPROTO_SCTP, SCTP_REMOTE_UDP_ENCAPS_PORT, &encaps, &len)) {
         log_error("error in SCTP_getsockopt %i", errno);
@@ -368,7 +368,7 @@ static void edwork_sctp_update_socket(struct edwork_data *edwork, struct socket 
 
 #if defined(SCTP_UDP_ENCAPSULATION) && defined(WITH_USRSCTP)
     unsigned short port = edword_sctp_get_remote_encapsulation_port(sock, rcvinfo, addrs);
-    if (port) {
+    if ((port) && (addrs)) {
         thread_mutex_lock(&edwork->clients_lock);
         uintptr_t data_index = (uintptr_t)avl_search(&edwork->tree, (void *)addrs);
         if (data_index > 1) {
@@ -541,22 +541,22 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                     edwork->clients[i].is_sctp = 0;
                     edwork->clients[i].sctp_timestamp = 0;
                     edwork->clients[i].is_listen_socket = 0;
-                    if (reset == 2) {
-                        if (addrs->sa_family == AF_INET6)
-                            edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in6), edwork->clients[i].encapsulation_port);
-                        else
-                        if (addrs->sa_family == AF_INET)
-                            edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in), edwork->clients[i].encapsulation_port);
-                        if (edwork->clients[i].socket) {
-                            edwork->clients[i].sctp_reconnect_timestamp = time(NULL);
-                            edwork->clients[i].last_seen = time(NULL);
-                        } else
-                            edwork->clients[i].sctp_reconnect_timestamp = 0;
-                    } else {
-                        if (edwork->clients[i].sctp_timestamp == edwork->sctp_timestamp)
-                            edwork->sctp_timestamp = 0;
-                    }
                     if (addrs) {
+                        if (reset == 2) {
+                            if (addrs->sa_family == AF_INET6)
+                                edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in6), edwork->clients[i].encapsulation_port);
+                            else
+                            if (addrs->sa_family == AF_INET)
+                                edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in), edwork->clients[i].encapsulation_port);
+                            if (edwork->clients[i].socket) {
+                                edwork->clients[i].sctp_reconnect_timestamp = time(NULL);
+                                edwork->clients[i].last_seen = time(NULL);
+                            } else
+                                edwork->clients[i].sctp_reconnect_timestamp = 0;
+                        } else {
+                            if (edwork->clients[i].sctp_timestamp == edwork->sctp_timestamp)
+                                edwork->sctp_timestamp = 0;
+                        }
                         SCTP_freepaddrs(addrs);
                         addrs = NULL;
                     }
@@ -570,7 +570,9 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                 log_trace("SCTP connection reset %s", edwork_addr_ipv4(addrs));
 
             thread_mutex_lock(&edwork->clients_lock);
-            uintptr_t data_index = (uintptr_t)avl_search(&edwork->tree, (void *)addrs);
+            uintptr_t data_index = 0;
+            if (addrs)
+                data_index = (uintptr_t)avl_search(&edwork->tree, (void *)addrs);
             if (data_index > 1) {
                 edwork->clients[data_index - 1].is_sctp = 0;
                 edwork->clients[data_index - 1].sctp_timestamp = 0;
@@ -597,7 +599,7 @@ static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, v
     if (edwork->callback) {
         struct sockaddr *addrs = NULL;
         int n = SCTP_getpaddrs(sock, rcvinfo.rcv_assoc_id, &addrs);
-        if (n <= 0) {
+        if ((n <= 0) || (!addrs)) {
             log_error("error in sctp_getpaddrs (%i)", errno);
         } else {
             log_trace("SCTP dispatch");
