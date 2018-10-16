@@ -32,6 +32,7 @@ static struct edfs *edfs_context;
 #ifdef _WIN32
 static int server_pipe_is_valid = 1;
 static int reload_keys = 0;
+static int reopen_window = 0;
 static void *gui_window = 0;
 #endif
 static struct fuse *fuse_session = NULL;
@@ -332,7 +333,6 @@ int edfs_register_uri() {
 int edfs_register_startup(int autostartup) {
     HKEY key;
     char edfs_path[MAX_PATH];
-    static const char protocol_description[] = "edwork protocol";
     
     if (!GetModuleFileNameA(NULL, edfs_path, MAX_PATH - 10)) {
         log_warn("error in getting module name");
@@ -350,6 +350,23 @@ int edfs_register_startup(int autostartup) {
 
     if (autostartup)
         RegSetValueExA(key, TEXT("edwork"), 0, REG_SZ, (LPBYTE)edfs_path, strlen(edfs_path) + 1);
+
+    RegCloseKey(key);
+    return 0;
+}
+
+int edfs_auto_startup() {
+    HKEY key;
+    if (RegOpenKeyA(HKEY_CURRENT_USER, TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Run"), &key) != ERROR_SUCCESS) {
+        log_warn("error reading autorun");
+        return 0;
+    }
+
+    DWORD datalen;
+    if (RegQueryValueExA(key, TEXT("edwork"), 0, NULL, NULL, &datalen) == ERROR_SUCCESS) {
+        RegCloseKey(key);
+        return datalen;
+    }
 
     RegCloseKey(key);
     return 0;
@@ -412,6 +429,9 @@ void edfs_gui_load(void *window) {
             key = edfs_next_key(key);
         }
     }
+    const char *arguments[] = {"true", NULL};
+    if (edfs_auto_startup())
+        ui_call(window, "set_autorun", arguments); 
 }
 
 int edfs_notify_edwork(char *uri) {
@@ -493,14 +513,6 @@ void edfs_gui_callback(void *window) {
     }
 }
 
-void edfs_gui_notify(void *userdata) {
-    if (reload_keys) {
-        if (gui_window)
-            edfs_gui_load(gui_window);
-        reload_keys = 0;
-    }
-}
-
 void edfs_tray_notify(void *menuwindow) {
     if (ui_window_count() <= 1) {
         gui_window = ui_window("edwork settings", edwork_settings_form);
@@ -508,9 +520,25 @@ void edfs_tray_notify(void *menuwindow) {
     }
 }
 
+void edfs_gui_notify(void *userdata) {
+    if (reload_keys) {
+        if (gui_window)
+            edfs_gui_load(gui_window);
+        ui_app_tray_icon("Open edwork settings", "New partition", "A new partition was added.", edfs_tray_notify);
+        reload_keys = 0;
+    }
+    if (reopen_window) {
+        if (ui_window_count() <= 1) {
+            gui_window = ui_window("edwork settings", edwork_settings_form);
+            edfs_gui_load(gui_window);
+        }
+        reopen_window = 0;
+    }
+}
+
 int edfs_gui_thread(void *userdata) {
     ui_app_init(edfs_gui_callback);
-    ui_app_tray_icon("Open edwork settings", edfs_tray_notify);
+    ui_app_tray_icon("Open edwork settings", NULL, NULL, edfs_tray_notify);
     if (!userdata) {
         gui_window = ui_window("edwork settings", edwork_settings_form);
         edfs_gui_load(gui_window);
@@ -548,6 +576,9 @@ int edfs_loop_named_pipe() {
                         fuse_exit(fuse_session);
                         fuse_session = NULL;
                     }
+                } else
+                if (!strcmp(buffer, "open")) {
+                    reopen_window = 1;
                 }
             } else {
                 int err;
@@ -581,6 +612,30 @@ thread_ptr_t edfs_pipe() {
 
 thread_ptr_t edfs_gui(int gui_mode) {
     return thread_create(edfs_gui_thread, (void *)(intptr_t)(gui_mode == 2), "edwork gui", 8192 * 1024);
+}
+
+
+void edfs_emulate_console() {
+    AllocConsole();
+
+    // Get STDOUT handle
+    HANDLE ConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    int SystemOutput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *COutputHandle = _fdopen(SystemOutput, "w");
+
+    // Get STDERR handle
+    HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
+    int SystemError = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *CErrorHandle = _fdopen(SystemError, "w");
+
+    // Get STDIN handle
+    HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
+    int SystemInput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *CInputHandle = _fdopen(SystemInput, "r");
+
+    freopen_s(&CInputHandle, "CONIN$", "r", stdin);
+    freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
+    freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
 }
 #endif
 
@@ -911,13 +966,18 @@ int main(int argc, char *argv[]) {
             thread_ptr_t gui_thread;
             // on windows, if no parameters, detach console
             if ((!foreground) || (argc == (uri_parameters + 1)) || (gui == 2)) {
-                FreeConsole();
+                // FreeConsole();
                 if (!gui)
                     gui = 1;
+            } else {
+#ifdef _WIN32
+                edfs_emulate_console();
+#endif
             }
             HANDLE mutex = CreateMutexA(0, FALSE, "Local\\$edwork$");
             if (GetLastError() == ERROR_ALREADY_EXISTS) {
                 log_error("edwork already running");
+                edfs_notify_edwork("open");
                 gui = 0;
             } else {
                 if (gui)
@@ -968,3 +1028,9 @@ int main(int argc, char *argv[]) {
 
     return err ? 1 : 0;
 }
+
+#ifdef _WIN32
+int __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, char *pCmdLine, int nShowCmd) {
+    return main(__argc, __argv);
+}
+#endif

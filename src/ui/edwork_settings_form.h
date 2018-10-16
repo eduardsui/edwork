@@ -88,6 +88,13 @@ static const char *edwork_settings_form =
     "          window.edworkData = \"a0\";\n"
     "      window.external.notify();\n"
     "    }\n"
+    "    function set_autorun(checked) {\n"
+    "      if ((checked) && (checked.length))\n"
+    "        document.getElementById(\"autorun\").checked = true;\n"
+    "      else\n"
+    "        document.getElementById(\"autorun\").checked = false;\n"
+    "      window.external.notify();\n"
+    "    }\n"
     "  </script>\n"
     "</html>";
 

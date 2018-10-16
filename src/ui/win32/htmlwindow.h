@@ -6,7 +6,7 @@ typedef void (*ui_idle_event)(void *userdata);
 typedef void (*ui_tray_event)(void *window);
 
 int ui_app_init(ui_trigger_event event_handler);
-void ui_app_tray_icon(const char *tooltip, ui_tray_event event_tray);
+void ui_app_tray_icon(const char *tooltip, char *notification_title, char *notification_text, ui_tray_event event_tray);
 void ui_app_tray_remove();
 void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata);
 void ui_app_run();

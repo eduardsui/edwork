@@ -931,7 +931,7 @@ int ui_app_done() {
     OleUninitialize();
 }
 
-void ui_app_tray_icon(const char *tooltip, ui_tray_event event_tray) {
+void ui_app_tray_icon(const char *tooltip, char *notification_title, char *notification_text, ui_tray_event event_tray) {
     int exists = tray_icon.uID;
 
     if (!exists) {
@@ -951,6 +951,17 @@ void ui_app_tray_icon(const char *tooltip, ui_tray_event event_tray) {
         tray_icon.uFlags |= NIF_INFO;
     }
 
+    if ((notification_title) || (notification_text)) {
+        tray_icon.dwInfoFlags = NIIF_INFO;
+        tray_icon.uTimeout    = 3000;
+
+        if (notification_title)
+            strncpy(tray_icon.szInfoTitle, notification_title, 64);
+
+        if (notification_text)
+            strncpy(tray_icon.szInfo, notification_text, 256);
+    }
+
     if (tooltip)
         strncpy(tray_icon.szTip, tooltip, sizeof(tray_icon.szTip));
     else
@@ -966,14 +977,20 @@ void ui_app_tray_remove() {
         Shell_NotifyIcon(NIM_DELETE, &tray_icon);
 }
 
+void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT timerId, DWORD dwTime) {
+    // nothing
+}
+
 void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
     MSG msg;
+    SetTimer(NULL, 0, 1000, (TIMERPROC)TimerProc);
     while (GetMessage(&msg, 0, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
         if (event_idle)
             event_idle(userdata);
     }
+    KillTimer(NULL, 0);
     ui_app_tray_remove();
 }
 
