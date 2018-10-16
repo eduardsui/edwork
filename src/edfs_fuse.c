@@ -328,6 +328,32 @@ int edfs_register_uri() {
     }
     return 1;
 }
+
+int edfs_register_startup(int autostartup) {
+    HKEY key;
+    char edfs_path[MAX_PATH];
+    static const char protocol_description[] = "edwork protocol";
+    
+    if (!GetModuleFileNameA(NULL, edfs_path, MAX_PATH - 10)) {
+        log_warn("error in getting module name");
+        return -1;
+    }
+
+    strcat(edfs_path, " -autorun");
+    // re-create key (program moved ?)
+    if (RegOpenKeyA(HKEY_CURRENT_USER, TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Run"), &key) != ERROR_SUCCESS) {
+        log_warn("error setting autorun");
+        return -1;
+    }
+
+    RegDeleteValueA (key, TEXT("edwork"));
+
+    if (autostartup)
+        RegSetValueExA(key, TEXT("edwork"), 0, REG_SZ, (LPBYTE)edfs_path, strlen(edfs_path) + 1);
+
+    RegCloseKey(key);
+    return 0;
+}
 #endif
 
 void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_directory, const char *storage_key) {
@@ -388,6 +414,20 @@ void edfs_gui_load(void *window) {
     }
 }
 
+int edfs_notify_edwork(char *uri) {
+    HANDLE hpipe = CreateFileA("\\\\.\\pipe\\edwork", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (hpipe == INVALID_HANDLE_VALUE) 
+        return 0;
+
+    DWORD dwMode = PIPE_READMODE_MESSAGE; 
+    SetNamedPipeHandleState(hpipe, &dwMode, NULL, NULL);
+    DWORD cbWritten;
+    WriteFile(hpipe, uri, strlen(uri), &cbWritten, NULL);
+    CloseHandle(hpipe);
+
+    return 1;
+}
+
 void edfs_gui_callback(void *window) {
     char *foo = ui_call(window, "lastevent", NULL);
     uint64_t size = 0;
@@ -432,12 +472,21 @@ void edfs_gui_callback(void *window) {
                 break;
             case 'q':
                 log_trace("edwork disconnect requested");
-                server_pipe_is_valid = 0;
-                if (fuse_session) {
-                    ui_window_close(gui_window);
-                    fuse_exit(fuse_get_session(fuse_session));
-                    fuse_session = NULL;
+                if (server_pipe_is_valid) {
+                    server_pipe_is_valid = 0;
+                    edfs_notify_edwork("stop");
                 }
+                if (fuse_session) {
+                    fuse_exit(fuse_session);
+                    // fuse_session = NULL;
+                    ui_window_close(gui_window);
+                }
+                break;
+            case 'a':
+                if (foo[1] == '1')
+                    edfs_register_startup(1);
+                else
+                    edfs_register_startup(0);
                 break;
         }
         ui_free_string(foo);
@@ -446,12 +495,13 @@ void edfs_gui_callback(void *window) {
 
 void edfs_gui_notify(void *userdata) {
     if (reload_keys) {
-        edfs_gui_load(userdata ? userdata : gui_window);
+        if (gui_window)
+            edfs_gui_load(gui_window);
         reload_keys = 0;
     }
 }
 
-void edfs_try_notify(void *menuwindow) {
+void edfs_tray_notify(void *menuwindow) {
     if (ui_window_count() <= 1) {
         gui_window = ui_window("edwork settings", edwork_settings_form);
         edfs_gui_load(gui_window);
@@ -460,10 +510,12 @@ void edfs_try_notify(void *menuwindow) {
 
 int edfs_gui_thread(void *userdata) {
     ui_app_init(edfs_gui_callback);
-    void *window = ui_window("edwork settings", edwork_settings_form);
-    gui_window = window;
-    ui_app_tray_icon("Open edwork settings", edfs_try_notify);
-    edfs_gui_load(window);
+    ui_app_tray_icon("Open edwork settings", edfs_tray_notify);
+    if (!userdata) {
+        void *window = ui_window("edwork settings", edwork_settings_form);
+        gui_window = window;
+        edfs_gui_load(window);
+    }
     ui_app_run_with_notify(edfs_gui_notify, NULL);
     ui_app_done();
     return 0;
@@ -494,7 +546,7 @@ int edfs_loop_named_pipe() {
                 if (!strcmp(buffer, "stop")) {
                     server_pipe_is_valid = 0;
                     if (fuse_session) {
-                        fuse_exit(fuse_get_session(fuse_session));
+                        fuse_exit(fuse_session);
                         fuse_session = NULL;
                     }
                 }
@@ -528,22 +580,8 @@ thread_ptr_t edfs_pipe() {
     return thread_create(edfs_pipe_thread, (void *)edfs_context, "edwork pipe", 8192 * 1024);
 }
 
-int edfs_notify_edwork(char *uri) {
-    HANDLE hpipe = CreateFileA("\\\\.\\pipe\\edwork", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-    if (hpipe == INVALID_HANDLE_VALUE) 
-        return 0;
-
-    DWORD dwMode = PIPE_READMODE_MESSAGE; 
-    SetNamedPipeHandleState(hpipe, &dwMode, NULL, NULL);
-    DWORD cbWritten;
-    WriteFile(hpipe, uri, strlen(uri), &cbWritten, NULL);
-    CloseHandle(hpipe);
-
-    return 1;
-}
-
-thread_ptr_t edfs_gui() {
-    return thread_create(edfs_gui_thread, (void *)edfs_context, "edwork gui", 8192 * 1024);
+thread_ptr_t edfs_gui(int gui_mode) {
+    return thread_create(edfs_gui_thread, (void *)(intptr_t)(gui_mode == 2), "edwork gui", 8192 * 1024);
 }
 #endif
 
@@ -783,6 +821,9 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "gui")) {
                     gui = 1;
                 } else
+                if (!strcmp(arg, "autorun")) {
+                    gui = 2;
+                } else
                 if (!strcmp(arg, "stop")) {
                     if (!edfs_notify_edwork(arg)) {
                         fprintf(stderr, "edfs: no other instance found.\n");
@@ -814,6 +855,7 @@ int main(int argc, char *argv[]) {
                         "    -uri               edfs uri (key)\n"
 #ifdef _WIN32
                         "    -gui               open GUI\n"
+                        "    -autorun           open in autostart mode\n"
                         "    -stop              stop other instances of the application\n"
 #endif
 #ifdef WITH_SCTP
@@ -880,7 +922,7 @@ int main(int argc, char *argv[]) {
                 gui = 0;
             } else {
                 if (gui)
-                    gui_thread = edfs_gui();
+                    gui_thread = edfs_gui(gui);
                 thread_ptr_t pipe_thread = edfs_pipe();
 #endif
 #ifdef EDFS_MULTITHREADED
@@ -890,7 +932,10 @@ int main(int argc, char *argv[]) {
 #endif
                 fuse_session = NULL;
 #ifdef _WIN32
-                server_pipe_is_valid = 0;
+                if (server_pipe_is_valid) {
+                    server_pipe_is_valid = 0;
+                    edfs_notify_edwork("stop");
+                }
                 thread_join(pipe_thread);
                 thread_destroy(pipe_thread);
             }
