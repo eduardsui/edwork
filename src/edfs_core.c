@@ -4003,7 +4003,8 @@ int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
 }
 
 int edfs_rmkey(struct edfs *edfs_context, const char *key_id) {
-    if ((!edfs_context) || (!key_id))
+    // do not remove key while block sync is performed
+    if ((!edfs_context) || (!key_id) || (edfs_context->events))
         return -1;
 
     uint64_t use_key_id = 0;

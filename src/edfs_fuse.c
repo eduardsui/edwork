@@ -470,14 +470,14 @@ void edfs_gui_callback(void *window) {
                     if (edfs_rmkey(edfs_context, foo + 1))
                         ui_message("Error", "Error deleting key (key in use)", 3);
                     else
-                        edfs_gui_load(window);
+                        reload_keys = 2;
                 }
                 break;
             case '!':
                 if (edfs_create_key(edfs_context))
                     ui_message("Error", "Error creating new key", 3);
                 else
-                    edfs_gui_load(window);
+                    reload_keys = 2;
                 break;
             case '*':
                 edfs_storage_info(edfs_context, foo + 1, &size, &files, &directories, &index, &timestamp);
@@ -517,7 +517,6 @@ void edfs_gui_callback(void *window) {
                         log_trace("manually adding peer %s", use);
                         edfs_set_initial_friend(edfs_context, use);
                     }
-                    edfs_gui_load(window);
                     ui_free_string(use);
                 }
                 break;
@@ -537,7 +536,8 @@ void edfs_gui_notify(void *userdata) {
     if (reload_keys) {
         if (gui_window)
             edfs_gui_load(gui_window);
-        ui_app_tray_icon("Open edwork settings", "New partition", "A new partition was added.", edfs_tray_notify);
+        if (reload_keys != 2)
+            ui_app_tray_icon("Open edwork settings", "New partition", "A new partition was added.", edfs_tray_notify);
         reload_keys = 0;
     }
     if (reopen_window) {
