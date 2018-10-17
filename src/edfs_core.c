@@ -2293,25 +2293,27 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
     int is_sctp = 0;
 #endif
     struct sockaddr_in addrbuffer;
-    if (use_cached_addr) {
-        if (edfs_context->mutex_initialized)
-            thread_mutex_lock(&key->ino_cache_lock);
-        struct edfs_ino_cache *avl_cache = (struct edfs_ino_cache *)avl_search(&key->ino_cache, (void *)(uintptr_t)ino);
-        // at least 2 nodes
-        if ((avl_cache) && (avl_cache->len >= 1)) {
+    if (edfs_context->mutex_initialized)
+        thread_mutex_lock(&key->ino_cache_lock);
+    struct edfs_ino_cache *avl_cache = (struct edfs_ino_cache *)avl_search(&key->ino_cache, (void *)(uintptr_t)ino);
+    // at least 2 nodes
+    if ((avl_cache) && (avl_cache->len >= 1)) {
+        if (use_cached_addr) {
             if ((avl_cache->len >= 2) || (edwork_random() % 20 != 0)) {
                 memcpy(&addrbuffer, &avl_cache->clientaddr[edwork_random() % avl_cache->len], avl_cache->clientaddr_size);
                 use_clientaddr = &addrbuffer;
                 clientaddr_size = avl_cache->clientaddr_size;
-#ifdef WITH_SCTP
+    #ifdef WITH_SCTP
                 if (!edfs_context->force_sctp)
                     is_sctp = edwork_is_sctp(edfs_context->edwork, use_clientaddr);
-#endif
+    #endif
             }
-        }
-        if (edfs_context->mutex_initialized)
-            thread_mutex_unlock(&key->ino_cache_lock);
+        } else
+            // invalidate all cache
+            avl_cache->len = 0;
     }
+    if (edfs_context->mutex_initialized)
+        thread_mutex_unlock(&key->ino_cache_lock);
 
     notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
 #ifdef WITH_SCTP
