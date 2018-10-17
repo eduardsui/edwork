@@ -122,7 +122,7 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
         fprintf(stderr, "%s.%03d %s%-5s\x1b[0m \x1b[90m%s:%d:\x1b[0m ", buf, (int)(now % 1000), level_colors[level], level_names[level], file, line);
     else
 #endif
-    fprintf(stderr, "%s %-5s %s:%d: ", buf, level_names[level], file, line);
+    fprintf(stderr, "%s.%03d %-5s %s:%d: ", buf, (int)(now % 1000), level_names[level], file, line);
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);
@@ -135,7 +135,7 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
     va_list args;
     char buf[32];
     buf[strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", lt)] = '\0';
-    fprintf(L.fp, "%s %-5s %s:%d: ", buf, level_names[level], file, line);
+    fprintf(L.fp, "%s.%03d %-5s %s:%d: ", buf, (int)(now % 1000), level_names[level], file, line);
     va_start(args, fmt);
     vfprintf(L.fp, fmt, args);
     va_end(args);
