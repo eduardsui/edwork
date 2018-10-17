@@ -2554,11 +2554,9 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 }
             }
 #endif
-            if (!is_sctp) {
-                uint64_t start = microseconds();
-                while ((!chunk_exists(path, chunk)) && (microseconds() - start < wait_count))
-                    usleep(1000);
-            }
+            uint64_t start = microseconds();
+            while ((!chunk_exists(path, chunk)) && (microseconds() - start < wait_count))
+                usleep(1000);
         } else {
 #ifdef EDFS_FORWARD_REQUEST
             if ((!chunk_exists(path, forward_chunk)) && (forward_chunk <= last_file_chunk))
