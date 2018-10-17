@@ -56,7 +56,7 @@ void block_free(struct block *block) {
     free(block);
 }
 
-int block_mine_with_copy(struct block *newblock, int zero_bits, unsigned char *previous_hash) {
+int block_mine_with_copy(struct block *newblock, int zero_bits, unsigned char *previous_hash, int *loop_condition) {
     sha3_context ctx;
     static unsigned char ref_hash[32];
     const unsigned char *hash;
@@ -90,7 +90,7 @@ int block_mine_with_copy(struct block *newblock, int zero_bits, unsigned char *p
         mbits = 8 - mbits;
 
     // seems faster to just increment count instead of randomizing it
-    while (1) {
+    while ((1) && ((!loop_condition) || (*loop_condition))) {
         sha3_Init256(&ctx);
 
         uint64_t counter_be = htonll(counter);
@@ -134,7 +134,7 @@ int block_mine(struct block *newblock, int zero_bits) {
     if (!newblock)
         return 0;
 
-    return block_mine_with_copy(newblock, zero_bits, newblock->previous_block ? ((struct block *)newblock->previous_block)->hash : NULL);
+    return block_mine_with_copy(newblock, zero_bits, newblock->previous_block ? ((struct block *)newblock->previous_block)->hash : NULL, NULL);
 }
 
 int block_verify(struct block *newblock, int zero_bits) {

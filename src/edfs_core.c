@@ -2215,6 +2215,24 @@ int edfs_reply_hash(struct edfs *edfs_context, struct edfs_key_data *key, edfs_i
     return err;
 }
 
+int chunk_exists(const char *path, uint64_t chunk) {
+    char name[MAX_PATH_LEN];
+    name[0] = 0;
+    snprintf(name, MAX_PATH_LEN, "%s/%" PRIu64, path, (uint64_t)chunk);
+
+    struct stat statbuf;   
+    return (stat(name, &statbuf) == 0);
+}
+
+int chunk_exists2(struct edfs_key_data *key, uint64_t inode, uint64_t chunk) {
+    char fullpath[MAX_PATH_LEN];
+    char b64name[MAX_B64_HASH_LEN];
+    adjustpath2(key, fullpath, computename(inode, b64name), chunk);
+
+    struct stat statbuf;   
+    return (stat(fullpath, &statbuf) == 0);
+}
+
 int request_data(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk, int encrypted, int use_cached_addr, unsigned char *proof_cache, int *proof_size, uint32_t chunk_hash) {
     unsigned char additional_data[20];
     *(uint64_t *)additional_data = htonll(ino);
@@ -2261,6 +2279,57 @@ int request_data(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_
     return is_sctp;
 }
 
+int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk, int use_cached_addr, unsigned char *proof_cache, int *proof_size, uint32_t chunk_hash, const char *path, int timeout) {
+    unsigned char additional_data[20];
+    *(uint64_t *)additional_data = htonll(ino);
+    *(uint64_t *)(additional_data + 8)= htonll(chunk);
+    *(uint32_t *)(additional_data + 16)= htonl(chunk_hash);
+
+    struct sockaddr_in *use_clientaddr = NULL;
+    int clientaddr_size = 0;
+#ifdef WITH_SCTP
+    int is_sctp = edfs_context->force_sctp;
+#else
+    int is_sctp = 0;
+#endif
+    struct sockaddr_in addrbuffer;
+    if (use_cached_addr) {
+        if (edfs_context->mutex_initialized)
+            thread_mutex_lock(&key->ino_cache_lock);
+        struct edfs_ino_cache *avl_cache = (struct edfs_ino_cache *)avl_search(&key->ino_cache, (void *)(uintptr_t)ino);
+        // at least 2 nodes
+        if ((avl_cache) && (avl_cache->len >= 1)) {
+            if ((avl_cache->len >= 2) || (edwork_random() % 20 != 0)) {
+                memcpy(&addrbuffer, &avl_cache->clientaddr[edwork_random() % avl_cache->len], avl_cache->clientaddr_size);
+                use_clientaddr = &addrbuffer;
+                clientaddr_size = avl_cache->clientaddr_size;
+#ifdef WITH_SCTP
+                if (!edfs_context->force_sctp)
+                    is_sctp = edwork_is_sctp(edfs_context->edwork, use_clientaddr);
+#endif
+            }
+        }
+        if (edfs_context->mutex_initialized)
+            thread_mutex_unlock(&key->ino_cache_lock);
+    }
+
+    notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+#ifdef WITH_SCTP
+    if ((is_sctp) && (use_clientaddr) && (clientaddr_size)) {
+        uint64_t start = microseconds();
+        uint64_t last_sent = start;
+        while ((!chunk_exists(path, chunk)) && (microseconds() - start < timeout)) {
+            usleep(1000);
+            if (microseconds() - last_sent >= 50000) {
+                notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+                last_sent = microseconds();
+            }
+        }
+    }
+#endif
+    return is_sctp;
+}
+
 void edfs_make_key(struct edfs *edfs_context) {
     unsigned char random_bytes[32];
     memcpy(&edfs_context->previous_key, &edfs_context->key, sizeof(struct edfs_x25519_key));
@@ -2277,24 +2346,6 @@ void edfs_make_key(struct edfs *edfs_context) {
 int edfs_file_exists(const char *name) {
     struct stat statbuf;   
     return (stat(name, &statbuf) == 0);
-}
-
-int chunk_exists(const char *path, uint64_t chunk) {
-    char name[MAX_PATH_LEN];
-    name[0] = 0;
-    snprintf(name, MAX_PATH_LEN, "%s/%" PRIu64, path, (uint64_t)chunk);
-
-    struct stat statbuf;   
-    return (stat(name, &statbuf) == 0);
-}
-
-int chunk_exists2(struct edfs_key_data *key, uint64_t inode, uint64_t chunk) {
-    char fullpath[MAX_PATH_LEN];
-    char b64name[MAX_B64_HASH_LEN];
-    adjustpath2(key, fullpath, computename(inode, b64name), chunk);
-
-    struct stat statbuf;   
-    return (stat(fullpath, &statbuf) == 0);
 }
 
 uint32_t edfs_get_hash(struct edfs *edfs_context, struct edfs_key_data *key, const char *path, edfs_ino_t ino, uint64_t chunk, struct filewritebuf *filebuf) {
@@ -2421,6 +2472,10 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 read_size = edfs_read_file(edfs_context, key, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
                 filebuf->read_buffer_size = 0;
             }
+            if (read_size < 0) {
+                log_warn("deleting invalid chunk %s/%s", path, name);
+                edfs_unlink_file(edfs_context, path, name);
+            }
 #ifdef EDFS_REMOVE_INCOMPLETE_CHUNKS
             if ((read_size > 0) && (read_size < size) && (chunk < filebuf->last_read_chunk)) {
                 // incomplete chunk, remove it
@@ -2465,7 +2520,8 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 if (chunk > last_file_chunk)
                     return read_size;
             }
-            is_sctp = request_data(edfs_context, key, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size, sig_hash);
+            is_sctp = request_data_sctp(edfs_context, key, ino, chunk, use_addr_cache, proof_cache, &proof_size, sig_hash, path, EDWORK_SCTP_TTL / 2 * 1000);
+            // is_sctp = request_data(edfs_context, key, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size, sig_hash);
             if (is_sctp)
                 do_forward = 0;
             log_trace("requesting chunk %s:%" PRIu64 " (sctp: %i)", path, chunk, is_sctp);
@@ -2498,9 +2554,11 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 }
             }
 #endif
-            uint64_t start = microseconds();
-            while ((!chunk_exists(path, chunk)) && (microseconds() - start < wait_count))
-                usleep(1000);
+            if (!is_sctp) {
+                uint64_t start = microseconds();
+                while ((!chunk_exists(path, chunk)) && (microseconds() - start < wait_count))
+                    usleep(1000);
+            }
         } else {
 #ifdef EDFS_FORWARD_REQUEST
             if ((!chunk_exists(path, forward_chunk)) && (forward_chunk <= last_file_chunk))
@@ -4034,7 +4092,7 @@ int edfs_rmkey(struct edfs *edfs_context, const char *key_id) {
                 log_error("cannot delete primary key");
                 return -1;
             }
-            if (key->opened_files > 0) {
+            if ((key->opened_files > 0) || (key->mining_flag)) {
                 log_error("key is in use");
                 return -1;
             }
@@ -4890,10 +4948,12 @@ void edfs_try_new_block(struct edfs *edfs_context, struct edfs_key_data *key) {
                 memset(key->proof_of_time, 0, 40);
                 key->proof_inodes_len = 0;
                 edwork_callback_lock(edfs_context->edwork, 0);
-                block_mine_with_copy(newblock, BLOCKCHAIN_COMPLEXITY, previous_hash_ptr);
+                key->mining_flag = 1;
+                int has_new_block = block_mine_with_copy(newblock, BLOCKCHAIN_COMPLEXITY, previous_hash_ptr, &key->mining_flag);
+                key->mining_flag = 0;
                 edwork_callback_lock(edfs_context->edwork, 1);
                 // check if someone finished faster
-                if ((key->chain->index == newblock->index - 1) && (key->chain == old_chain)) {
+                if ((has_new_block) && (key->chain->index == newblock->index - 1) && (key->chain == old_chain)) {
                     key->chain = newblock;
                     edfs_block_save(edfs_context, key, key->chain);
                     // TODO: update all directory hashes
@@ -5682,6 +5742,7 @@ one_loop:
         if ((!key->chain) && (!newblock->index)) {
             edfs_write_file(edfs_context, key, key->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL, 1);
             key->chain = newblock;
+            key->mining_flag = 0;
             edfs_new_chain_request_descriptors(edfs_context, key, 0);
             key->top_broadcast_timestamp = 0;
             edfs_try_reset_proof(edfs_context, key);
@@ -5694,6 +5755,7 @@ one_loop:
                 notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 edfs_write_file(edfs_context, key, key->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL, 1);
                 key->chain = newblock;
+                key->mining_flag = 0;
                 edfs_new_chain_request_descriptors(edfs_context, key, 0);
                 key->top_broadcast_timestamp = 0;
                 edfs_try_reset_proof(edfs_context, key);
@@ -5706,6 +5768,7 @@ one_loop:
                     struct block *previous_block = (struct block *)key->chain->previous_block;
                     block_free(key->chain);
                     key->chain = previous_block;
+                    key->mining_flag = 0;
                     edfs_schedule(edfs_context, edfs_blockchain_request, 50000, 0, 0, 0, 0, 1, 0, key);
                     key->block_timestamp = time(NULL);
                 }
@@ -5749,6 +5812,7 @@ one_loop:
                 EDFS_THREAD_LOCK(edfs_context);
                 blockchain_free(key->chain);
                 key->chain = NULL;
+                key->mining_flag = 0;
                 EDFS_THREAD_UNLOCK(edfs_context);
                 key->chain_errors = 0;
                 key->block_timestamp = time(NULL);
@@ -5808,6 +5872,7 @@ one_loop:
                 if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
                     block_free(key->chain);
                     key->chain = topblock;
+                    key->mining_flag = 0;
                     edfs_write_file(edfs_context, key, key->blockchain_directory, computeblockname(topblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL, 1);
                     edfs_new_chain_request_descriptors(edfs_context, key, 0);
                     key->top_broadcast_timestamp = 0;
@@ -5827,11 +5892,13 @@ one_loop:
                             previous_block = (struct block *)key->chain->previous_block;
                             block_free(key->chain);
                             key->chain = previous_block;
+                            key->mining_flag = 0;
                             EDFS_THREAD_UNLOCK(edfs_context);
                         } else {
                             EDFS_THREAD_LOCK(edfs_context);
                             blockchain_free(key->chain);
                             key->chain = NULL;
+                            key->mining_flag = 0;
                             EDFS_THREAD_UNLOCK(edfs_context);
                             key->chain_errors = 0;
                         }
@@ -5879,6 +5946,7 @@ one_loop:
         topblock->previous_block = key->chain;
         key->chain = topblock;
         if (block_verify(topblock, BLOCKCHAIN_COMPLEXITY)) {
+            key->mining_flag = 0;
             edfs_new_chain_request_descriptors(edfs_context, key, 0);
             key->top_broadcast_timestamp = 0;
             edfs_try_reset_proof(edfs_context, key);
@@ -5896,6 +5964,7 @@ one_loop:
             EDFS_THREAD_LOCK(edfs_context);
             blockchain_free(key->chain);
             key->chain = NULL;
+            key->mining_flag = 0;
             EDFS_THREAD_UNLOCK(edfs_context);
             key->chain_errors = 0;
             key->block_timestamp = time(NULL);

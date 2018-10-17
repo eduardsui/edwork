@@ -59,6 +59,8 @@ struct edfs_key_data {
 
     int opened_files;
 
+    int mining_flag;
+
     void *next_key;
 };
 
