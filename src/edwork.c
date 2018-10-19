@@ -192,6 +192,7 @@ struct edwork_data {
 #endif
 
 #ifdef WITH_SCTP
+    thread_mutex_t sctp_sock_lock;
     time_t sctp_timestamp;
     #ifdef WITH_USRSCTP
         edwork_dispatch_callback callback;
@@ -729,9 +730,9 @@ ssize_t safe_sctp_sendto(struct edwork_data *data, SCTP_SOCKET_TYPE socket, cons
     info.pr_policy = SCTP_PR_SCTP_TTL;
     info.pr_value = ttl;
 #endif
-    thread_mutex_lock(&data->sock_lock);
+    thread_mutex_lock(&data->sctp_sock_lock);
     ssize_t err = SCTP_send(socket, (const char *)buf, len, flags, dest_addr, addrlen);
-    thread_mutex_unlock(&data->sock_lock);
+    thread_mutex_unlock(&data->sctp_sock_lock);
     return err;
 }
 
@@ -743,9 +744,9 @@ ssize_t safe_sctp_recvfrom(struct edwork_data *data, SCTP_SOCKET_TYPE socket, vo
 #endif
     if (!socket)
         return -1;
-    thread_mutex_lock(&data->sock_lock);
+    thread_mutex_lock(&data->sctp_sock_lock);
     ssize_t err = SCTP_recv(socket, (char *)buf, len, flags, src_addr, addrlen);
-    thread_mutex_unlock(&data->sock_lock);
+    thread_mutex_unlock(&data->sctp_sock_lock);
     return err;
 }
 
@@ -1005,6 +1006,9 @@ struct edwork_data *edwork_create(int port, edwork_find_key_callback find_key) {
     thread_mutex_init(&data->sock_lock);
     thread_mutex_init(&data->clients_lock);
     thread_mutex_init(&data->lock);
+#ifdef WITH_SCTP
+    thread_mutex_init(&data->sctp_sock_lock);
+#endif
 #ifdef EDFS_MULTITHREADED
     thread_mutex_init(&data->thread_lock);
 #endif
@@ -2024,7 +2028,10 @@ void edwork_destroy(struct edwork_data *data) {
     avl_destroy(&data->tree, avl_key_data_destructor);
     thread_mutex_term(&data->sock_lock);
     thread_mutex_term(&data->clients_lock);
-    thread_mutex_init(&data->lock);
+    thread_mutex_term(&data->lock);
+#ifdef WITH_SCTP
+    thread_mutex_term(&data->sctp_sock_lock);
+#endif
 #ifdef EDFS_MULTITHREADED
     thread_mutex_term(&data->thread_lock);
 #endif

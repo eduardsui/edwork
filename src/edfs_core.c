@@ -2,6 +2,8 @@
 #define _FILE_OFFSET_BITS 64
 #define THREAD_IMPLEMENTATION
 
+// #define EDFS_USE_READ_QUEUE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,6 +41,9 @@
 #include "blockchain.h"
 #include "sort.h"
 #include "edfs_key_data.h"
+#ifdef EDFS_EMULTATED_STORE
+    #include "store.h"
+#endif
 
 #define BLOCK_SIZE_MAX          BLOCK_SIZE + 0x3000
 #define EDFS_INO_CACHE_ADDR     20
@@ -191,6 +196,18 @@ struct filewritebuf {
     struct edfs_hash_buffer *hash_buffer;
     struct edfs_key_data *key;
     int flags;
+
+#ifdef EDFS_USE_READ_QUEUE
+    unsigned char proof_cache[512];
+    int proof_size;
+
+    uint64_t request_timestamp;
+    uint64_t requested_chunk;
+    uint64_t timestamp;
+    uint32_t requested_sig_hash;
+    unsigned char is_sctp;
+    unsigned char read_queued;
+#endif
 };
 
 struct edwork_shard_io {
@@ -268,6 +285,7 @@ struct edfs {
     struct edwork_io *queue;
 
     struct edfs_event *events;
+    uint64_t event_wait_timeout;
     thread_mutex_t events_lock;
 
     thread_ptr_t network_thread;
@@ -311,6 +329,12 @@ struct edfs {
 #ifdef WITH_SCTP
     int force_sctp;
 #endif
+#ifdef WITH_CACHE_WARMUP
+    uint64_t warmup_inode;
+    uint64_t warmup_chunk;
+    char warmup_key_dir[MAX_PATH_LEN];
+    thread_ptr_t warmup_thread;
+#endif
     uint64_t use_key_id;
 };
 
@@ -340,6 +364,8 @@ void edfs_broadcast_top(struct edfs *edfs_context, struct edfs_key_data *key, vo
 struct edfs_key_data *edfs_find_key(uint64_t keyid, void *userdata);
 int edfs_init(struct edfs *edfs_context);
 static void recursive_mkdir(const char *dir);
+void edfs_warm_cache(struct edfs *edfs_context, const char *working_directory, edfs_ino_t ino, uint64_t chunk, uint64_t max_chunks);
+void edfs_request_cache_warming(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk);
 
 uint64_t microseconds() {
     struct timeval tv;
@@ -811,6 +837,16 @@ char *adjustpath3(struct edfs_key_data *key_data, char *fullpath, const char *na
     return fullpath;
 }
 
+char *store_adjustpath2(struct edfs_key_data *key_data, char *fullpath, const char *name, uint64_t chunk) {
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%s", key_data->working_directory, name);
+    // ensure directory exists
+    EDFS_MKDIR(fullpath, 0755);
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%s/%04" PRIx64, key_data->working_directory, name, chunk);
+    return fullpath;
+}
+
 uint64_t computeinode2(struct edfs_key_data *key, uint64_t parent_inode, const char *name, int name_len) {
     unsigned char hash[32];
     uint64_t inode;
@@ -1147,6 +1183,172 @@ ssize_t edfs_read_simple_key(struct edfs *edfs_context, void *ptr, size_t size, 
     return fread(ptr, 1, size, stream);
 }
 
+#ifdef EDFS_EMULATED_STORE
+ssize_t store_write_with_key(struct edfs *edfs_context, struct edfs_key_data *used_key, const void *ptr, size_t size, size_t nmemb, struct store_data *stream) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size > 0) && (nmemb > 0)) {
+        struct chacha_ctx ctx;
+        unsigned char key[32];
+        unsigned char ivector[32];
+        unsigned char *out = (unsigned char *)malloc(size * nmemb);
+        if (!out)
+            return -1;
+
+        derive_storage_key(edfs_context, used_key, key, ivector);
+
+        chacha_keysetup(&ctx, key, 256);
+        chacha_ivsetup(&ctx, ivector, NULL);
+
+        chacha_encrypt_bytes(&ctx, (unsigned char *)ptr, out, size * nmemb);
+
+        ssize_t err = store_write(out, size * nmemb, stream);
+        free(out);
+        return err;
+    }
+    return store_write(ptr, size * nmemb, stream);
+}
+
+ssize_t store_write_block_with_key(struct edfs *edfs_context, struct edfs_key_data *key, const void *ptr, size_t size, size_t nmemb, struct store_data *stream) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size * nmemb >= 64)) {
+        ssize_t written = store_write(ptr, 64, stream);
+        if (written != 64)
+            return written;
+        ssize_t written_data = store_write_with_key(edfs_context, key, (const unsigned char *)ptr + 64, 1, (nmemb * size) - 64, stream);
+        if (written_data < 0)
+            return written_data;
+
+        return written + written_data;
+    }
+    return store_write(ptr, size * nmemb, stream);
+}
+
+ssize_t store_read_with_key(struct edfs *edfs_context, struct edfs_key_data *used_key, void *ptr, size_t size, size_t nmemb, struct store_data *stream, int signature_prefix) {
+    if ((edfs_context) && (edfs_context->has_storekey) && (size > 0) && (nmemb > 0)) {
+        ssize_t err;
+        if ((signature_prefix) && (nmemb >= 64)) {
+            err = store_read(ptr, 64, stream);
+            if ((err != 64) || (nmemb == 64))
+                return err;
+
+            nmemb -= 64;
+            ptr = (unsigned char *)ptr + 64;
+        }
+        unsigned char *out = (unsigned char *)malloc(size * nmemb);
+        if (!out)
+            return -1;
+        err = store_read(out, size * nmemb, stream);
+        if (err <= 0) {
+            free(out);
+            return err;
+        }
+
+        struct chacha_ctx ctx;
+        unsigned char key[32];
+        unsigned char ivector[32];
+
+        derive_storage_key(edfs_context, used_key, key, ivector);
+
+        chacha_keysetup(&ctx, key, 256);
+        chacha_ivsetup(&ctx, ivector, NULL);
+
+        chacha_encrypt_bytes(&ctx, (const unsigned char *)out, (unsigned char *)ptr, err);
+        free(out);
+        return err;
+    }
+    return store_read(ptr, size * nmemb, stream);
+}
+
+int store_read_signature(struct edfs *edfs_context, struct edfs_key_data *key, unsigned char *data, int len, struct store_data *f, unsigned char *signature, int signature_prefix) {
+    if (signature) {
+        int read_size = store_read(signature, 64, f);
+        if (read_size != 64) {
+            errno = EIO;
+            return -EIO;
+        }
+        signature_prefix = 0;
+    }
+    return store_read_with_key(edfs_context, key, data, 1, len, f, signature_prefix);
+}
+
+int store_read_compressed(struct edfs *edfs_context, struct edfs_key_data *key, unsigned char *data, int len, struct store_data *f, unsigned char *signature, int signature_prefix) {
+    unsigned char compressed_buffer[BLOCK_SIZE_MAX];
+    int bytes_read = store_read_signature(edfs_context, key, compressed_buffer, BLOCK_SIZE_MAX, f, signature, signature_prefix);
+    if (bytes_read > 0) {
+        mz_ulong max_len = len;
+        if (uncompress(data, &max_len, compressed_buffer, bytes_read) == Z_OK)
+            return max_len;
+        errno = EIO;
+        return -EIO;
+    }
+    return bytes_read;
+}
+
+int edfs_read_store(struct edfs *edfs_context, struct edfs_key_data *key, const char *base_path, uint64_t chunk, unsigned char *data, int len, int check_signature, int compression, int *filesize, uint32_t signature_hash, int signature_prefix) {
+    struct store_data *f;
+    char fullpath[MAX_PATH_LEN];
+    unsigned char sig_buf[BLOCK_SIZE_MAX];
+    unsigned char hash[64];
+    unsigned char *sig_ptr = NULL;
+    int sig_bytes_read = 0;
+
+    if (filesize)
+        *filesize = 0;
+
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%04" PRIx64, base_path, chunk / STORE_CHUNKS_PER_FILE);
+    f = store_open(fullpath, 0, chunk % STORE_CHUNKS_PER_FILE);
+    if (!f)
+        return -errno;
+
+    edfs_file_lock(edfs_context, store_handle(f), 0);
+    int bytes_read;
+    if ((compression) || ((check_signature) && ((len < BLOCK_SIZE) && (len > 0)))) {
+        if (compression) {
+            sig_bytes_read = store_read_compressed(edfs_context, key, sig_buf, BLOCK_SIZE_MAX, f, check_signature ? hash : NULL, signature_prefix);
+        } else {
+            sig_bytes_read = store_read_signature(edfs_context, key, sig_buf, BLOCK_SIZE_MAX, f, check_signature ? hash : NULL, signature_prefix);
+        }
+        sig_ptr = sig_buf;
+        if (sig_bytes_read <= 0) {
+            bytes_read = sig_bytes_read;
+        } else {
+            bytes_read = edfs_min(len, sig_bytes_read);
+            memcpy(data, sig_buf, bytes_read);
+        }
+    } else {
+        bytes_read = store_read_signature(edfs_context, key, data, len, f, check_signature ? hash : NULL, signature_prefix);
+        sig_ptr = data;
+        sig_bytes_read = bytes_read;
+    }
+    if ((bytes_read < 0) || (sig_bytes_read < 0)) {
+        int err = -errno;
+        edfs_file_unlock(edfs_context, store_handle(f));
+        store_close(f);
+        return err;
+    }
+    edfs_file_unlock(edfs_context, store_handle(f));
+    store_close(f);
+
+    if (check_signature) {
+        if (verify(edfs_context, key, (const char *)sig_ptr, sig_bytes_read, hash, sizeof(hash))) {
+            if (signature_hash) {
+                if (XXH32(hash, sizeof(hash), 0) != signature_hash) {
+                    log_warn("different chunk version received");
+                    return -EIO;
+                }
+            }
+            return bytes_read;
+        }
+        log_error("signature verify failed (%s)", fullpath);
+        return -EIO;
+    }
+
+    if (filesize)
+        *filesize = sig_bytes_read;
+
+    return bytes_read;
+}
+#endif
+
 ssize_t fwrite_with_key(struct edfs *edfs_context, struct edfs_key_data *used_key, const void *ptr, size_t size, size_t nmemb, FILE *stream) {
     if ((edfs_context) && (edfs_context->has_storekey) && (size > 0) && (nmemb > 0)) {
         struct chacha_ctx ctx;
@@ -1368,6 +1570,11 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
     updated_event->userdata_b = userdata_b;
     updated_event->data = data;
     updated_event->when = when;
+    if ((!edfs_context->event_wait_timeout) || (edfs_context->event_wait_timeout > when)) {
+        edfs_context->event_wait_timeout = when;
+        if (edfs_context->event_wait_timeout < 1000)
+            edfs_context->event_wait_timeout = 1000;
+    }
     if ((run_now) && (when))
         updated_event->timestamp = microseconds() - when;
     else
@@ -1406,6 +1613,8 @@ int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callb
         prev = root;
         root = (struct edfs_event *)root->next;
     }
+    if (!edfs_context->events)
+        edfs_context->event_wait_timeout = 0;
     thread_mutex_unlock(&edfs_context->events_lock);
     return 0;
 }
@@ -1487,6 +1696,8 @@ int edfs_schedule_iterate(struct edfs *edfs_context, unsigned int *idle_ref) {
             prev = root;
             root = next;
         }
+        if (!edfs_context->events)
+            edfs_context->event_wait_timeout = 0;
     }
     if (idle_ref) {
         if (idle_runs)
@@ -1494,7 +1705,6 @@ int edfs_schedule_iterate(struct edfs *edfs_context, unsigned int *idle_ref) {
         else
             *idle_ref = 0;
     }
-
     thread_mutex_unlock(&edfs_context->events_lock);
     return i;
 }
@@ -2145,6 +2355,43 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
     return inode;
 }
 
+void edfs_warm_cache(struct edfs *edfs_context, const char *working_directory, edfs_ino_t ino, uint64_t chunk, uint64_t max_chunks) {
+    char b64name[MAX_B64_HASH_LEN];
+    char fullpath[MAX_PATH_LEN];
+    char name[MAX_PATH_LEN];
+    
+    computename(ino, b64name);
+
+    max_chunks += chunk;
+    do {
+        if (edfs_context->network_done)
+            break;
+
+        snprintf(name, MAX_PATH_LEN, "%s/%s/%" PRIu64, working_directory, b64name, chunk);
+
+        FILE *f = fopen(name, "rb");
+        if (!f)
+            break;
+
+        fclose(f);
+
+        chunk ++;
+    } while (chunk < max_chunks);
+}
+
+#ifdef WITH_CACHE_WARMUP
+void edfs_request_cache_warming(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk) {
+    if ((!edfs_context) || (!key))
+        return;
+
+    edfs_context->warmup_chunk = chunk;
+    if (edfs_context->warmup_inode != ino) {
+        strncpy(edfs_context->warmup_key_dir, key->working_directory, MAX_PATH_LEN);
+        edfs_context->warmup_inode = ino;
+    }
+}
+#endif
+
 int edfs_reply_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk, unsigned char *buf, int size, uint32_t chunk_hash) {
     if (size <= 0)
         return -1;
@@ -2218,19 +2465,29 @@ int edfs_reply_hash(struct edfs *edfs_context, struct edfs_key_data *key, edfs_i
 int chunk_exists(const char *path, uint64_t chunk) {
     char name[MAX_PATH_LEN];
     name[0] = 0;
+#ifdef EDFS_EMULATED_STORE
+    snprintf(name, MAX_PATH_LEN, "%s/%04" PRIx64, path, chunk / STORE_CHUNKS_PER_FILE);
+    return store_exists(name, chunk % STORE_CHUNKS_PER_FILE);
+#else
     snprintf(name, MAX_PATH_LEN, "%s/%" PRIu64, path, (uint64_t)chunk);
 
     struct stat statbuf;   
     return (stat(name, &statbuf) == 0);
+#endif
 }
 
 int chunk_exists2(struct edfs_key_data *key, uint64_t inode, uint64_t chunk) {
     char fullpath[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
+#ifdef EDFS_EMULATED_STORE
+    store_adjustpath2(key, fullpath, computename(inode, b64name), chunk / STORE_CHUNKS_PER_FILE);
+    return store_exists(fullpath, chunk % STORE_CHUNKS_PER_FILE);
+#else
     adjustpath2(key, fullpath, computename(inode, b64name), chunk);
 
     struct stat statbuf;   
     return (stat(fullpath, &statbuf) == 0);
+#endif
 }
 
 int request_data(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk, int encrypted, int use_cached_addr, unsigned char *proof_cache, int *proof_size, uint32_t chunk_hash) {
@@ -2254,7 +2511,13 @@ int request_data(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_
         // at least 2 nodes
         if ((avl_cache) && (avl_cache->len >= 1)) {
             if ((avl_cache->len >= 2) || (edwork_random() % 20 != 0)) {
-                memcpy(&addrbuffer, &avl_cache->clientaddr[edwork_random() % avl_cache->len], avl_cache->clientaddr_size);
+                unsigned int to_client; 
+                if (use_cached_addr > 1)
+                    to_client = use_cached_addr - 2;
+                else
+                    to_client = (unsigned int)edwork_random();
+
+                memcpy(&addrbuffer, &avl_cache->clientaddr[to_client % avl_cache->len], avl_cache->clientaddr_size);
                 use_clientaddr = &addrbuffer;
                 clientaddr_size = avl_cache->clientaddr_size;
 #ifdef WITH_SCTP
@@ -2308,9 +2571,7 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
                     is_sctp = edwork_is_sctp(edfs_context->edwork, use_clientaddr);
     #endif
             }
-        } else
-            // invalidate all cache
-            avl_cache->len = 0;
+        }
     }
     if (edfs_context->mutex_initialized)
         thread_mutex_unlock(&key->ino_cache_lock);
@@ -2408,6 +2669,37 @@ int edfs_get_hash2(struct edfs *edfs_context, struct edfs_key_data *key, const c
     return read_size / sizeof(uint32_t);
 }
 
+#ifdef EDFS_USE_READ_QUEUE
+int edfs_data_request(struct edfs *edfs_context, uint64_t inode, uint64_t not_used, void *data) {
+    char b64name[MAX_B64_HASH_LEN];
+    char fullpath[MAX_PATH_LEN];
+
+    struct filewritebuf *filebuf = (struct filewritebuf *)data;
+    if ((!filebuf) || (!filebuf->key) || (filebuf->read_queued == 2) || (!filebuf->file_size)) {
+        filebuf->read_queued = 0;
+        return 1;
+    }
+
+    adjustpath(filebuf->key, fullpath, computename(filebuf->ino, b64name));
+
+    if (chunk_exists(fullpath, filebuf->requested_chunk)) {
+        filebuf->proof_size = 0;
+        return 0;
+    }
+
+    uint64_t wait_count = filebuf->is_sctp ? 50000 : 20000;
+    if (microseconds() - filebuf->timestamp >= wait_count) {
+        if ((filebuf->request_timestamp) && (microseconds() - filebuf->request_timestamp > 1000000ULL)) {
+            filebuf->is_sctp = request_data(edfs_context, filebuf->key, filebuf->ino, filebuf->requested_chunk, 1, 0, NULL, NULL, filebuf->requested_sig_hash);
+            filebuf->request_timestamp = microseconds();
+        } else
+            filebuf->is_sctp = request_data(edfs_context, filebuf->key, filebuf->ino, filebuf->requested_chunk, 1, 1, filebuf->proof_cache, &filebuf->proof_size, filebuf->requested_sig_hash);
+        filebuf->timestamp = microseconds();
+    }
+    return 0;
+}
+#endif
+
 int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *path, const char *name, unsigned char *buf, int size, edfs_ino_t ino, uint64_t chunk, struct filewritebuf *filebuf) {
     int i = 0;
     uint64_t start = microseconds();
@@ -2447,8 +2739,18 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
     int requested = 0;
     int do_forward = 1;
     int is_sctp = 0;
+    int reset_cache_tree = 0;
 
     uint64_t proof_timestamp = microseconds();
+#ifdef EDFS_USE_READ_QUEUE
+    if (filebuf->requested_chunk != chunk) {
+        filebuf->request_timestamp = microseconds();
+        filebuf->requested_chunk = chunk;
+        filebuf->proof_size = 0;
+        filebuf->timestamp = 0;
+    }
+    filebuf->requested_sig_hash = sig_hash;
+#endif
     do {
         int read_size = -1;
         // avoid I/O lock
@@ -2458,7 +2760,11 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 filebuf->read_buffer = (unsigned char *)malloc(BLOCK_SIZE);
 
             if ((filebuf->read_buffer) && (size < BLOCK_SIZE) && ((filebuf->flags & 3) == O_RDONLY)) {
+#ifdef EDFS_EMULTATED_STORE
+                read_size = edfs_read_store(edfs_context, key, path, chunk, (unsigned char *)filebuf->read_buffer, (int)BLOCK_SIZE, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
+#else
                 read_size = edfs_read_file(edfs_context, key, path, name, (unsigned char *)filebuf->read_buffer, (int)BLOCK_SIZE, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
+#endif
                 if (read_size > 0) {
                     filebuf->read_buffer_size = read_size;
                     if (size > read_size) {
@@ -2471,18 +2777,31 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 } else
                     filebuf->read_buffer_size = 0;
             } else {
+#ifdef EDFS_EMULTATED_STORE
+                read_size = edfs_read_store(edfs_context, key, path, chunk, (unsigned char *)buf, (int)size, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
+#else
                 read_size = edfs_read_file(edfs_context, key, path, name, (unsigned char *)buf, (int)size, NULL, 0, 1, USE_COMPRESSION, &filesize, filebuf->written_data ? 0 : sig_hash, 0);
+#endif
                 filebuf->read_buffer_size = 0;
             }
             if (read_size < 0) {
                 log_warn("deleting invalid chunk %s/%s", path, name);
+#ifdef EDFS_EMULTATED_STORE
+                store_unlink(path, chunk % STORE_CHUNKS_PER_FILE);
+#else
                 edfs_unlink_file(edfs_context, path, name);
+#endif
             }
 #ifdef EDFS_REMOVE_INCOMPLETE_CHUNKS
             if ((read_size > 0) && (read_size < size) && (chunk < filebuf->last_read_chunk)) {
                 // incomplete chunk, remove it
-                if (filesize < BLOCK_SIZE)
+                if (filesize < BLOCK_SIZE) {
+#ifdef EDFS_EMULTATED_STORE
+                    store_unlink(path, chunk % STORE_CHUNKS_PER_FILE);
+#else
                     edfs_unlink_file(edfs_context, path, name);
+#endif
+                }
                 read_size = -2;
             }
 #endif
@@ -2501,9 +2820,10 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 }
                 last_key_timestamp = microseconds();
             }
-            if (microseconds() - start >= 1000000) {
+            if ((microseconds() - start >= 1000000) && (!reset_cache_tree)) {
                 use_addr_cache = 0;
                 is_sctp = 0;
+                reset_cache_tree = 1;
                 // reset inode cache tree
                 if (edfs_context->mutex_initialized)
                     thread_mutex_lock(&key->ino_cache_lock);
@@ -2511,9 +2831,13 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 if (edfs_context->mutex_initialized)
                     thread_mutex_unlock(&key->ino_cache_lock);
             }
-            if ((microseconds() - proof_timestamp >= 500000)/* && (!is_sctp)*/) {
+            if (microseconds() - proof_timestamp >= 500000) {
                 // new proof every 500ms
+#ifdef EDFS_USE_READ_QUEUE
+                filebuf->proof_size = 0;
+#else
                 proof_size = 0;
+#endif
                 proof_timestamp = microseconds();
             }
             // end of file, no more queries
@@ -2522,8 +2846,14 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 if (chunk > last_file_chunk)
                     return read_size;
             }
+#ifdef EDFS_USE_READ_QUEUE
+            if (!filebuf->read_queued) {
+                filebuf->read_queued = 1;
+                edfs_schedule(edfs_context, edfs_data_request, 2000, 0, ino, last_file_chunk, 1, 0, 0, filebuf);
+            }
+            uint64_t wait_count = (EDWORK_SCTP_TTL / 2) * 1000;
+#else
             is_sctp = request_data_sctp(edfs_context, key, ino, chunk, use_addr_cache, proof_cache, &proof_size, sig_hash, path, EDWORK_SCTP_TTL / 2 * 1000);
-            // is_sctp = request_data(edfs_context, key, ino, chunk, 1, use_addr_cache, proof_cache, &proof_size, sig_hash);
             if (is_sctp)
                 do_forward = 0;
             log_trace("requesting chunk %s:%" PRIu64 " (sctp: %i)", path, chunk, is_sctp);
@@ -2556,10 +2886,20 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 }
             }
 #endif
+#endif
             uint64_t start = microseconds();
             while ((!chunk_exists(path, chunk)) && (microseconds() - start < wait_count))
                 usleep(1000);
         } else {
+#ifdef EDFS_USE_READ_QUEUE
+            if (!chunk_exists(path, chunk + 1)) {
+                filebuf->requested_chunk = chunk + 1;
+                filebuf->timestamp = 0;
+                filebuf->request_timestamp = microseconds();
+                filebuf->proof_size = 0;
+                filebuf->requested_sig_hash = 0;
+            }
+#endif
 #ifdef EDFS_FORWARD_REQUEST
             if ((!chunk_exists(path, forward_chunk)) && (forward_chunk <= last_file_chunk))
                 request_data(edfs_context, key, ino, forward_chunk, 1, 1, NULL, NULL, 0);
@@ -2568,6 +2908,9 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 filebuf->last_read_chunk = chunk;
                 filebuf->last_read_size = read_size;
             }
+#ifdef WITH_CACHE_WARMUP
+            edfs_request_cache_warming(edfs_context, filebuf->key, ino, chunk + 5);
+#endif
             return read_size;
         }
         i++;
@@ -2804,6 +3147,9 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
         if (((edfs_context->read_only_fs) || (key->read_only)) && ((flags & 3) != O_RDONLY))
             return -EROFS;
 
+#ifdef WITH_CACHE_WARMUP
+        edfs_request_cache_warming(edfs_context, key, ino, 0);
+#endif
         int check_hash = 0;
         int blockchain_error = 0;
         int send_want = 1;
@@ -2898,7 +3244,6 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
             (*fbuf)->key = key;
             key->opened_files ++;
             (*fbuf)->flags = flags;
-
         }
     }
     return 0;
@@ -3207,9 +3552,53 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
 int edfs_write_block(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, int64_t chunk, const unsigned char *data, size_t size, time_t timestamp) {
     char fullpath[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
+    struct stat attrib;
+
+#ifdef EDFS_EMULATED_STORE
+    store_adjustpath2(key, fullpath, computename(inode, b64name), chunk / STORE_CHUNKS_PER_FILE);
+    if ((timestamp) && (!store_stat(fullpath, chunk % STORE_CHUNKS_PER_FILE, &attrib))) {
+        // at least 3 seconds after creation
+        if (attrib.st_ctime - attrib.st_mtime >= 3) {
+            if ((attrib.st_mtime > timestamp) && (attrib.st_size >= size)) {
+                log_info("file block %s is newer than received", fullpath);
+                return -1;
+            }
+
+            if ((attrib.st_mtime == timestamp) && (attrib.st_size == size)) {
+                log_info("file block %s seems the same (%i bytes)", fullpath, size);
+                return -1;
+            }
+        }
+    }
+
+    struct store_data *f = store_open(fullpath, 1, chunk % STORE_CHUNKS_PER_FILE);
+    if (!f) {
+        log_error("error opening block file %s", fullpath);
+        return -1;
+    }
+
+    edfs_file_lock(edfs_context, store_handle(f), 1);
+    unsigned char signature[64];
+    if (size >= 64) {
+        if (store_read(signature, 64, f) == 64) {
+            if (!memcmp(signature, data, 64)) {
+                log_debug("file block is exactly the same, not rewriting");
+                edfs_file_unlock(edfs_context, store_handle(f));
+                store_close(f);
+                return -1;
+            }
+        }
+        store_seek(f, 0);
+    }
+    int written = store_write_block_with_key(edfs_context, key, data, 1, size, f);
+    if (written < 0)
+        log_error("error writing %i bytes to file %s (errno: %i)", size, fullpath, errno);
+
+    edfs_file_unlock(edfs_context, store_handle(f));
+    store_close(f);
+#else
     adjustpath2(key, fullpath, computename(inode, b64name), chunk);
 
-    struct stat attrib;
     if ((timestamp) && (!stat(fullpath, &attrib))) {
         // at least 3 seconds after creation
         if (attrib.st_ctime - attrib.st_mtime >= 3) {
@@ -3246,10 +3635,11 @@ int edfs_write_block(struct edfs *edfs_context, struct edfs_key_data *key, uint6
     }
     int written = fwrite_block_with_key(edfs_context, key, data, 1, size, f);
     if (written < 0)
-        log_error("error writing %i bytes to file %s (errno: %i)", fullpath, errno);
+        log_error("error writing %i bytes to file %s (errno: %i)", size, fullpath, errno);
 
     edfs_file_unlock(edfs_context, f);
     fclose(f);
+#endif
 
     return written;
 }
@@ -3442,6 +3832,19 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
             usleep(5000);
 #endif
         }
+#ifdef EDFS_USE_READ_QUEUE
+        if (fbuf->read_queued == 1) {
+            fbuf->read_queued = 2;
+            while (fbuf->read_queued) {
+                log_trace("waiting for read queue");
+#ifdef _WIN32
+                Sleep(5);
+#else
+                usleep(5000);
+#endif
+            }
+        }
+#endif
 
         uint64_t max_size = fbuf->offset + fbuf->size;
         edfs_flush_chunk(edfs_context, fbuf->ino, fbuf);
@@ -6295,11 +6698,11 @@ int edwork_queue(void *userdata) {
         }
 
         if (!edfs_schedule_iterate(edfs_context, &idle_ref)) {
-            if (edfs_context->events) {
+            if ((edfs_context->events) && (edfs_context->event_wait_timeout) && (edfs_context->event_wait_timeout < 50000)) {
 #ifdef _WIN32
-                Sleep(20);
+                Sleep(edfs_context->event_wait_timeout / 1000);
 #else
-                usleep(20000);
+                usleep(edfs_context->event_wait_timeout);
 #endif
             } else {
 #ifdef _WIN32
@@ -6312,6 +6715,25 @@ int edwork_queue(void *userdata) {
     }
     return 0;
 }
+
+#ifdef WITH_CACHE_WARMUP
+int edwork_warmup_thread(void *userdata) {
+    struct edfs *edfs_context = (struct edfs *)userdata;
+    while (!edfs_context->network_done) {
+        if (edfs_context->warmup_inode) {
+            log_trace("warming cache");
+            edfs_warm_cache(edfs_context, edfs_context->warmup_key_dir, edfs_context->warmup_inode, edfs_context->warmup_chunk, 500);
+            edfs_context->warmup_inode = 0;
+        } else {
+#ifdef _WIN32
+            Sleep(50);
+#else
+            usleep(50000);
+#endif
+        }
+    }
+}
+#endif
 
 void edfs_log_lock(void *userdata, int lock) {
     thread_mutex_t *log_lock = (thread_mutex_t *)userdata;
@@ -6663,7 +7085,9 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
         edfs_context->network_thread = thread_create(edwork_thread, (void *)edfs_context, "edwork", 8192 * 1024);
         edfs_context->queue_thread = thread_create(edwork_queue, (void *)edfs_context, "edwork q", 8192 * 1024);
         edfs_context->shard_thread = thread_create(edwork_shard_queue, (void *)edfs_context, "edwork shard", 8192 * 1024);
-
+#ifdef WITH_CACHE_WARMUP
+        edfs_context->warmup_thread = thread_create(edwork_warmup_thread, (void *)edfs_context, "edwork warmup", 8192 * 1024);
+#endif
         thread_mutex_unlock(&edfs_context->lock);
 
         edfs_context->start_timestamp = microseconds();
@@ -6693,6 +7117,15 @@ void edfs_edwork_done(struct edfs *edfs_context) {
         thread_destroy(edfs_context->shard_thread);
         log_info("edwork shard done");
     }
+    #ifdef WITH_CACHE_WARMUP
+        if (edfs_context->warmup_thread) {
+            log_info("waiting for edwork warmup thread to finish ...");
+            edfs_context->network_done = 1;
+            thread_join(edfs_context->warmup_thread);
+            thread_destroy(edfs_context->warmup_thread);
+            log_info("edwork warmup done");
+        }
+    #endif
     if (edfs_context->network_thread) {
         log_info("waiting for edwork thread to finish ...");
         edfs_context->network_done = 1;
@@ -6700,6 +7133,7 @@ void edfs_edwork_done(struct edfs *edfs_context) {
         thread_destroy(edfs_context->network_thread);
         log_info("edwork done");
     }
+
     edfs_context->mutex_initialized = 0;
     thread_mutex_term(&edfs_context->lock);
     thread_mutex_init(&edfs_context->events_lock);
