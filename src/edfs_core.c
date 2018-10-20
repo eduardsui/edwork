@@ -6964,6 +6964,10 @@ int edwork_thread(void *userdata) {
             while (key) {
                 key_buffer[key_buffer_index ++] = key->key_id_xxh64_be;
                 key = (struct edfs_key_data *)key->next_key;
+                if (key_buffer_index == 1000) {
+                    edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1);
+                    key_buffer_index = 0;
+                }
             }
             if (key_buffer_index > 0)
                 edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1);
