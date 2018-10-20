@@ -417,11 +417,11 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                             log_error("error in sctp_getpaddrs (%i)", errno);
                         } else {
                             if (addrs->sa_family == AF_INET6)
-                                edwork_send_to_sctp_socket(edwork, NULL, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in6), 0);
+                                edwork_send_to_sctp_socket(edwork, edwork->find_key(0, edwork->userdata), sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in6), 0);
                             else
                             if (addrs->sa_family == AF_INET) {
                                 log_trace("SCTP_COMM_UP (%s)", edwork_addr_ipv4(addrs));
-                                edwork_send_to_sctp_socket(edwork, NULL, sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in), 0);
+                                edwork_send_to_sctp_socket(edwork, edwork->find_key(0, edwork->userdata), sock, "helo", NULL, 0, addrs, sizeof(struct sockaddr_in), 0);
                             }
                         }
                         edwork_sctp_update_socket(edwork, sock, rcvinfo, addrs);
@@ -1737,25 +1737,43 @@ int edwork_dispatch_data(struct edwork_data *data, edwork_dispatch_callback call
         return 0;
     }
 
-    struct edfs_key_data *key_data = data->find_key(key_id, userdata);
+    struct edfs_key_data *key_data = NULL;
+    if (key_id)
+        key_data = data->find_key(key_id, userdata);
     unsigned char hmac[32];
     if (key_data)
         hmac_sha256(key_data->key_id, 32, buffer, 92, payload, size, hmac);
     if ((!key_data) || (memcmp(hmac, buffer + 92, 32))) {
         // invalid hmac
-#ifdef EDWORK_PEER_DISCOVERY_SERVICE
-        if ((memcmp(type, "disc", 4)) && (memcmp(type, "add2", 4))) {
-#endif
+        if ((!key_id) && (!memcmp(type, "ping", 4)) && (size >= sizeof(uint64_t))) {
+            int i;
+            for (i = 0; i < size; i += sizeof(uint64_t)) {
+                key_id = *(uint64_t *)(payload + i);
+                if (key_id) {
+                    key_data = data->find_key(key_id, userdata);
+                    if (key_data)
+                        break;
+                }
+            }
             if (!key_data) {
-                log_info("unknown key id %" PRIu64 " (%s)", key_id, edwork_addr_ipv4(clientaddr));
+                log_info("unknown key id 0x%" PRIx64 " (%s) in ping message", key_id, edwork_addr_ipv4(clientaddr));
                 return 0;
             }
-
-            log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
-            return 0;
+        } else {
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
-        }
+            if ((memcmp(type, "disc", 4)) && (memcmp(type, "add2", 4))) {
 #endif
+                if (!key_data) {
+                    log_info("unknown key id 0x%" PRIx64 " (%s)", key_id, edwork_addr_ipv4(clientaddr));
+                    return 0;
+                }
+
+                log_warn("HMAC verify failed for type %s (%s)", type, edwork_addr_ipv4(clientaddr));
+                return 0;
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+            }
+#endif
+        }
     }
 
     if ((callback) && (!memcmp(type, "jmbo", 4))) {

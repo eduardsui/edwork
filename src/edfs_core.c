@@ -6750,6 +6750,9 @@ struct edfs_key_data *edfs_find_key(uint64_t keyid, void *userdata) {
     if ((!edfs_context) || (!edfs_context->key_data))
         return NULL;
 
+    if (!keyid)
+        return edfs_context->primary_key;
+
     return (struct edfs_key_data *)avl_search(&edfs_context->key_tree, (void *)(uintptr_t)keyid);
 }
 
@@ -6774,7 +6777,7 @@ int edwork_load_key(struct edfs *edfs_context, const char *filename) {
         sha256(key->pubkey, 32, hash);
         key->key_id_xxh64_be = htonll(XXH64(hash, 32, 0));
 
-        if (edfs_find_key(key->key_id_xxh64_be, edfs_context)) {
+        if ((key->key_id_xxh64_be) && (edfs_find_key(key->key_id_xxh64_be, edfs_context))) {
             log_warn("already loaded key %s", key->signature);
             edfs_key_data_deinit(key);
             free(key);
@@ -6954,11 +6957,16 @@ int edwork_thread(void *userdata) {
             edfs_context->force_rebroadcast = 0;
         }
         if (time(NULL) - ping > EDWORK_PING_INTERVAL) {
+            // max 1000 keys
+            uint64_t key_buffer[1000];
+            int key_buffer_index = 0;
             key = edfs_context->key_data;
             while (key) {
-                edwork_broadcast(edwork, key, "ping", NULL, 0, 0, EDWORK_NODES, 0, 1);
+                key_buffer[key_buffer_index ++] = key->key_id_xxh64_be;
                 key = (struct edfs_key_data *)key->next_key;
             }
+            if (key_buffer_index > 0)
+                edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1);
             ping = time(NULL);
         }
 
