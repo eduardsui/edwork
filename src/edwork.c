@@ -822,8 +822,10 @@ int edwork_random_bytes(unsigned char *destination, int len) {
         return 0;
     }
 
-    fread(destination, 1, len, f);
+    int err = fread(destination, 1, len, f);
     fclose(f);
+    if (err != len)
+        return 0;
 #endif
     return 1;
 }

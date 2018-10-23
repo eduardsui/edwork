@@ -2694,6 +2694,7 @@ int edfs_data_request(struct edfs *edfs_context, uint64_t inode, uint64_t not_us
             filebuf->request_timestamp = microseconds();
         } else
             filebuf->is_sctp = request_data(edfs_context, filebuf->key, filebuf->ino, filebuf->requested_chunk, 1, 1, filebuf->proof_cache, &filebuf->proof_size, filebuf->requested_sig_hash);
+            // filebuf->is_sctp = request_data_sctp(edfs_context, filebuf->key, filebuf->ino, filebuf->requested_chunk, 1, filebuf->proof_cache, &filebuf->proof_size, filebuf->requested_sig_hash, fullpath, EDWORK_SCTP_TTL / 2 * 1000);
         filebuf->timestamp = microseconds();
     }
     return 0;

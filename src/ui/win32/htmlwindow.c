@@ -929,6 +929,7 @@ int ui_app_init(ui_trigger_event event_handler) {
 
 int ui_app_done() {
     OleUninitialize();
+    return 1;
 }
 
 void ui_app_tray_icon(const char *tooltip, char *notification_title, char *notification_text, ui_tray_event event_tray) {
