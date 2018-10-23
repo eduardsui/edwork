@@ -967,10 +967,10 @@ int main(int argc, char *argv[]) {
         edfs_set_initial_friend(edfs_context, EDFS_DEFAULT_HOST);
 #endif
     log_info("starting edfs on port %i, mount point [%s]", port, mountpoint);
+    edfs_edwork_init(edfs_context, port);
     if ((ch = fuse_mount(mountpoint, &args)) != NULL) {
         struct fuse *se;
 
-        edfs_edwork_init(edfs_context, port);
         se = fuse_new(ch, &args, &edfs_fuse, sizeof(edfs_fuse), NULL);
         if (se != NULL) {
             fuse_session = se;
@@ -1032,6 +1032,7 @@ int main(int argc, char *argv[]) {
         rmdir(mountpoint);
 #endif
     } else {
+        edfs_edwork_done(edfs_context);
         edfs_destroy_context(edfs_context);
         edfs_context = NULL;
     }
