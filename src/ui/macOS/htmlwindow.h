@@ -17,7 +17,7 @@ void ui_app_quit();
 void ui_message(const char *title, const char *body, int level);
 int ui_question(const char *title, const char *body, int level);
 void ui_js(void *wnd, const char *js);
-char *ui_call(void *wnd, const char *function);
+char *ui_call(void *wnd, const char *function, const char *arguments[]);
 void ui_free_string(void *ptr);
 void *ui_window(const char *title, const char *body);
 void ui_window_close(void *wnd);

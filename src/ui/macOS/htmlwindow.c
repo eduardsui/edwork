@@ -244,11 +244,33 @@ void ui_js(void *window, const char *js) {
         CFRelease(js_str);
 }
 
-char *ui_call(void *window, const char *js) {
+char *ui_call(void *window, const char *js, const char *arguments[]) {
     if ((!window) || (!js))
         return NULL;
     char *data = NULL;
-    CFStringRef js_str = CFStringCreateWithCString(NULL, js, kCFStringEncodingMacRoman);
+    char buffer[8192];
+    char arg_str[8192];
+    arg_str[0] = 0;
+    char *arg = arg_str;
+    int arg_size = sizeof(arg_str);
+    while ((arguments) && (*arguments)) {
+        if (arg != arg_str) {
+            arg[0] = ',';
+            arg ++;
+            arg_size --;
+        }
+        int written = snprintf(arg, arg_size, "'%s'", *arguments);
+        arguments ++;
+        if (written > 0) {
+            arg += written;
+            arg_size -= written;
+            if (arg_size <= 1)
+                break;
+        } else
+            break;
+    }
+    snprintf(buffer, sizeof(buffer), "%s(%s)", js, arg_str);
+    CFStringRef js_str = CFStringCreateWithCString(NULL, buffer, kCFStringEncodingMacRoman);
     CFStringRef str = (CFStringRef)objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("stringByEvaluatingJavaScriptFromString:"), js_str, NULL);
     if (str) {
         data = CFStringCopyUTF8String(str);

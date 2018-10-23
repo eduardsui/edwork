@@ -31,6 +31,9 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
+#ifdef __Userspace_os_Darwin
+#undef __APPLE__
+#endif
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>

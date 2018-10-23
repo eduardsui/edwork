@@ -23,13 +23,15 @@
 #ifdef __APPLE__
     #include <unistd.h>
     #include <wordexp.h>
+    #include "ui/macOS/htmlwindow.h"
+    #include "ui/edwork_settings_form.h"
 #endif
 
 #include "log.h"
 #include "edfs_core.h"
 
 static struct edfs *edfs_context;
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 static int server_pipe_is_valid = 1;
 static int reload_keys = 0;
 static int reopen_window = 0;
@@ -404,7 +406,7 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
         edfs_set_store_key(edfs_context, (const unsigned char *)storage_key, strlen(storage_key));
 }
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 void edfs_gui_load(void *window) {
     char buffer1[0x100];
     char buffer2[0x100];
@@ -429,11 +431,14 @@ void edfs_gui_load(void *window) {
             key = edfs_next_key(key);
         }
     }
+#ifdef _WIN32
     const char *arguments[] = {"true", NULL};
     if (edfs_auto_startup())
-        ui_call(window, "set_autorun", arguments); 
+        ui_call(window, "set_autorun", arguments);
+#endif
 }
 
+#ifdef _WIN32
 int edfs_notify_edwork(char *uri) {
     HANDLE hpipe = CreateFileA("\\\\.\\pipe\\edwork", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (hpipe == INVALID_HANDLE_VALUE) 
@@ -447,6 +452,7 @@ int edfs_notify_edwork(char *uri) {
 
     return 1;
 }
+#endif
 
 void edfs_gui_callback(void *window) {
     char *foo = ui_call(window, "lastevent", NULL);
@@ -505,10 +511,12 @@ void edfs_gui_callback(void *window) {
                 }
                 break;
             case 'a':
+#ifdef _WIN32
                 if (foo[1] == '1')
                     edfs_register_startup(1);
                 else
                     edfs_register_startup(0);
+#endif
                 break;
             case '?':
                 use = ui_call(window, "getpeer", NULL);
@@ -556,11 +564,12 @@ int edfs_gui_thread(void *userdata) {
         gui_window = ui_window("edwork settings", edwork_settings_form);
         edfs_gui_load(gui_window);
     }
-    ui_app_run_with_notify(edfs_gui_notify, NULL);
+    ui_app_run(edfs_gui_notify, NULL);
     ui_app_done();
     return 0;
 }
 
+#ifdef _WIN32
 HANDLE edfs_create_named_pipe() {
     HANDLE hpipe = CreateNamedPipeA("\\\\.\\pipe\\edwork", PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE |  PIPE_WAIT, PIPE_UNLIMITED_INSTANCES, 1024 * 16, 1024 * 16, 0, NULL);
     if (hpipe == INVALID_HANDLE_VALUE) {
@@ -622,12 +631,14 @@ int edfs_pipe_thread(void *userdata) {
 thread_ptr_t edfs_pipe() {
     return thread_create(edfs_pipe_thread, (void *)edfs_context, "edwork pipe", 8192 * 1024);
 }
+#endif
 
 thread_ptr_t edfs_gui(int gui_mode) {
     return thread_create(edfs_gui_thread, (void *)(intptr_t)(gui_mode == 2), "edwork gui", 8192 * 1024);
 }
 
 
+#ifdef _WIN32
 void edfs_emulate_console() {
     AllocConsole();
 
@@ -650,6 +661,7 @@ void edfs_emulate_console() {
     freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
     freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
 }
+#endif
 #endif
 
 static const char EDFS_BANNER[] =   " _______   ________  ___       __   ________  ________  ___  __       \n"
@@ -680,6 +692,7 @@ int main(int argc, char *argv[]) {
     int foreground = 1;
 #ifdef __APPLE__
     wordexp_t pathexp;
+    int gui = 0;
 #endif
 
 #ifdef _WIN32
@@ -884,10 +897,12 @@ int main(int argc, char *argv[]) {
                     edfs_set_partition_key(edfs_context, uri);
                     uri_parameters += 2;
                 } else
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
                 if (!strcmp(arg, "gui")) {
                     gui = 1;
                 } else
+#endif
+#ifdef _WIN32
                 if (!strcmp(arg, "autorun")) {
                     gui = 2;
                 } else
@@ -920,8 +935,10 @@ int main(int argc, char *argv[]) {
                         "    -dir directory     set the edfs working directory (default is ./edfs)\n"
                         "    -storagekey        set a storage key used for local encryption\n"
                         "    -uri               edfs uri (key)\n"
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
                         "    -gui               open GUI\n"
+#endif
+#ifdef _WIN32
                         "    -autorun           open in autostart mode\n"
                         "    -stop              stop other instances of the application\n"
 #endif
@@ -975,8 +992,10 @@ int main(int argc, char *argv[]) {
         if (se != NULL) {
             fuse_session = se;
             fuse_set_signal_handlers(fuse_get_session(se));
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
             thread_ptr_t gui_thread;
+#endif
+#ifdef _WIN32
             // on windows, if no parameters, detach console
             if ((!foreground) || (argc == (uri_parameters + 1)) || (gui == 2)) {
                 // FreeConsole();
@@ -996,6 +1015,10 @@ int main(int argc, char *argv[]) {
                 if (gui)
                     gui_thread = edfs_gui(gui);
                 thread_ptr_t pipe_thread = edfs_pipe();
+#endif
+#ifdef __APPLE__
+                if (gui)
+                    gui_thread = edfs_gui(gui);
 #endif
 #ifdef EDFS_MULTITHREADED
                 err = fuse_loop_mt(se);
