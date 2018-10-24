@@ -143,7 +143,7 @@ void WebView_decidePolicyFor(id self, SEL _cmd, id webView, id response, void (^
     
     if ((url) && (!strcmp(url, "ui"))) {
         if (callback_event)
-            callback_event(NULL);
+            callback_event(objc_msgSend(webView, sel_getUid("window")));
         decisionHandler(0);
         ui_free_string(url);
         return;
@@ -240,6 +240,8 @@ void ui_app_quit() {
  void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
     idle_event = event_idle;
     idle_userdata = userdata;
+
+    RunApplication();
 }
 
 void ui_app_run() {
@@ -250,9 +252,9 @@ void ui_js(void *window, const char *js) {
     if ((!window) || (!js))
         return;
     CFStringRef js_str = CFStringCreateWithCString(NULL, js, kCFStringEncodingMacRoman);
-    CFStringRef str = (CFStringRef)objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("stringByEvaluatingJavaScriptFromString:"), js_str, NULL);
-    if (str)
-        CFRelease(str);
+    
+    objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("evaluateJavaScript:completionHandler:"), js_str, NULL);
+
     if (js_str)
         CFRelease(js_str);
 }
@@ -260,6 +262,7 @@ void ui_js(void *window, const char *js) {
 char *ui_call(void *window, const char *js, const char *arguments[]) {
     if ((!window) || (!js))
         return NULL;
+
     char *data = NULL;
     char buffer[8192];
     char arg_str[8192];
@@ -288,7 +291,7 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
     if (str) {
         data = CFStringCopyUTF8String(str);
         CFRelease(str);
-    }
+    }                                                                                                                                                                                                           
     if (js_str)
         CFRelease(js_str);
 
