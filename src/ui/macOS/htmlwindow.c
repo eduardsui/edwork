@@ -65,6 +65,8 @@ void *ui_window(const char *title, const char *body) {
     id view = objc_msgSend(objc_msgSend((id)objc_getClass("WKWebView"), sel_getUid("alloc")), sel_getUid("init"));
 
     objc_msgSend(view, sel_getUid("setNavigationDelegate:"), objc_msgSend(app, sel_getUid("delegate")));
+    
+    objc_msgSend(view, sel_getUid("setAllowsBackForwardNavigationGestures:"), TRUE);
 
     if (body) {
         int len = strlen(body);
@@ -248,6 +250,10 @@ void ui_app_run() {
     RunApplication();
 }
 
+void completionHandler(id response, void *error) {
+    fprintf(stderr, "RESPONSE\n");
+}
+
 void ui_js(void *window, const char *js) {
     if ((!window) || (!js))
         return;
@@ -287,14 +293,36 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
     }
     snprintf(buffer, sizeof(buffer), "%s(%s)", js, arg_str);
     CFStringRef js_str = CFStringCreateWithCString(NULL, buffer, kCFStringEncodingMacRoman);
-    CFStringRef str = (CFStringRef)objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("stringByEvaluatingJavaScriptFromString:"), js_str, NULL);
-    if (str) {
-        data = CFStringCopyUTF8String(str);
-        CFRelease(str);
-    }                                                                                                                                                                                                           
+    // CFStringRef str = (CFStringRef)objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("stringByEvaluatingJavaScriptFromString:"), js_str, NULL);
+    // if (str) {
+    //     data = CFStringCopyUTF8String(str);
+    //     CFRelease(str);
+    // }                                                                                                                                                                                                           
+    __block int finished = 0;
+    __block char *str_data = NULL;
+    objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("evaluateJavaScript:completionHandler:"), js_str, ^(id value, void *error) {
+        // WARNING: non-standard C extension
+        if (value) {
+            const char *str = (const char *)objc_msgSend(value, sel_getUid("UTF8String"));
+            if (str) {
+                int len = strlen(str);
+                str_data = malloc(len + 1);
+                if (str_data) {
+                    memcpy(str_data, str, len);
+                    str_data[len] = 0;
+                }
+            }
+        }
+        finished = 1;
+    });
     if (js_str)
         CFRelease(js_str);
 
+    while (!finished)
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 10, 0);
+    
+    data = str_data;
+    
     return data;
 }
 
