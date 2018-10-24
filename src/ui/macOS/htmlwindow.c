@@ -68,13 +68,13 @@ void *ui_window(const char *title, const char *body) {
 
     if (body) {
         int len = strlen(body);
-        const char script = "<script>window.external={\"notify\":function(){window.location.href=\"ui:event\";}};</script>";
+        const char script[] = "<script>window.external={\"notify\":function(){window.location.href=\"ui:event\";}};</script>";
         char *body_with_script = (char *)malloc(len + sizeof(script) + 1);
         if (body_with_script) {
             memcpy(body_with_script, body, len);
             memcpy(body_with_script + len, script, sizeof(script));
             // already null terminated ... kind of useless
-            body_with_script[body_with_script + len + sizeof(script)] = 0;
+            body_with_script[len + sizeof(script)] = 0;
             CFStringRef body_str = CFStringCreateWithCString(NULL, body_with_script, kCFStringEncodingMacRoman);
 
             objc_msgSend(view, sel_getUid("loadHTMLString:baseURL:"), body_str, NULL);
