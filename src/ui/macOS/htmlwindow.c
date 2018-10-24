@@ -51,7 +51,7 @@ typedef struct AppDel {
 
 void *ui_window(const char *title, const char *body) {
     id window = objc_msgSend((id)objc_getClass("NSWindow"), sel_getUid("alloc"));
-    window = objc_msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (CMRect){0,0,800,600}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 0, false);
+    window = objc_msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (CMRect){0,0,1200,750}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 0, false);
     objc_msgSend(window, sel_getUid("center"));
 
     if (title) {
