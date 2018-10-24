@@ -564,7 +564,7 @@ int edfs_gui_thread(void *userdata) {
         gui_window = ui_window("edwork settings", edwork_settings_form);
         edfs_gui_load(gui_window);
     }
-    ui_app_run(edfs_gui_notify, NULL);
+    ui_app_run_with_notify(edfs_gui_notify, NULL);
     ui_app_done();
     return 0;
 }
