@@ -292,12 +292,7 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
             break;
     }
     snprintf(buffer, sizeof(buffer), "%s(%s)", js, arg_str);
-    CFStringRef js_str = CFStringCreateWithCString(NULL, buffer, kCFStringEncodingMacRoman);
-    // CFStringRef str = (CFStringRef)objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("stringByEvaluatingJavaScriptFromString:"), js_str, NULL);
-    // if (str) {
-    //     data = CFStringCopyUTF8String(str);
-    //     CFRelease(str);
-    // }                                                                                                                                                                                                           
+    CFStringRef js_str = CFStringCreateWithCString(NULL, buffer, kCFStringEncodingMacRoman);                                                                                                                                                                                                       
     __block int finished = 0;
     __block char *str_data = NULL;
     objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("evaluateJavaScript:completionHandler:"), js_str, ^(id value, void *error) {
