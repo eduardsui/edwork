@@ -24,4 +24,7 @@ void ui_window_close(void *wnd);
 void ui_window_set_content(void *wnd, const char *body);
 int ui_window_count();
 
+void ui_lock();
+void ui_unlock();
+
 #endif

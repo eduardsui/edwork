@@ -19,6 +19,7 @@ static void *idle_userdata = NULL;
 static ui_trigger_event callback_event = NULL;
 static int window_count = 0;
 static int content_set = 0;
+static int gui_lock = 0;
 
 enum {
     NSBorderlessWindowMask      = 0,
@@ -66,12 +67,23 @@ void *ui_window(const char *title, const char *body) {
     objc_msgSend(view, sel_getUid("setNavigationDelegate:"), objc_msgSend(app, sel_getUid("delegate")));
 
     if (body) {
-        CFStringRef body_str = CFStringCreateWithCString(NULL, body, kCFStringEncodingMacRoman);
+        int len = strlen(body);
+        const char script = "<script>window.external={\"notify\":function(){window.location.href=\"ui:event\";}};</script>";
+        char *body_with_script = (char *)malloc(len + sizeof(script) + 1);
+        if (body_with_script) {
+            memcpy(body_with_script, body, len);
+            memcpy(body_with_script + len, script, sizeof(script));
+            // already null terminated ... kind of useless
+            body_with_script[body_with_script + len + sizeof(script)] = 0;
+            CFStringRef body_str = CFStringCreateWithCString(NULL, body_with_script, kCFStringEncodingMacRoman);
 
-        objc_msgSend(view, sel_getUid("loadHTMLString:baseURL:"), body_str, NULL);
-        content_set ++;
-        if (body_str)
-            CFRelease(body_str);
+            objc_msgSend(view, sel_getUid("loadHTMLString:baseURL:"), body_str, NULL);
+            content_set ++;
+            if (body_str)
+                CFRelease(body_str);
+
+            free(body_with_script);
+        }
     }
     objc_msgSend(window, sel_getUid("setContentView:"), view);
     objc_msgSend(window, sel_getUid("becomeFirstResponder"));
@@ -107,8 +119,9 @@ BOOL AppDel_didFinishLaunching(AppDelegate *self, SEL _cmd, id notification) {
 }
 
 void windowWillClose(id self, SEL _sel, id notification) {
-    window_count --;
-    if (window_count <= 0)
+    if (window_count)
+        window_count --;
+    if ((window_count <= 0) && (!gui_lock))
         ui_app_quit();
 }
 
@@ -297,4 +310,13 @@ void ui_free_string(void *ptr) {
 
 int ui_window_count() {
     return window_count;
+}
+
+void ui_lock() { 
+    gui_lock ++;
+}
+
+void ui_unlock() {
+    if (gui_lock)
+        gui_lock --;
 }

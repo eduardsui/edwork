@@ -16,6 +16,7 @@ static const SAFEARRAYBOUND ArrayBound = {1, 0};
 static ui_trigger_event callback_event;
 static ui_tray_event event_tray_event;
 static NOTIFYICONDATA tray_icon; 
+static int gui_lock = 0;
 
 HRESULT STDMETHODCALLTYPE Storage_QueryInterface(IStorage FAR* This, REFIID riid, LPVOID FAR* ppvObj);
 ULONG STDMETHODCALLTYPE Storage_AddRef(IStorage FAR* This);
@@ -856,8 +857,9 @@ LRESULT CALLBACK MenuWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             return 0;
 
         case WM_DESTROY:
-            WindowCount --;
-            if (!WindowCount)
+            if (WindowCount)
+                WindowCount --;
+            if ((!WindowCount) && (!gui_lock))
                 PostQuitMessage(0);
             return 1;
 
@@ -884,9 +886,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return 0;
         case WM_DESTROY:
             UnEmbedBrowserObject(hwnd);
-            WindowCount --;
+            if (WindowCount)
+                WindowCount --;
 
-            if (!WindowCount)
+            if ((!WindowCount) && (!gui_lock))
                 PostQuitMessage(0);
 
             return 1;
@@ -1213,4 +1216,13 @@ void *ui_window(const char *title, const char *body) {
         return hwnd;
     }
     return NULL;
+}
+
+void ui_lock() { 
+    gui_lock ++;
+}
+
+void ui_unlock() {
+    if (gui_lock)
+        gui_lock --;
 }
