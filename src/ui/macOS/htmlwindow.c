@@ -297,7 +297,7 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
     __block char *str_data = NULL;
     objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("evaluateJavaScript:completionHandler:"), js_str, ^(id value, void *error) {
         // WARNING: non-standard C extension
-        if (value) {
+        if ((value) && (!finished)) {
             const char *str = (const char *)objc_msgSend(value, sel_getUid("UTF8String"));
             if (str) {
                 int len = strlen(str);
@@ -315,7 +315,7 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
 
     while (!finished)
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 10, 0);
-    
+    finished = 1;
     data = str_data;
     
     return data;
