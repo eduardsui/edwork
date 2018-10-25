@@ -569,6 +569,22 @@ int edfs_gui_thread(void *userdata) {
     return 0;
 }
 
+int edfs_fuse_thread(void *userdata) {
+    if (!userdata)
+        return 0;
+    int err;
+#ifdef EDFS_MULTITHREADED
+    err = fuse_loop_mt((struct fuse *)userdata);
+#else
+    err = fuse_loop((struct fuse *)userdata);
+#endif
+    return err;
+}
+
+thread_ptr_t edfs_fuse_loop(struct fuse *se) {
+    return thread_create(edfs_fuse_thread, (void *)se, "edwork fuse", 8192 * 1024);
+}
+
 #ifdef _WIN32
 HANDLE edfs_create_named_pipe() {
     HANDLE hpipe = CreateNamedPipeA("\\\\.\\pipe\\edwork", PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE |  PIPE_WAIT, PIPE_UNLIMITED_INSTANCES, 1024 * 16, 1024 * 16, 0, NULL);
@@ -992,10 +1008,8 @@ int main(int argc, char *argv[]) {
         if (se != NULL) {
             fuse_session = se;
             fuse_set_signal_handlers(fuse_get_session(se));
-#if defined(_WIN32) || defined(__APPLE__)
-            thread_ptr_t gui_thread;
-#endif
 #ifdef _WIN32
+            thread_ptr_t gui_thread;
             // on windows, if no parameters, detach console
             if ((!foreground) || (argc == (uri_parameters + 1)) || (gui == 2)) {
                 // FreeConsole();
@@ -1017,8 +1031,15 @@ int main(int argc, char *argv[]) {
                 thread_ptr_t pipe_thread = edfs_pipe();
 #endif
 #ifdef __APPLE__
-                if (gui)
-                    gui_thread = edfs_gui(gui);
+                if (gui) {
+                    // Cocoa loop must be in the main thread, so move fuse loop into another thread
+                    thread_ptr_t fuse_thread = edfs_fuse_loop(se);
+                    ui_lock();
+                    edfs_gui_thread(NULL);
+                    ui_unlock();
+                    thread_join(fuse_thread);
+                    thread_destroy(fuse_thread);
+                } else
 #endif
 #ifdef EDFS_MULTITHREADED
                 err = fuse_loop_mt(se);
