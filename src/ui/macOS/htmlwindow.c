@@ -250,10 +250,6 @@ void ui_app_run() {
     RunApplication();
 }
 
-void completionHandler(id response, void *error) {
-    fprintf(stderr, "RESPONSE\n");
-}
-
 void ui_js(void *window, const char *js) {
     if ((!window) || (!js))
         return;
@@ -281,7 +277,34 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
             arg ++;
             arg_size --;
         }
-        int written = snprintf(arg, arg_size, "'%s'", *arguments);
+        int len = strlen(*arguments);
+        int i;
+        int bi = 0;
+        for (i = 0; i < len; i++) {
+            char e = (*arguments)[i];
+            switch (e) {
+                case '\r':
+                    buffer[bi ++] = '\\';
+                    buffer[bi ++] = 'r';
+                    break;
+                case '\n':
+                    buffer[bi ++] = '\\';
+                    buffer[bi ++] = 'n';
+                    break;
+                case '\'':
+                    buffer[bi ++] = '\\';
+                    buffer[bi ++] = '\'';
+                    break;
+                case '\\':
+                    buffer[bi ++] = '\\';
+                    buffer[bi ++] = '\\';
+                    break;
+                default:
+                    buffer[bi ++] = e;
+            }
+        }
+        buffer[bi] = 0;
+        int written = snprintf(arg, arg_size, "'%s'", buffer);
         arguments ++;
         if (written > 0) {
             arg += written;
