@@ -337,7 +337,7 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
         CFRelease(js_str);
 
     while (!finished)
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 10, 0);
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, 0);
     finished = 1;
     data = str_data;
     
