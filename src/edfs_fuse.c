@@ -578,6 +578,7 @@ int edfs_fuse_thread(void *userdata) {
 #else
     err = fuse_loop((struct fuse *)userdata);
 #endif
+    ui_app_quit();
     return err;
 }
 
@@ -1034,7 +1035,9 @@ int main(int argc, char *argv[]) {
                 if (gui) {
                     // Cocoa loop must be in the main thread, so move fuse loop into another thread
                     thread_ptr_t fuse_thread = edfs_fuse_loop(se);
+                    ui_lock();
                     edfs_gui_thread(NULL);
+                    ui_unlock();
                     if (fuse_session)
                         fuse_exit(se);
                     thread_join(fuse_thread);
