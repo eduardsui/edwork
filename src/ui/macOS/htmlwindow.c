@@ -4,7 +4,7 @@
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <objc/NSObjCRuntime.h>
-#include "htmlwindow.h"
+#include "../htmlwindow.h"
 
 int NSRunAlertPanel(CFStringRef strTitle, CFStringRef strMsg, CFStringRef strButton1, CFStringRef strButton2, CFStringRef strButton3, ...);
 
@@ -117,21 +117,21 @@ void ui_window_close(void *window) {
     objc_msgSend(window, sel_getUid("close"));
 }
 
-void ui_window_maximize(void *wnd) {
+void ui_window_maximize(void *window) {
     if (!window)
         return;
 
     objc_msgSend(window, sel_getUid("performZoom:"), NULL);
 }
 
-void ui_window_minimize(void *wnd) {
+void ui_window_minimize(void *window) {
     if (!window)
         return;
 
     objc_msgSend(window, sel_getUid("miniaturize:"), NULL);
 }
 
-void ui_window_restore(void *wnd) {
+void ui_window_restore(void *window) {
     if (!window)
         return;
 
