@@ -17,6 +17,8 @@ static ui_trigger_event callback_event;
 static ui_tray_event event_tray_event;
 static NOTIFYICONDATA tray_icon; 
 static int gui_lock = 0;
+static ui_event ui_callbacks[UI_EVENTS];
+static void *ui_data[UI_EVENTS];
 
 HRESULT STDMETHODCALLTYPE Storage_QueryInterface(IStorage FAR* This, REFIID riid, LPVOID FAR* ppvObj);
 ULONG STDMETHODCALLTYPE Storage_AddRef(IStorage FAR* This);
@@ -883,15 +885,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             if (EmbedBrowserObject(hwnd))
                 return -1;
             WindowCount ++;
+            if (ui_callbacks[UI_EVENT_WINDOW_CREATE])
+                ui_callbacks[UI_EVENT_WINDOW_CREATE](hwnd, ui_data[UI_EVENT_WINDOW_CREATE]);
             return 0;
         case WM_DESTROY:
+            if (ui_callbacks[UI_EVENT_WINDOW_CLOSE])
+                ui_callbacks[UI_EVENT_WINDOW_CLOSE](hwnd, ui_data[UI_EVENT_WINDOW_CLOSE]);
             UnEmbedBrowserObject(hwnd);
             if (WindowCount)
                 WindowCount --;
 
             if ((!WindowCount) && (!gui_lock))
                 PostQuitMessage(0);
-
             return 1;
         case WM_SIZE:
             WindowResize(hwnd, LOWORD(lParam), HIWORD(lParam));
@@ -985,6 +990,14 @@ void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT timerId, DWORD dwTime) {
     // nothing
 }
 
+void ui_set_event(int eid, ui_event callback, void *event_userdata) {
+    if ((eid < 0) || (eid >= UI_EVENTS))
+        return;
+
+    ui_callbacks[eid] = callback;
+    ui_data[eid] = event_userdata;
+}
+
 void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
     MSG msg;
     SetTimer(NULL, 0, 1000, (TIMERPROC)TimerProc);
@@ -996,6 +1009,9 @@ void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
     }
     KillTimer(NULL, 0);
     ui_app_tray_remove();
+
+    if (ui_callbacks[UI_EVENT_LOOP_EXIT])
+        ui_callbacks[UI_EVENT_LOOP_EXIT](NULL, ui_data[UI_EVENT_LOOP_EXIT]);
 }
 
 void ui_app_run() {
@@ -1109,6 +1125,21 @@ int ui_window_count() {
 void ui_window_close(void *wnd) {
     if (wnd)
         PostMessage((HWND)wnd, WM_CLOSE, 0, 0);
+}
+
+void ui_window_maximize(void *wnd) {
+    if (wnd)
+        ShowWindow((HWND)wnd, SW_MAXIMIZE);
+}
+
+void ui_window_minimize(void *wnd) {
+    if (wnd)
+        ShowWindow((HWND)wnd, SW_MINIMIZE);
+}
+
+void ui_window_restore(void *wnd) {
+    if (wnd)
+        ShowWindow((HWND)wnd, SW_RESTORE);
 }
 
 char *ui_call(void *wnd, const char *function, const char *arguments[]) {

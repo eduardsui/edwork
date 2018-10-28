@@ -11,7 +11,7 @@
     #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
         #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
     #endif
-    #include "ui/win32/htmlwindow.h"
+    #include "ui/htmlwindow.h"
     #include "ui/edwork_settings_form.h"
 #ifndef HAVE_TIMESPEC
     struct timespec {
@@ -23,7 +23,7 @@
 #ifdef __APPLE__
     #include <unistd.h>
     #include <wordexp.h>
-    #include "ui/macOS/htmlwindow.h"
+    #include "ui/htmlwindow.h"
     #include "ui/edwork_settings_form.h"
 #endif
 

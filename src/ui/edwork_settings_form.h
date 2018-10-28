@@ -98,7 +98,7 @@ static const char *edwork_settings_form =
 #ifdef __APPLE__
     "         html += \"Partition is <b>writeable</b> at address<br/><span class=\\\"color-dark\\\">edwork:\" + privkey + \"</span> <a href='#' onclick='window.Clipboard.copy(\\\"edwork:\" + privkey + \"\\\"); event.preventDefault(); return false;'>(copy)</a><br/>\";\n"
 #else
-    "         html += \"Partition is <b>writeable</b> at address<br/><span class=\\\"color-dark\\\">edwork:\" + privkey + \"</span> <a href='#' onclick='window.clipboardData.setData(\\\"text/plain\\\", \\\"edwork:\" + privkey + \"\\\"); event.preventDefault(); return false;'>(copy)</a><br/>\";\n"
+    "         html += \"Partition is <b>writeable</b> at address<br/><span class=\\\"color-dark\\\">edwork:\" + privkey + \"</span> <a href='#' onclick='window.clipboardData.setData(\\\"Text\\\", \\\"edwork:\" + privkey + \"\\\"); event.preventDefault(); return false;'>(copy)</a><br/>\";\n"
 #endif
     "      } else\n"
     "         html += \"<dt><h3 class=\\\"subtitle subtitle--xl\\\">\" + keyid + \" (read-only)</h3></dt><dd style='margin-bottom: 20px'>\";\n"
@@ -106,7 +106,7 @@ static const char *edwork_settings_form =
 #ifdef __APPLE__
     "         html += \"Read-only access at<br/><span class=\\\"color-dark\\\">edwork:\" + pubkey + \"</span> <a href='#' onclick='window.Clipboard.copy(\\\"edwork:\" + pubkey + \"\\\"); event.preventDefault(); return false;'>(copy)</a><br/>\";\n"
 #else
-    "         html += \"Read-only access at<br/><span class=\\\"color-dark\\\">edwork:\" + pubkey + \"</span> <a href='#' onclick='window.clipboardData.setData(\\\"text/plain\\\", \\\"edwork:\" + pubkey + \"\\\"); event.preventDefault(); return false;'>(copy)</a><br/>\";\n"
+    "         html += \"Read-only access at<br/><span class=\\\"color-dark\\\">edwork:\" + pubkey + \"</span> <a href='#' onclick='window.clipboardData.setData(\\\"Text\\\", \\\"edwork:\" + pubkey + \"\\\"); event.preventDefault(); return false;'>(copy)</a><br/>\";\n"
 #endif
     "      html += \"<span id=\\\"storage_usage_\" + keyid + \"\\\" class=\\\"color-darkest\\\"></span>\";\n"
     "      if ((!is_primary_partition) && (!is_primary_partition.length))\n"

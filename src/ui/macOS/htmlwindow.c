@@ -20,6 +20,8 @@ static ui_trigger_event callback_event = NULL;
 static int window_count = 0;
 static int content_set = 0;
 static int gui_lock = 0;
+static ui_event ui_callbacks[UI_EVENTS];
+static void *ui_data[UI_EVENTS];
 
 enum {
     NSBorderlessWindowMask      = 0,
@@ -92,6 +94,10 @@ void *ui_window(const char *title, const char *body) {
     objc_msgSend(window, sel_getUid("makeKeyAndOrderFront:"), objc_msgSend(app, sel_getUid("delegate")));
 
     window_count ++;
+
+    if (ui_callbacks[UI_EVENT_WINDOW_CREATE])
+        ui_callbacks[UI_EVENT_WINDOW_CREATE](window, ui_data[UI_EVENT_WINDOW_CREATE]);
+
     return window;
 }
 
@@ -107,7 +113,29 @@ void ui_window_set_content(void *window, const char *body) {
 void ui_window_close(void *window) {
     if (!window)
         return;
+
     objc_msgSend(window, sel_getUid("close"));
+}
+
+void ui_window_maximize(void *wnd) {
+    if (!window)
+        return;
+
+    objc_msgSend(window, sel_getUid("performZoom:"), NULL);
+}
+
+void ui_window_minimize(void *wnd) {
+    if (!window)
+        return;
+
+    objc_msgSend(window, sel_getUid("miniaturize:"), NULL);
+}
+
+void ui_window_restore(void *wnd) {
+    if (!window)
+        return;
+
+    objc_msgSend(window, sel_getUid("deminiaturize:"), NULL);
 }
 
 BOOL AppDel_applicationDidUpdate(AppDelegate *self, SEL _cmd, id notification) {
@@ -120,7 +148,15 @@ BOOL AppDel_didFinishLaunching(AppDelegate *self, SEL _cmd, id notification) {
     return YES;
 }
 
+BOOL AppDel_willTerminate(AppDelegate *self, SEL _cmd, id notification) {
+    if (ui_callbacks[UI_EVENT_LOOP_EXIT])
+        ui_callbacks[UI_EVENT_LOOP_EXIT](NULL, ui_data[UI_EVENT_LOOP_EXIT]);
+    return YES;
+}
+
 void windowWillClose(id self, SEL _sel, id notification) {
+    if (ui_callbacks[UI_EVENT_WINDOW_CLOSE])
+        ui_callbacks[UI_EVENT_WINDOW_CLOSE](self, ui_data[UI_EVENT_WINDOW_CLOSE]);
     if (window_count)
         window_count --;
     if ((window_count <= 0) && (!gui_lock))
@@ -158,6 +194,7 @@ void WebView_decidePolicyFor(id self, SEL _cmd, id webView, id response, void (^
 static void CreateAppDelegate() {
     AppDelClass = objc_allocateClassPair((Class)objc_getClass("NSObject"), "AppDelegate", 0);
     class_addMethod(AppDelClass, sel_getUid("applicationDidFinishLaunching:"), (IMP)AppDel_didFinishLaunching, "i@:@");
+    class_addMethod(AppDelClass, sel_getUid("applicationWillTerminate:"), (IMP)AppDel_willTerminate, "i@:@");
     class_addMethod(AppDelClass, sel_getUid("applicationDidUpdate:"), (IMP)AppDel_applicationDidUpdate, "i@:@");
     Protocol *protocol = objc_getProtocol("WKNavigationDelegate");
     assert(protocol);
@@ -237,6 +274,14 @@ int ui_question(const char *title, const char *body, int level) {
 void ui_app_quit() {
     if (app)
         objc_msgSend(app, sel_getUid("terminate:"), NULL);
+}
+
+void ui_set_event(int eid, ui_event callback, void *event_userdata) {
+    if ((eid < 0) || (eid >= UI_EVENTS))
+        return;
+
+    ui_callbacks[eid] = callback;
+    ui_data[eid] = event_userdata;
 }
 
  void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
