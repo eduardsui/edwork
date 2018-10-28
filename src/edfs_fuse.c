@@ -679,6 +679,12 @@ void edfs_emulate_console() {
     freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
 }
 #endif
+
+#ifdef __APPLE__
+void edfs_quit(void *event_data, void *user_data) {
+    // to do
+}
+#endif
 #endif
 
 static const char EDFS_BANNER[] =   " _______   ________  ___       __   ________  ________  ___  __       \n"
@@ -1035,6 +1041,7 @@ int main(int argc, char *argv[]) {
                 if (gui) {
                     // Cocoa loop must be in the main thread, so move fuse loop into another thread
                     thread_ptr_t fuse_thread = edfs_fuse_loop(se);
+                    ui_set_event(UI_EVENT_LOOP_EXIT, edfs_quit, se);
                     ui_lock();
                     edfs_gui_thread(NULL);
                     ui_unlock();
