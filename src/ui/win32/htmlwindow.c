@@ -6,7 +6,7 @@
 #include <mshtmhst.h>
 #include <crtdbg.h>
 
-#include "htmlwindow.h"
+#include "../htmlwindow.h"
 #include "resource.h"
 
 
