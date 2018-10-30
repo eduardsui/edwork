@@ -488,13 +488,17 @@ void edfs_gui_callback(void *window) {
             case '*':
                 edfs_storage_info(edfs_context, foo + 1, &size, &files, &directories, &index, &timestamp);
 
-                char buf[0x1000];
+                char buf[0xF000];
+                int buf_offset = 0;
                 if ((index) && (timestamp)) {
                     time_t timestamp_32bit = (time_t)(timestamp / 1000000ULL);
                     struct tm *blocktimestamp = gmtime(&timestamp_32bit);
-                    snprintf(buf, sizeof(buf), " %.3f GB in %" PRIu64 " files and %" PRIu64 " directories, blockchain has %" PRIu64 " blocks, last block was created on %s UTC", (double)size / (1024 * 1024 * 1024), files, directories, index, asctime(blocktimestamp));
+                    buf_offset = snprintf(buf, sizeof(buf), " <b>%.3fGB</b> in %" PRIu64 " files and %" PRIu64 " directories, blockchain has %" PRIu64 " blocks, last block was created on %s UTC<br/><br/>Recent peers:<br/>", (double)size / (1024 * 1024 * 1024), files, directories, index, asctime(blocktimestamp));
                 } else
-                    snprintf(buf, sizeof(buf), " %.3f GB in %" PRIu64 " files and %" PRIu64 " directories", (double)size / (1024 * 1024 * 1024), files, directories);
+                    buf_offset = snprintf(buf, sizeof(buf), " <b>%.3fGB</b> in %" PRIu64 " files and %" PRIu64 " directories<br/><br/>Recent peers:<br/>", (double)size / (1024 * 1024 * 1024), files, directories);
+
+                if (buf_offset > 0)
+                    edfs_peers_info(edfs_context, buf + buf_offset, sizeof(buf) - buf_offset, 1);
                 const char *arg[] = { foo + 1, buf, NULL };
                 ui_call(window, "filesystem_usage", arg);
                 break;

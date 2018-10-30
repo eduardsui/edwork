@@ -28,7 +28,7 @@ int edwork_random_bytes(unsigned char *destination, int len);
 
 struct edwork_data *edwork_create(int port, edwork_find_key_callback key_callback);
 void edwork_confirm_seq(struct edwork_data *data, struct edfs_key_data *key, uint64_t sequence, int acks);
-void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp, unsigned short encapsulation_port);
+void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp, unsigned short encapsulation_port, time_t timestamp);
 int edworks_data_pending(struct edwork_data* data, int timeout_ms);
 int edwork_dispatch(struct edwork_data* data, edwork_dispatch_callback callback, int timeout_ms, void *userdata);
 int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback callback, unsigned char *buffer, int n, void *clientaddr, int clientaddrlen, void *userdata, int is_sctp, int is_listen_socket);
@@ -37,7 +37,8 @@ int edwork_broadcast(struct edwork_data *data, struct edfs_key_data *key, const 
 int edwork_broadcast_client(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, const void *clientaddr, int clientaddr_len);
 int edwork_broadcast_except(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino);
 unsigned int edwork_rebroadcast(struct edwork_data *data, struct edfs_key_data *key, unsigned int max_count, unsigned int offset);
-int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_size, unsigned int offset, time_t threshold);
+int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_size, unsigned int offset, time_t threshold, int with_timestamp);
+int edwork_debug_node_list(struct edwork_data *data, char *buf, int buf_size, unsigned int offset, time_t threshold, int html);
 int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int buf_size);
 void *edwork_ensure_node_in_list(struct edwork_data *data, void *clientaddr, int clientaddrlen, int is_sctp, int is_listen_socket);
 int edwork_get_info(void *clientinfo, uint64_t *last_ino, uint64_t *last_chunk, uint64_t *last_msg_timestamp);

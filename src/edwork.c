@@ -1015,7 +1015,7 @@ struct edwork_data *edwork_create(int port, edwork_find_key_callback find_key) {
     thread_mutex_init(&data->thread_lock);
 #endif
     thread_mutex_init(&data->callback_lock);
-    edwork_add_node(data, "255.255.255.255", port, 0, 0, 0);
+    edwork_add_node(data, "255.255.255.255", port, 0, 0, 0, 0);
 
     return data;
 }
@@ -1219,9 +1219,13 @@ int edwork_send_to_sctp_socket(struct edwork_data *data, struct edfs_key_data *k
 }
 #endif
 
-void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len, int update_seen, int return_old_peer, int is_sctp, int is_listen_socket, unsigned short encapsulation_port, int is_callback) {
+void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len, int update_seen, int return_old_peer, int is_sctp, int is_listen_socket, unsigned short encapsulation_port, int is_callback, time_t timestamp) {
     if ((!sin) || (client_len <= 0) || (sin->sin_addr.s_addr == 0) || (sin->sin_port == 0))
         return 0;
+
+    time_t now = time(NULL);
+    if ((timestamp) && (timestamp > now))
+        timestamp = now;
 
     thread_mutex_lock(&data->clients_lock);
     struct client_data *peer = NULL;
@@ -1230,16 +1234,21 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         peer = &data->clients[data_index - 1];
 
     if (peer) {
-        if (update_seen)
-            peer->last_seen = time(NULL);
+        if (update_seen) {
+            if ((timestamp) && (peer->last_seen < timestamp))
+                peer->last_seen = timestamp;
+            else
+                peer->last_seen = time(NULL);
+        }
         // opt in or out sctp
 #ifdef WITH_SCTP
         if (data_index != 1) {
             if (data->force_sctp)
                 peer->is_sctp = 1;
             if ((is_sctp & 1) && ((is_listen_socket) || (is_callback))) {
-                peer->sctp_timestamp = time(NULL);
-                data->sctp_timestamp = peer->sctp_timestamp;
+                peer->sctp_timestamp = timestamp ? timestamp : time(NULL);
+                if (data->sctp_timestamp < peer->sctp_timestamp)
+                    data->sctp_timestamp = peer->sctp_timestamp;
             }
             if (is_sctp & 1) {
                 peer->sctp_socket |= 1;
@@ -1268,7 +1277,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     data->clients[data->clients_count].last_ino = 0;
     data->clients[data->clients_count].last_chunk = 0;
     data->clients[data->clients_count].last_msg_timestamp = 0;
-    data->clients[data->clients_count].last_seen = time(NULL);
+    data->clients[data->clients_count].last_seen = timestamp ? timestamp : time(NULL);
     if (is_listen_socket)
         data->clients[data->clients_count].is_listen_socket = 1;
     else
@@ -1296,8 +1305,9 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     else
         data->clients[data->clients_count].is_sctp = ((is_listen_socket) || (is_callback)) ? is_sctp : 0;
     if ((is_sctp & 1) && ((is_listen_socket) || (is_callback))) {
-        data->clients[data->clients_count].sctp_timestamp = time(NULL);
-        data->sctp_timestamp = data->clients[data->clients_count].sctp_timestamp;
+        data->clients[data->clients_count].sctp_timestamp = timestamp ? timestamp : time(NULL);
+        if (data->sctp_timestamp < data->clients[data->clients_count].sctp_timestamp)
+            data->sctp_timestamp = data->clients[data->clients_count].sctp_timestamp;
     } else
         data->clients[data->clients_count].sctp_timestamp = 0;
     data->clients[data->clients_count].encapsulation_port = encapsulation_port;
@@ -1327,7 +1337,7 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
         if (!encapsulation_port)
             encapsulation_port = edword_sctp_get_remote_encapsulation_port(data->sctp_socket, NULL, (struct sockaddr *)sin);
 
-        add_node(data, (struct sockaddr_in *)&addr2, sizeof(struct sockaddr_in), 0, 0, is_sctp, 0, encapsulation_port, 0);
+        add_node(data, (struct sockaddr_in *)&addr2, sizeof(struct sockaddr_in), 0, 0, is_sctp, 0, encapsulation_port, 0, timestamp ? timestamp : 0);
     }
 #endif
     return &data->clients[data->clients_count - 1];
@@ -1337,10 +1347,10 @@ void *edwork_ensure_node_in_list(struct edwork_data *data, void *clientaddr, int
     if ((!data) || (!clientaddr) || (!clientaddrlen))
         return 0;
 
-    return add_node(data, (struct sockaddr_in *)clientaddr, clientaddrlen, 1, 1, is_sctp, is_listen_socket, 0, 1);
+    return add_node(data, (struct sockaddr_in *)clientaddr, clientaddrlen, 1, 1, is_sctp, is_listen_socket, 0, 1, 0);
 }
 
-void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp_socket, unsigned short encapsulation_port) {
+void edwork_add_node(struct edwork_data *data, const char *node, int port, int is_listen_socket, int sctp_socket, unsigned short encapsulation_port, time_t timestamp) {
     struct sockaddr_in sin;
     struct hostent     *hp;
 
@@ -1359,11 +1369,18 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port, int i
     sin.sin_len         = sizeof(sin);
 #endif
 
-    if (add_node(data, &sin, sizeof(sin), 0, 0, sctp_socket, is_listen_socket, encapsulation_port, 0)) {
+    if (add_node(data, &sin, sizeof(sin), 0, 0, sctp_socket, is_listen_socket, encapsulation_port, 0, timestamp)) {
         if (sctp_socket & 1) {
-            log_info("added stateful node %s:%i (encapsulation port %i)", node, port, (int)encapsulation_port);
-        } else
-            log_info("added node %s:%i", node, port);
+            if (timestamp)
+                log_info("added stateful node %s:%i (encapsulation port %i), seen %i seconds ago", node, port, (int)encapsulation_port, (int)(timestamp - time(NULL)));
+            else
+                log_info("added stateful node %s:%i (encapsulation port %i)", node, port, (int)encapsulation_port);
+        } else {
+            if (timestamp)
+                log_info("added node %s:%i, seen %i seconds ago", node, port, (int)(timestamp - time(NULL)));
+            else
+                log_info("added node %s:%i", node, port);
+        }
     }
 }
 
@@ -1860,7 +1877,7 @@ int edwork_dispatch(struct edwork_data *data, edwork_dispatch_callback callback,
     return 1;
 }
 
-int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_size, unsigned int offset, time_t threshold) {
+int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_size, unsigned int offset, time_t threshold, int with_timestamp) {
     if (!data)
         return -1;
 
@@ -1870,8 +1887,10 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     thread_mutex_lock(&data->clients_lock);
     unsigned int found = 0;
     unsigned short port;
+    time_t now = time(NULL);
+    int buffer_size = 0;
     for (i = 0; i < data->clients_count; i++) {
-        if (*buf_size < 8)
+        if (*buf_size < 14)
             break;
 #if defined(WITH_SCTP) && defined(SCTP_UDP_ENCAPSULATION)
         if ((!data->force_sctp) && (data->clients[i].is_sctp))
@@ -1883,12 +1902,18 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
 #ifdef WITH_SCTP
                 if (data->clients[i].sctp_socket) {
                     if (data->clients[i].encapsulation_port)
-                        *buf ++ = 9;
+                        *buf = 9;
                     else
-                        *buf ++ = 7;
+                        *buf = 7;
                 } else
 #endif
-                    *buf ++ = 6;
+                    *buf = 6;
+                if (with_timestamp)
+                    *buf += 4;
+
+                buffer_size += *buf;
+                buf ++;
+
                 memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
                 buf += 4;
                 if (data->clients[i].is_listen_socket) {
@@ -1910,12 +1935,18 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
                 } else
 #endif
                     *buf_size -= 7;
+                if (with_timestamp) {
+                    time_t delta_time = htonl(now - data->clients[i].last_seen);
+                    memcpy(buf, &delta_time, 4);
+                    buf += 4;
+                    *buf_size -= 4;
+                }
             }
             found ++;
         }
     }
     thread_mutex_unlock(&data->clients_lock);
-    *buf_size = records * 7;
+    *buf_size = buffer_size;
     return records;
 }
 
@@ -1925,13 +1956,15 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
 
     int records = 0;
     char buffer[32];
+    time_t now = time(NULL);
     while (buf_size >= 7) {
         int size = *buf ++;
+        time_t timestamp = 0;
         buf_size --;
         if ((size > buf_size) || (!size))
             break;
 
-        if ((size == 6) || (size == 7) || (size == 9)) {
+        if ((size == 6) || (size == 7) || (size == 9) || (size == 10) || (size == 11) || (size == 13)) {
             // ipv4
             buffer[0] = 0;
             snprintf(buffer, sizeof(buffer), "%i.%i.%i.%i", (int)buf[0], (int)buf[1], (int)buf[2], (int)buf[3]);
@@ -1941,9 +1974,9 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
             memcpy(&port, buf + 4, 2);
             port = ntohs(port);
             int sctp = 0;
-            if (size >= 7) {
+            if ((size >= 7) && (size != 10)) {
                 sctp = buf[6];
-                if (size == 9) {
+                if ((size == 9) || (size == 13)) {
                     memcpy(&encapsulation_port, buf + 7, 2);
                     encapsulation_port = ntohs(encapsulation_port);
                     // ignore port for SCTP encapsulated traffic
@@ -1951,8 +1984,14 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
                         port = data->default_port;
                 }
             }
+            if (size >= 10) {
+                memcpy(&timestamp, buf + size - 4, 4);
+                timestamp = now + ntohl(timestamp);
+                if (timestamp < 0)
+                    timestamp = 0;
+            }
 
-            edwork_add_node(data, buffer, port, 0, sctp, encapsulation_port);
+            edwork_add_node(data, buffer, port, 0, sctp, encapsulation_port, timestamp);
             records ++;
         } else
             log_warn("invalid record size (%i)", size);
@@ -1960,6 +1999,57 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
         buf_size -= size;
         buf += size;
     }
+    return records;
+}
+
+int edwork_debug_node_list(struct edwork_data *data, char *buf, int buf_size, unsigned int offset, time_t threshold, int html) {
+    if (!data)
+        return -1;
+
+    int records = 0;
+    unsigned int i;
+    // active in last 72 hours
+    thread_mutex_lock(&data->clients_lock);
+    unsigned int found = 0;
+    unsigned short port;
+    time_t now = time(NULL);
+    static const char text_prefix[] = "\n";
+    static const char html_prefix[] = "\n<br/>";
+
+    const char *prefix = text_prefix;
+    if (html)
+        prefix = html_prefix;
+    for (i = 0; i < data->clients_count; i++) {
+        if (buf_size < 14)
+            break;
+
+        if (data->clients[i].last_seen >= threshold) {
+            if (found >= offset) {
+                records ++;
+                time_t delta_time = now - data->clients[i].last_seen;
+                if (records > 1) {
+                    buf[0] = ',';
+                    buf[1] = ' ';
+                    buf += 2;
+                    buf_size -= 2;
+                }
+                int written;
+#ifdef WITH_SCTP
+                if (data->clients[i].sctp_socket)
+                    written = snprintf(buf, buf_size, "%ssctp://%s, %i seconds ago", prefix, edwork_addr_ipv4(&data->clients[i].clientaddr), (int)delta_time);
+                else
+#endif
+                    written = snprintf(buf, buf_size, "%sudp://%s, %i seconds ago", prefix, edwork_addr_ipv4(&data->clients[i].clientaddr), (int)delta_time);
+                if (written <= 0)
+                    break;
+
+                buf += written;
+                buf_size -= written;
+            }
+            found ++;
+        }
+    }
+    thread_mutex_unlock(&data->clients_lock);
     return records;
 }
 

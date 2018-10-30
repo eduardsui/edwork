@@ -4573,6 +4573,10 @@ int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *s
     return -1;
 }
 
+int edfs_peers_info(struct edfs *edfs_context, char *buffer, int buffer_size, int html) {
+    return edwork_debug_node_list(edfs_context->edwork, buffer, buffer_size, (unsigned int)0, time(NULL) - 180, html);
+}
+
 int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size) {
     if (!edfs_context)
         return -1;
@@ -5741,7 +5745,7 @@ one_loop:
         // add offset
         int size = BLOCK_SIZE - 4;
         memcpy(buffer, payload, 4);
-        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 180);
+        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 180, 0);
         log_info("%i records found (offset: %i)", records, offset);
         if (records > 0) {
             size += 4;
@@ -6450,20 +6454,20 @@ void edwork_save_nodes(struct edfs *edfs_context) {
     unsigned char buffer[BLOCK_SIZE];
     int size = BLOCK_SIZE;
     unsigned int offset = 0;
-    int records = edwork_get_node_list(edfs_context->edwork, buffer, &size, (unsigned int)offset, 48 * 3600);
-
+    int records = edwork_get_node_list(edfs_context->edwork, buffer, &size, (unsigned int)offset, 48 * 3600, 1);
     if (records > 0) {
         FILE *out = fopen(edfs_context->nodes_file, "wb");
         if (out) {
+            offset += records;
             do {
                 uint32_t size_data = htonl(size);
                 fwrite(&size_data, 1, sizeof(uint32_t), out);
                 fwrite(buffer, 1, size, out);
-                records = edwork_get_node_list(edfs_context->edwork, buffer, &size, offset, 48 * 3600);
+                records = edwork_get_node_list(edfs_context->edwork, buffer, &size, offset, 48 * 3600, 1);
 
                 if (records > 0)
                     offset += records;
-            } while (records);
+            } while (records > 0);
             fclose(out);
         }
     }
@@ -6492,7 +6496,7 @@ void edwork_load_nodes(struct edfs *edfs_context) {
                     if (port <= 0)
                         port = EDWORK_PORT;
                     if ((host) && (host[0]))
-                        edwork_add_node(edfs_context->edwork, host, port, 0, sctp, 0);
+                        edwork_add_node(edfs_context->edwork, host, port, 0, sctp, 0, 0);
                 }
             }
         }
@@ -6914,7 +6918,7 @@ int edwork_thread(void *userdata) {
                 add_port = EDWORK_PORT;
         }
         if (host_and_port[0])
-            edwork_add_node(edwork, host_and_port, add_port, 0, 3, 0);
+            edwork_add_node(edwork, host_and_port, add_port, 0, 3, 0, 0);
         else
             log_error("error parsing url: %s", host_and_port);
     }
@@ -7382,13 +7386,13 @@ void edfs_set_initial_friend(struct edfs *edfs_context, const char *peer) {
             char *port_ptr = NULL;
             if (peer[0] == '[') {
                 peer ++;
-                char *ipv6_port = strchr(peer, ']');
+                char *ipv6_port = (char *)strchr(peer, ']');
                 if (ipv6_port) {
                     port_ptr = strchr(ipv6_port, ':');
                     ipv6_port[0] = 0;
                 }
             } else
-                port_ptr = strchr(peer, ':');
+                port_ptr = (char *)strchr(peer, ':');
             if (port_ptr) {
                 *port_ptr = 0;
                 port_ptr++;
@@ -7397,7 +7401,7 @@ void edfs_set_initial_friend(struct edfs *edfs_context, const char *peer) {
                     add_port = EDWORK_PORT;
             }
             if (peer[0])
-                edwork_add_node(edfs_context->edwork, peer, add_port, 0, 3, 0);
+                edwork_add_node(edfs_context->edwork, peer, add_port, 0, 3, 0, 0);
         }
     }
     int len = strlen(peer);
