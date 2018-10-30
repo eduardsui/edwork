@@ -2812,14 +2812,21 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 log_error("read timed out");
                 break;
             }
-            if ((microseconds() - last_key_timestamp >= 1000000)) {
-                if (!is_sctp) {
+            if (is_sctp) {
+                if ((microseconds() - last_key_timestamp >= 1500000)) {
+                    EDFS_THREAD_LOCK(edfs_context);
+                    edfs_make_key(edfs_context);
+                    EDFS_THREAD_UNLOCK(edfs_context);
+                    last_key_timestamp = microseconds();
+                }
+            } else {
+                if ((microseconds() - last_key_timestamp >= 1000000)) {
                     // new key every second
                     EDFS_THREAD_LOCK(edfs_context);
                     edfs_make_key(edfs_context);
                     EDFS_THREAD_UNLOCK(edfs_context);
+                    last_key_timestamp = microseconds();
                 }
-                last_key_timestamp = microseconds();
             }
             if ((microseconds() - start >= 1000000) && (!reset_cache_tree)) {
                 use_addr_cache = 0;
@@ -6454,7 +6461,7 @@ void edwork_save_nodes(struct edfs *edfs_context) {
     unsigned char buffer[BLOCK_SIZE];
     int size = BLOCK_SIZE;
     unsigned int offset = 0;
-    int records = edwork_get_node_list(edfs_context->edwork, buffer, &size, (unsigned int)offset, 48 * 3600, 1);
+    int records = edwork_get_node_list(edfs_context->edwork, buffer, &size, (unsigned int)offset, time(NULL) - 48 * 3600, 1);
     if (records > 0) {
         FILE *out = fopen(edfs_context->nodes_file, "wb");
         if (out) {
@@ -6463,7 +6470,7 @@ void edwork_save_nodes(struct edfs *edfs_context) {
                 uint32_t size_data = htonl(size);
                 fwrite(&size_data, 1, sizeof(uint32_t), out);
                 fwrite(buffer, 1, size, out);
-                records = edwork_get_node_list(edfs_context->edwork, buffer, &size, offset, 48 * 3600, 1);
+                records = edwork_get_node_list(edfs_context->edwork, buffer, &size, offset, time(NULL) - 48 * 3600, 1);
 
                 if (records > 0)
                     offset += records;

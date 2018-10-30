@@ -1433,16 +1433,17 @@ int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key
         i = rand % data->clients_count;
         unsigned int start_i = i;
         unsigned int send_to = 0;
+
         while (send_to < max_nodes) {
             if ((i) || (lan_broadcast)) {
 #ifdef WITH_SCTP
-                if ((!data->force_sctp) || ((data->clients[i].is_sctp) && ((data->sctp_timestamp < sctp_threshold) || (data->clients[i].sctp_timestamp >= sctp_threshold)))) {
+                if ((!data->force_sctp) || (!data->clients[i].is_sctp)  || (force_udp) || (data->clients[i].last_seen >= threshold) || ((data->clients[i].is_sctp) && ((data->sctp_timestamp < sctp_threshold) || (data->clients[i].sctp_timestamp >= sctp_threshold)))) {
 #endif
                 if ((except) && (except_len == data->clients[i].clientlen) && (!memcmp(except, &data->clients[i].clientaddr, except_len))) {
                     log_debug("not broadcasting to same client");
                 } else
                 if ((data->clients[i].last_seen >= threshold) || (i == 0) || (force_udp)) { // i == 0 => means first addres (broadcast address)
-                    if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, 1) <= 0) {
+                    if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, ((force_udp) && (!data->clients[i].is_listen_socket) && ((!data->clients[i].is_sctp) || (data->clients[i].sctp_socket & 2))) ? 0 : 1) <= 0) {
 #ifdef _WIN32
                         log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
 #else
@@ -1462,7 +1463,7 @@ int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key
                         } else
                         if (errno != 11)
 #endif
-                            data->clients[i].last_seen = threshold - 1;
+                            data->clients[i].last_seen = threshold - 180;
                     } else {
                         send_to ++;
 #ifdef WITH_SCTP
@@ -2035,7 +2036,10 @@ int edwork_debug_node_list(struct edwork_data *data, char *buf, int buf_size, un
                 }
                 int written;
 #ifdef WITH_SCTP
-                if (data->clients[i].sctp_socket)
+                if ((data->clients[i].is_sctp) && (data->clients[i].sctp_socket & 2))
+                    written = snprintf(buf, buf_size, "%ssctp/udp://%s, %i seconds ago", prefix, edwork_addr_ipv4(&data->clients[i].clientaddr), (int)delta_time);
+                else
+                if (data->clients[i].is_sctp)
                     written = snprintf(buf, buf_size, "%ssctp://%s, %i seconds ago", prefix, edwork_addr_ipv4(&data->clients[i].clientaddr), (int)delta_time);
                 else
 #endif
