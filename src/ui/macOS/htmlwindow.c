@@ -141,7 +141,7 @@ void ui_window_restore(void *window) {
 void ui_window_top(void *window) {
     if (app)
         objc_msgSend(app, sel_getUid("activateIgnoringOtherApps:"), YES);
-    if (wnd)
+    if (window)
         objc_msgSend(window, sel_getUid("setCollectionBehavior:"), 1 << 0);
 }
 
