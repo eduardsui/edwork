@@ -1929,7 +1929,7 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
                 if (with_timestamp)
                     *buf += 4;
 
-                buffer_size += *buf;
+                buffer_size += *buf + 1;
                 buf ++;
 
                 memcpy(buf, &data->clients[i].clientaddr.sin_addr, 4);
@@ -2008,7 +2008,6 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
                 if (timestamp < 0)
                     timestamp = 0;
             }
-
             edwork_add_node(data, buffer, port, 0, sctp, encapsulation_port, timestamp);
             records ++;
         } else
