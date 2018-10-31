@@ -138,7 +138,7 @@ void ui_window_restore(void *window) {
     objc_msgSend(window, sel_getUid("deminiaturize:"), NULL);
 }
 
-void ui_window_top(void *wnd) {
+void ui_window_top(void *window) {
     if (app)
         objc_msgSend(app, sel_getUid("activateIgnoringOtherApps:"), YES);
     if (wnd)
