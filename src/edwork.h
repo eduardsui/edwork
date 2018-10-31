@@ -50,6 +50,7 @@ int edwork_unspend(struct edwork_data *data, const unsigned char *proof_of_work,
 #ifdef WITH_SCTP
 int edwork_is_sctp(struct edwork_data *data, const void *clientaddr_ptr);
 void edwork_force_sctp(struct edwork_data *data, int force_sctp);
+int edwork_reconnect(struct edwork_data *data, int seconds);
 #endif
 const char *edwork_addr_ipv4(const void *clientaddr_ptr);
 void edwork_close(struct edwork_data *data);

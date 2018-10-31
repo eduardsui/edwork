@@ -541,7 +541,9 @@ void edfs_tray_notify(void *menuwindow) {
     if (ui_window_count() <= 1) {
         gui_window = ui_window("edwork settings", edwork_settings_form);
         edfs_gui_load(gui_window);
-    }
+    } else
+    if (gui_window)
+        ui_window_top(gui_window);
 }
 
 void edfs_gui_notify(void *userdata) {

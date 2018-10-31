@@ -1142,6 +1142,11 @@ void ui_window_restore(void *wnd) {
         ShowWindow((HWND)wnd, SW_RESTORE);
 }
 
+void ui_window_top(void *wnd) {
+    if (wnd)
+        SetForegroundWindow(wnd);
+}
+
 char *ui_call(void *wnd, const char *function, const char *arguments[]) {
     IWebBrowser2    *webBrowser2;
     IOleObject        *browserObject;

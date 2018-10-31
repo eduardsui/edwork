@@ -6985,7 +6985,6 @@ int edwork_thread(void *userdata) {
                 edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1);
             ping = time(NULL);
         }
-
         if (time(NULL) - edfs_context->list_timestamp > EDWORK_LIST_INTERVAL) {
             uint32_t offset = htonl(0);
             key = edfs_context->key_data;
@@ -6998,6 +6997,13 @@ int edwork_thread(void *userdata) {
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
             if (!edfs_context->ping_received)
                 edwork_broadcast_discovery(edfs_context);
+#endif
+#ifdef WITH_SCTP
+            if (time(NULL) - startup > 180) {
+                int reconnected_count = edwork_reconnect(edwork, 180);
+                if (reconnected_count)
+                    log_trace("tried to reconnect %i SCTP sockets", reconnected_count);
+            }
 #endif
         }
 

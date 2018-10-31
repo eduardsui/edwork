@@ -588,6 +588,23 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
     }
 }
 
+int edwork_reconnect(struct edwork_data *data, int seconds) {
+    int i;
+    time_t now = time(NULL);
+    int reconnected_sockets = 0;
+    for (i = 0; i < data->clients_count; i++) {
+        if ((data->clients[i].sctp_socket & 1) && (data->clients[i].sctp_timestamp < now - seconds) && (!data->clients[i].is_listen_socket) && (data->clients[i].sctp_reconnect_timestamp < now - seconds)) {
+            if (data->clients[i].socket)
+                SCTP_close(data->clients[i].socket);
+            data->clients[i].socket = edwork_sctp_connect(data, (const struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, data->clients[i].encapsulation_port);
+            data->clients[i].sctp_reconnect_timestamp = time(NULL);
+            reconnected_sockets ++;
+        }
+
+    }
+    return reconnected_sockets;
+}
+
 static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, void *data, size_t datalen, struct sctp_rcvinfo rcvinfo, int flags, void *ulp_info) {
     struct edwork_data *edwork = (struct edwork_data *)ulp_info;
     if ((flags & MSG_NOTIFICATION) || (!data) || (!edwork)) {

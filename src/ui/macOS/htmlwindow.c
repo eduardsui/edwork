@@ -138,6 +138,13 @@ void ui_window_restore(void *window) {
     objc_msgSend(window, sel_getUid("deminiaturize:"), NULL);
 }
 
+void ui_window_top(void *wnd) {
+    if (app)
+        objc_msgSend(app, sel_getUid("activateIgnoringOtherApps:"), YES);
+    if (wnd)
+        objc_msgSend(window, sel_getUid("setCollectionBehavior:"), 1 << 0);
+}
+
 BOOL AppDel_applicationDidUpdate(AppDelegate *self, SEL _cmd, id notification) {
     if (idle_event)
         idle_event(idle_userdata);

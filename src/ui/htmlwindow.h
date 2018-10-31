@@ -29,6 +29,7 @@ void *ui_window(const char *title, const char *body);
 void ui_window_maximize(void *wnd);
 void ui_window_minimize(void *wnd);
 void ui_window_restore(void *wnd);
+void ui_window_top(void *wnd);
 void ui_window_close(void *wnd);
 void ui_window_set_content(void *wnd, const char *body);
 int ui_window_count();
