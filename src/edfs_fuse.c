@@ -25,6 +25,12 @@
     #include <wordexp.h>
     #include "ui/htmlwindow.h"
     #include "ui/edwork_settings_form.h"
+    
+    struct apple_parameters {
+        struct fuse_chan *ch;
+        char *mountpoint;
+        struct fuse *se;
+    };
 #endif
 
 #include "log.h"
@@ -511,6 +517,9 @@ void edfs_gui_callback(void *window) {
                     fuse_exit(fuse_session);
                     fuse_session = NULL;
                     ui_window_close(gui_window);
+#ifdef __APPLE__
+                    ui_unlock();
+#endif
                     gui_window = NULL;
                 }
                 break;
@@ -690,7 +699,14 @@ void edfs_emulate_console() {
 
 #ifdef __APPLE__
 void edfs_quit(void *event_data, void *user_data) {
-    // to do
+    struct apple_parameters *arg = (struct apple_parameters *)user_data;
+    edfs_edwork_done(edfs_context);
+    edfs_destroy_context(edfs_context);
+    edfs_context = NULL;
+    fuse_unmount(arg->mountpoint, arg->ch);
+    fuse_destroy(arg->se);
+    rmdir(arg->mountpoint);
+    exit(0);
 }
 #endif
 #endif
@@ -1049,7 +1065,8 @@ int main(int argc, char *argv[]) {
                 if (gui) {
                     // Cocoa loop must be in the main thread, so move fuse loop into another thread
                     thread_ptr_t fuse_thread = edfs_fuse_loop(se);
-                    ui_set_event(UI_EVENT_LOOP_EXIT, edfs_quit, se);
+                    struct apple_parameters arg = { ch, mountpoint, se };
+                    ui_set_event(UI_EVENT_LOOP_EXIT, edfs_quit, &arg);
                     ui_lock();
                     edfs_gui_thread(NULL);
                     ui_unlock();
