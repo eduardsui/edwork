@@ -1269,8 +1269,11 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             }
             if (is_sctp & 1) {
                 peer->sctp_socket |= 1;
-                if (((is_listen_socket) || (is_callback)))
+                if (((is_listen_socket) || (is_callback))) {
+                    if ((!peer->is_sctp) && (!peer->socket))
+                        peer->socket = edwork_sctp_connect(data, (const struct sockaddr *)&sin, client_len, encapsulation_port);
                     peer->is_sctp = 1;
+                }
             } else
                 peer->sctp_socket |= 2;
         }
@@ -1300,6 +1303,10 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     else
         data->clients[data->clients_count].is_listen_socket = 0;
 #ifdef WITH_SCTP
+    // try to connect on SCTP anyways
+    if ((!is_sctp) && (!is_listen_socket) && (ntohs(((struct sockaddr_in *)sin)->sin_port) == 4848))
+        is_sctp = 1 & 2;
+
     // no sctp for broadcast address
     data->clients[data->clients_count].socket = 0;
     data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
@@ -2009,6 +2016,8 @@ int edwork_add_node_list(struct edwork_data *data, const unsigned char *buf, int
                     timestamp = 0;
             }
             edwork_add_node(data, buffer, port, 0, sctp, encapsulation_port, timestamp);
+#ifdef WITH_SCTP
+#endif
             records ++;
         } else
             log_warn("invalid record size (%i)", size);
@@ -2053,7 +2062,7 @@ int edwork_debug_node_list(struct edwork_data *data, char *buf, int buf_size, un
                 int written;
 #ifdef WITH_SCTP
                 if ((data->clients[i].is_sctp) && (data->clients[i].sctp_socket & 2))
-                    written = snprintf(buf, buf_size, "%ssctp/udp://%s, %i seconds ago", prefix, edwork_addr_ipv4(&data->clients[i].clientaddr), (int)delta_time);
+                    written = snprintf(buf, buf_size, "%ssctp_udp://%s, %i seconds ago", prefix, edwork_addr_ipv4(&data->clients[i].clientaddr), (int)delta_time);
                 else
                 if (data->clients[i].is_sctp)
                     written = snprintf(buf, buf_size, "%ssctp://%s, %i seconds ago", prefix, edwork_addr_ipv4(&data->clients[i].clientaddr), (int)delta_time);
