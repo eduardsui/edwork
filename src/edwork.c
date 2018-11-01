@@ -1303,10 +1303,6 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
     else
         data->clients[data->clients_count].is_listen_socket = 0;
 #ifdef WITH_SCTP
-    // try to connect on SCTP anyways
-    if ((!is_sctp) && (!is_listen_socket) && (ntohs(((struct sockaddr_in *)sin)->sin_port) == 4848))
-        is_sctp = 1 & 2;
-
     // no sctp for broadcast address
     data->clients[data->clients_count].socket = 0;
     data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
