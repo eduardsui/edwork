@@ -541,25 +541,33 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                     edwork->clients[i].socket = 0;
                     edwork->clients[i].is_sctp = 0;
                     edwork->clients[i].sctp_timestamp = 0;
-                    edwork->clients[i].is_listen_socket = 0;
-                    if (addrs) {
-                        if (reset == 2) {
-                            if (addrs->sa_family == AF_INET6)
-                                edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in6), edwork->clients[i].encapsulation_port);
-                            else
-                            if (addrs->sa_family == AF_INET)
-                                edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in), edwork->clients[i].encapsulation_port);
-                            if (edwork->clients[i].socket) {
-                                edwork->clients[i].sctp_reconnect_timestamp = time(NULL);
-                                edwork->clients[i].last_seen = time(NULL);
-                            } else
-                                edwork->clients[i].sctp_reconnect_timestamp = 0;
-                        } else {
-                            if (edwork->clients[i].sctp_timestamp == edwork->sctp_timestamp)
-                                edwork->sctp_timestamp = 0;
+                    if (edwork->clients[i].is_listen_socket) {
+                        if (addrs) {
+                            SCTP_freepaddrs(addrs);
+                            addrs = NULL;
                         }
-                        SCTP_freepaddrs(addrs);
-                        addrs = NULL;
+                        edwork_remove_addr(edwork, &edwork->clients[i].clientaddr, edwork->clients[i].clientlen);
+                    } else {
+                        edwork->clients[i].is_listen_socket = 0;
+                        if (addrs) {
+                            if (reset == 2) {
+                                if (addrs->sa_family == AF_INET6)
+                                    edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in6), edwork->clients[i].encapsulation_port);
+                                else
+                                if (addrs->sa_family == AF_INET)
+                                    edwork->clients[i].socket = edwork_sctp_connect(edwork, (const struct sockaddr *)addrs, sizeof(struct sockaddr_in), edwork->clients[i].encapsulation_port);
+                                if (edwork->clients[i].socket) {
+                                    edwork->clients[i].sctp_reconnect_timestamp = time(NULL);
+                                    edwork->clients[i].last_seen = time(NULL);
+                                } else
+                                    edwork->clients[i].sctp_reconnect_timestamp = 0;
+                            } else {
+                                if (edwork->clients[i].sctp_timestamp == edwork->sctp_timestamp)
+                                    edwork->sctp_timestamp = 0;
+                            }
+                            SCTP_freepaddrs(addrs);
+                            addrs = NULL;
+                        }
                     }
                     break;
                 }
@@ -575,11 +583,18 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
             if (addrs)
                 data_index = (uintptr_t)avl_search(&edwork->tree, (void *)addrs);
             if (data_index > 1) {
-                edwork->clients[data_index - 1].is_sctp = 0;
-                edwork->clients[data_index - 1].sctp_timestamp = 0;
-                edwork->clients[data_index - 1].is_listen_socket = 0;
+                if (edwork->clients[data_index - 1].is_listen_socket) {
+                    thread_mutex_unlock(&edwork->clients_lock);
+                    edwork_remove_addr(edwork, &edwork->clients[data_index - 1].clientaddr, edwork->clients[data_index - 1].clientlen);
+                    goto clients_unlocked;
+                } else {
+                    edwork->clients[data_index - 1].is_sctp = 0;
+                    edwork->clients[data_index - 1].sctp_timestamp = 0;
+                    edwork->clients[data_index - 1].is_listen_socket = 0;
+                }
             }
             thread_mutex_unlock(&edwork->clients_lock);
+clients_unlocked:
             if (addrs) {
                 SCTP_freepaddrs(addrs);
                 addrs = NULL;
