@@ -536,11 +536,6 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                     if ((SCTP_getpaddrs(sock, rcvinfo->rcv_assoc_id, &addrs) > 0) && (addrs))
                         log_trace("SCTP connection reset %s", edwork_addr_ipv4(addrs));
 
-                    SCTP_close(edwork->clients[i].socket);
-
-                    edwork->clients[i].socket = 0;
-                    edwork->clients[i].is_sctp = 0;
-                    edwork->clients[i].sctp_timestamp = 0;
                     if (edwork->clients[i].is_listen_socket) {
                         if (addrs) {
                             SCTP_freepaddrs(addrs);
@@ -548,6 +543,11 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                         }
                         edwork_remove_addr(edwork, &edwork->clients[i].clientaddr, edwork->clients[i].clientlen);
                     } else {
+                        SCTP_close(edwork->clients[i].socket);
+
+                        edwork->clients[i].socket = 0;
+                        edwork->clients[i].is_sctp = 0;
+                        edwork->clients[i].sctp_timestamp = 0;
                         edwork->clients[i].is_listen_socket = 0;
                         if (addrs) {
                             if (reset == 2) {
