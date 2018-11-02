@@ -1404,7 +1404,7 @@ void edwork_add_node(struct edwork_data *data, const char *node, int port, int i
     }
 }
 
-int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, int buf_is_packet, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino, const void *clientaddr, int clientaddr_len, int sleep_us, int force_udp) {
+int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, int buf_is_packet, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino, const void *clientaddr, int clientaddr_len, int sleep_us, int force_udp, time_t threshold) {
     if (!data)
         return -1;
 
@@ -1426,7 +1426,8 @@ int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key
     }
     uint64_t rand = edwork_random() % data->clients_count;
     int wrapped_to_first = 0;
-    time_t threshold = time(NULL) - 60;
+    if (!threshold)
+        threshold = time(NULL) - 60;
 #ifdef WITH_SCTP
     time_t sctp_threshold = time(NULL) - 40;
 #endif
@@ -1518,21 +1519,21 @@ int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key
     return 0;
 }
 
-int edwork_broadcast(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, int force_udp) {
-    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, NULL, 0, 0, force_udp);
+int edwork_broadcast(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, int force_udp, time_t threshold) {
+    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, NULL, 0, 0, force_udp, threshold);
 }
 
 int edwork_broadcast_client(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, const void *clientaddr, int clientaddr_len) {
-    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, clientaddr, clientaddr_len, 0, 0);
+    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, NULL, 0, 0, ino, clientaddr, clientaddr_len, 0, 0, 0);
 }
 
 int edwork_broadcast_except(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino) {
-    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 0, 0);
+    return edwork_private_broadcast(data, key, type, buf, len, confirmed_acks, max_nodes, 0, except, except_len, force_timestamp, ino, NULL, 0, 0, 0, 0);
 }
 
 unsigned int edwork_jumbo(struct edwork_data *data, struct edfs_key_data *key, unsigned char *jumbo_buf, unsigned int max_jumbo_size, unsigned int jumbo_size, unsigned char *buf, int buf_size) {
     if ((jumbo_size + buf_size + 2 >= max_jumbo_size) && (jumbo_size)) {
-        edwork_private_broadcast(data, key, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0, NULL, 0, 0, 0);
+        edwork_private_broadcast(data, key, "jmbo", jumbo_buf, jumbo_size, 0, 0, 0, NULL, 0, 0, 0, NULL, 0, 0, 0, 0);
         jumbo_size = 0;
     }
     unsigned short size_short = htons((unsigned short)buf_size);
@@ -1595,7 +1596,7 @@ unsigned int edwork_rebroadcast(struct edwork_data *data, struct edfs_key_data *
 
                         hmac_sha256(key->key_id, 32, buf + 8, 92, buf + 136, size - 136, buf + 100);
                         
-                        edwork_private_broadcast(data, key, NULL, buf + 8, size - 8, 0, 0, 1, NULL, 0, 0, 0, NULL, 0, 0, 0);
+                        edwork_private_broadcast(data, key, NULL, buf + 8, size - 8, 0, 0, 1, NULL, 0, 0, 0, NULL, 0, 0, 0, 0);
                         rebroadcast_count ++;
                     }
                 } else
@@ -1913,10 +1914,10 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     for (i = 0; i < data->clients_count; i++) {
         if (*buf_size < 14)
             break;
-#if defined(WITH_SCTP) && defined(SCTP_UDP_ENCAPSULATION)
-        if ((!data->force_sctp) && (data->clients[i].is_sctp))
-            continue;
-#endif
+// #if defined(WITH_SCTP) && defined(SCTP_UDP_ENCAPSULATION)
+//         if ((!data->force_sctp) && (data->clients[i].is_sctp))
+//             continue;
+// #endif
         if (data->clients[i].last_seen >= threshold) {
             if (found >= offset) {
                 records ++;

@@ -33,7 +33,7 @@ int edworks_data_pending(struct edwork_data* data, int timeout_ms);
 int edwork_dispatch(struct edwork_data* data, edwork_dispatch_callback callback, int timeout_ms, void *userdata);
 int edwork_dispatch_data(struct edwork_data* data, edwork_dispatch_callback callback, unsigned char *buffer, int n, void *clientaddr, int clientaddrlen, void *userdata, int is_sctp, int is_listen_socket);
 int edwork_send_to_peer(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, void *clientaddr, int clientaddrlen, int is_sctp, int is_listen_socket, int ttl);
-int edwork_broadcast(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, int force_udp);
+int edwork_broadcast(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, int force_udp, time_t threshold);
 int edwork_broadcast_client(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, uint64_t ino, const void *clientaddr, int clientaddr_len);
 int edwork_broadcast_except(struct edwork_data *data, struct edfs_key_data *key, const char type[4], const unsigned char *buf, int len, int confirmed_acks, int max_nodes, const void *except, int except_len, uint64_t force_timestamp, uint64_t ino);
 unsigned int edwork_rebroadcast(struct edwork_data *data, struct edfs_key_data *key, unsigned int max_count, unsigned int offset);
