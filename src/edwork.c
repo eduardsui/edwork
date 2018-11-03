@@ -541,7 +541,9 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                             SCTP_freepaddrs(addrs);
                             addrs = NULL;
                         }
+                        thread_mutex_unlock(&edwork->clients_lock);
                         edwork_remove_addr(edwork, &edwork->clients[i].clientaddr, edwork->clients[i].clientlen);
+                        return;
                     } else {
                         SCTP_close(edwork->clients[i].socket);
 
