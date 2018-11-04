@@ -609,16 +609,22 @@ int edwork_reconnect(struct edwork_data *data, int seconds) {
     int i;
     time_t now = time(NULL);
     int reconnected_sockets = 0;
+    thread_mutex_lock(&data->clients_lock);
     for (i = 0; i < data->clients_count; i++) {
         if ((data->clients[i].sctp_socket & 1) && (data->clients[i].sctp_timestamp < now - seconds) && (!data->clients[i].is_listen_socket) && (data->clients[i].sctp_reconnect_timestamp < now - seconds)) {
-            if (data->clients[i].socket)
-                SCTP_close(data->clients[i].socket);
+            SCTP_SOCKET_TYPE old_socket = data->clients[i].socket;
+            if (old_socket) {
+                // ensure the socket is not found, to avoid double-close
+                data->clients[i].socket = NULL;
+                SCTP_close(old_socket);
+            }
             data->clients[i].socket = edwork_sctp_connect(data, (const struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, data->clients[i].encapsulation_port);
             data->clients[i].sctp_reconnect_timestamp = time(NULL);
             reconnected_sockets ++;
         }
 
     }
+    thread_mutex_unlock(&data->clients_lock);
     return reconnected_sockets;
 }
 
