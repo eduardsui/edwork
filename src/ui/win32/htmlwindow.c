@@ -1,4 +1,4 @@
-// shamefully based on https://www.codeguru.com/cpp/i-n/ieprogram/article.php/c4379/Display-a-Web-Page-in-a-Plain-C-Win32-Application.htm
+// based on https://www.codeguru.com/cpp/i-n/ieprogram/article.php/c4379/Display-a-Web-Page-in-a-Plain-C-Win32-Application.htm
 
 #include <windows.h>
 #include <exdisp.h>
@@ -690,7 +690,6 @@ void UnEmbedBrowserObject(HWND hwnd) {
     }
 }
 
-#include <stdio.h>
 long DisplayHTMLStr(HWND hwnd, LPCTSTR string) {    
     IWebBrowser2    *webBrowser2;
     LPDISPATCH        lpDispatch;
@@ -1259,6 +1258,9 @@ void ui_lock() {
 }
 
 void ui_unlock() {
-    if (gui_lock)
+    if (gui_lock) {
         gui_lock --;
+        if ((!WindowCount) && (!gui_lock))
+            PostQuitMessage(0);
+    }
 }

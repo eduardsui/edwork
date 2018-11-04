@@ -423,7 +423,7 @@ void ui_lock() {
 void ui_unlock() {
     if (gui_lock) {
         gui_lock --;
-        if (!gui_lock)
+        if ((window_count <= 0) && (!gui_lock))
             ui_app_quit();
     }
 }

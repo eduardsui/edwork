@@ -19,9 +19,11 @@
         long tv_nsec;
     };
 #endif
+#else
+    #include <unistd.h>
+    #include <sys/types.h>
 #endif
 #ifdef __APPLE__
-    #include <unistd.h>
     #include <wordexp.h>
     #include <signal.h>
     #include "ui/htmlwindow.h"
@@ -38,8 +40,8 @@
 #include "edfs_core.h"
 
 static struct edfs *edfs_context;
-#if defined(_WIN32) || defined(__APPLE__)
 static int server_pipe_is_valid = 1;
+#if defined(_WIN32) || defined(__APPLE__)
 static int reload_keys = 0;
 static int reopen_window = 0;
 static void *gui_window = 0;
@@ -445,22 +447,6 @@ void edfs_gui_load(void *window) {
 #endif
 }
 
-#ifdef _WIN32
-int edfs_notify_edwork(char *uri) {
-    HANDLE hpipe = CreateFileA("\\\\.\\pipe\\edwork", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-    if (hpipe == INVALID_HANDLE_VALUE) 
-        return 0;
-
-    DWORD dwMode = PIPE_READMODE_MESSAGE; 
-    SetNamedPipeHandleState(hpipe, &dwMode, NULL, NULL);
-    DWORD cbWritten;
-    WriteFile(hpipe, uri, strlen(uri), &cbWritten, NULL);
-    CloseHandle(hpipe);
-
-    return 1;
-}
-#endif
-
 void edfs_gui_callback(void *window) {
     char *foo = ui_call(window, "lastevent", NULL);
     char *use;
@@ -620,6 +606,45 @@ thread_ptr_t edfs_fuse_loop(void *arg) {
 }
 #endif
 
+thread_ptr_t edfs_gui(int gui_mode) {
+    return thread_create(edfs_gui_thread, (void *)(intptr_t)(gui_mode == 2), "edwork gui", 8192 * 1024);
+}
+
+
+#ifdef _WIN32
+void edfs_emulate_console() {
+    AllocConsole();
+
+    // Get STDOUT handle
+    HANDLE ConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    int SystemOutput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *COutputHandle = _fdopen(SystemOutput, "w");
+
+    // Get STDERR handle
+    HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
+    int SystemError = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *CErrorHandle = _fdopen(SystemError, "w");
+
+    // Get STDIN handle
+    HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
+    int SystemInput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *CInputHandle = _fdopen(SystemInput, "r");
+
+    freopen_s(&CInputHandle, "CONIN$", "r", stdin);
+    freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
+    freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
+}
+#endif
+
+#ifdef __APPLE__
+void edfs_quit(void *event_data, void *user_data) {
+    struct apple_parameters *arg = (struct apple_parameters *)user_data;
+    kill(getpid(), SIGTERM);
+    rmdir(arg->mountpoint);
+}
+#endif
+#endif
+
 #ifdef _WIN32
 HANDLE edfs_create_named_pipe() {
     HANDLE hpipe = CreateNamedPipeA("\\\\.\\pipe\\edwork", PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE |  PIPE_WAIT, PIPE_UNLIMITED_INSTANCES, 1024 * 16, 1024 * 16, 0, NULL);
@@ -672,6 +697,111 @@ int edfs_loop_named_pipe() {
     return 0;
 }
 
+#else
+
+int edfs_create_named_pipe() {
+    static int pipe_created;
+    char pipe_name[64];
+
+    if (pipe_created)
+        return 0;
+
+    snprintf(pipe_name, sizeof(pipe_name), "/tmp/edwork_%i", getuid());
+    unlink(pipe_name);
+    if (mkfifo(pipe_name, 0666)) {
+        log_error("error creating pipe %s, errno %i", pipe_name, errno);
+        return -1;
+    }
+    pipe_created = 1;
+    return 0;
+}
+
+int edfs_loop_named_pipe() {
+    if (edfs_create_named_pipe()) {
+        server_pipe_is_valid = 0;
+        return 0;
+    }
+    char pipe_name[64];
+    snprintf(pipe_name, sizeof(pipe_name), "/tmp/edwork_%i", getuid());
+
+    FILE *f = fopen(pipe_name, "rb");
+    if (f) {
+        char buffer[0x100];
+        int bytes_read = fread(buffer, 1, sizeof(buffer) - 1, f);
+        if (bytes_read > 0) {
+            buffer[bytes_read] = 0;
+            if (bytes_read < 10) {
+                log_debug("%s command received", buffer);
+                if (!strcmp(buffer, "stop")) {
+                    server_pipe_is_valid = 0;
+                    if (fuse_session) {
+                        fuse_exit(fuse_session);
+                        fuse_session = NULL;
+                    }
+                }
+#if defined(_WIN32) || defined(__APPLE__)
+                else
+                if (!strcmp(buffer, "open")) {
+                    reopen_window = 1;
+                }
+#endif
+            } else {
+                int err;
+                if (bytes_read > 64)
+                    err = edfs_use_key(edfs_context, buffer, NULL);
+                else
+                    err = edfs_use_key(edfs_context, NULL, buffer);
+                if (err)
+                    log_error("invalid key received via pipe");
+#if defined(_WIN32) || defined(__APPLE__)
+                else
+                    reload_keys = 1;
+#endif
+            }
+        }
+        fclose(f);
+    }
+    return 0;
+}
+#endif
+
+int edfs_notify_edwork(char *uri) {
+#ifdef _WIN32
+    if (!uri)
+        return 0;
+
+    HANDLE hpipe = CreateFileA("\\\\.\\pipe\\edwork", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (hpipe == INVALID_HANDLE_VALUE) 
+        return 0;
+
+    DWORD dwMode = PIPE_READMODE_MESSAGE; 
+    SetNamedPipeHandleState(hpipe, &dwMode, NULL, NULL);
+    DWORD cbWritten;
+    WriteFile(hpipe, uri, strlen(uri), &cbWritten, NULL);
+    CloseHandle(hpipe);
+#else
+    // do not create fifo
+    if (!uri)
+        return 0;
+
+    char pipe_name[64];
+    snprintf(pipe_name, sizeof(pipe_name), "/tmp/edwork_%i", getuid());
+
+    int err = 0;
+    FILE *f = fopen(pipe_name, "wb");
+    if (f) {
+        int len = strlen(uri);
+        if (fwrite(uri, 1, len, f) != len)
+            err = 1;
+        fclose(f);
+        if (err)
+            return 0;
+    } else
+        return 0;
+#endif
+    return 1;
+}
+
 int edfs_pipe_thread(void *userdata) {
     while (server_pipe_is_valid)
         edfs_loop_named_pipe();
@@ -682,46 +812,6 @@ int edfs_pipe_thread(void *userdata) {
 thread_ptr_t edfs_pipe() {
     return thread_create(edfs_pipe_thread, (void *)edfs_context, "edwork pipe", 8192 * 1024);
 }
-#endif
-
-thread_ptr_t edfs_gui(int gui_mode) {
-    return thread_create(edfs_gui_thread, (void *)(intptr_t)(gui_mode == 2), "edwork gui", 8192 * 1024);
-}
-
-
-#ifdef _WIN32
-void edfs_emulate_console() {
-    AllocConsole();
-
-    // Get STDOUT handle
-    HANDLE ConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    int SystemOutput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
-    FILE *COutputHandle = _fdopen(SystemOutput, "w");
-
-    // Get STDERR handle
-    HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
-    int SystemError = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
-    FILE *CErrorHandle = _fdopen(SystemError, "w");
-
-    // Get STDIN handle
-    HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
-    int SystemInput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
-    FILE *CInputHandle = _fdopen(SystemInput, "r");
-
-    freopen_s(&CInputHandle, "CONIN$", "r", stdin);
-    freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
-    freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
-}
-#endif
-
-#ifdef __APPLE__
-void edfs_quit(void *event_data, void *user_data) {
-    struct apple_parameters *arg = (struct apple_parameters *)user_data;
-    kill(getpid(), SIGTERM);
-    rmdir(arg->mountpoint);
-}
-#endif
-#endif
 
 static const char EDFS_BANNER[] =   " _______   ________  ___       __   ________  ________  ___  __       \n"
                                     "|\\  ___ \\ |\\   ___ \\|\\  \\     |\\  \\|\\   __  \\|\\   __  \\|\\  \\|\\  \\     \n"
@@ -941,9 +1031,7 @@ int main(int argc, char *argv[]) {
                         exit(-1);
                     }
                     uri += 7;
-#ifdef _WIN32
                     uri_sent += edfs_notify_edwork(uri);
-#endif
                     int err;
                     if (strlen(argv[i]) > 64)
                         err = edfs_use_key(edfs_context, uri, NULL);
@@ -965,6 +1053,7 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "autorun")) {
                     gui = 2;
                 } else
+#endif
                 if (!strcmp(arg, "stop")) {
                     if (!edfs_notify_edwork(arg)) {
                         fprintf(stderr, "edfs: no other instance found.\n");
@@ -974,7 +1063,6 @@ int main(int argc, char *argv[]) {
                         exit(0);
                     }
                 } else
-#endif
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -999,8 +1087,8 @@ int main(int argc, char *argv[]) {
 #endif
 #ifdef _WIN32
                         "    -autorun           open in autostart mode\n"
-                        "    -stop              stop other instances of the application\n"
 #endif
+                        "    -stop              stop other instances of the application\n"
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
 #endif
@@ -1071,8 +1159,8 @@ int main(int argc, char *argv[]) {
             } else {
                 if (gui)
                     gui_thread = edfs_gui(gui);
-                thread_ptr_t pipe_thread = edfs_pipe();
 #endif
+                thread_ptr_t pipe_thread = edfs_pipe();
 #ifdef __APPLE__
                 if (gui) {
                     // Cocoa loop must be in the main thread, so move fuse loop into another thread
@@ -1093,12 +1181,9 @@ int main(int argc, char *argv[]) {
 #else
                 err = fuse_loop(se);
 #endif
-#ifdef _WIN32
                 if (server_pipe_is_valid)
                     server_pipe_is_valid = 0;
-                // sometimes hangs
-                // thread_join(pipe_thread);
-                // thread_destroy(pipe_thread);
+#ifdef _WIN32
             }
             if (gui) {
                 PostThreadMessage(GetThreadId(gui_thread), WM_QUIT, 0, 0);
@@ -1108,6 +1193,10 @@ int main(int argc, char *argv[]) {
             if (mutex)
                 CloseHandle(mutex);
 #endif
+            // sometimes hangs (the thread may be in a blocking read operation)
+            // thread_join(pipe_thread);
+            // thread_destroy(pipe_thread);
+
             fuse_session = NULL;
             edfs_edwork_done(edfs_context);
             edfs_destroy_context(edfs_context);
