@@ -156,6 +156,7 @@ BOOL AppDel_didFinishLaunching(AppDelegate *self, SEL _cmd, id notification) {
 }
 
 BOOL AppDel_willTerminate(AppDelegate *self, SEL _cmd, id notification) {
+    app = NULL;
     if (ui_callbacks[UI_EVENT_LOOP_EXIT])
         ui_callbacks[UI_EVENT_LOOP_EXIT](NULL, ui_data[UI_EVENT_LOOP_EXIT]);
     return YES;
@@ -279,8 +280,10 @@ int ui_question(const char *title, const char *body, int level) {
 }
 
 void ui_app_quit() {
-    if (app)
-        objc_msgSend(app, sel_getUid("terminate:"), NULL);
+    if (app) {
+        objc_msgSend(app, sel_getUid("terminate:"), app);
+        app = NULL;
+    }
 }
 
 void ui_set_event(int eid, ui_event callback, void *event_userdata) {
@@ -418,6 +421,9 @@ void ui_lock() {
 }
 
 void ui_unlock() {
-    if (gui_lock)
+    if (gui_lock) {
         gui_lock --;
+        if (!gui_lock)
+            ui_app_quit();
+    }
 }

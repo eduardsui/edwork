@@ -23,6 +23,7 @@
 #ifdef __APPLE__
     #include <unistd.h>
     #include <wordexp.h>
+    #include <signal.h>
     #include "ui/htmlwindow.h"
     #include "ui/edwork_settings_form.h"
     
@@ -272,7 +273,7 @@ static int edfs_fuse_statfs(const char *path, struct statvfs *stbuf) {
     stbuf->f_ffree = read_only ? 0 : (stbuf->f_files / 2);
     stbuf->f_favail = read_only ? 0 : stbuf->f_ffree;
     stbuf->f_namemax = 4096;
-	return 0;
+    return 0;
 }
 #endif
 
@@ -517,10 +518,12 @@ void edfs_gui_callback(void *window) {
                     fuse_exit(fuse_session);
                     fuse_session = NULL;
                     ui_window_close(gui_window);
+                    gui_window = NULL;
 #ifdef __APPLE__
                     ui_unlock();
+                    // fuse exit doesn't exit the fuse loop
+                    kill(getpid(), SIGTERM);
 #endif
-                    gui_window = NULL;
                 }
                 break;
             case 'a':
@@ -590,22 +593,32 @@ int edfs_gui_thread(void *userdata) {
     return 0;
 }
 
+#ifdef __APPLE__
 int edfs_fuse_thread(void *userdata) {
     if (!userdata)
         return 0;
+    struct apple_parameters *arg = (struct apple_parameters *)userdata;
     int err;
 #ifdef EDFS_MULTITHREADED
-    err = fuse_loop_mt((struct fuse *)userdata);
+    err = fuse_loop_mt(arg->se);
 #else
-    err = fuse_loop((struct fuse *)userdata);
+    err = fuse_loop(arg->se);
 #endif
+    edfs_edwork_done(edfs_context);
+    edfs_destroy_context(edfs_context);
+    edfs_context = NULL;
+    fuse_unmount(arg->mountpoint, arg->ch);
+    fuse_destroy(arg->se);
+    rmdir(arg->mountpoint);
+
     ui_app_quit();
     return err;
 }
 
-thread_ptr_t edfs_fuse_loop(struct fuse *se) {
-    return thread_create(edfs_fuse_thread, (void *)se, "edwork fuse", 8192 * 1024);
+thread_ptr_t edfs_fuse_loop(void *arg) {
+    return thread_create(edfs_fuse_thread, arg, "edwork fuse", 8192 * 1024);
 }
+#endif
 
 #ifdef _WIN32
 HANDLE edfs_create_named_pipe() {
@@ -704,13 +717,8 @@ void edfs_emulate_console() {
 #ifdef __APPLE__
 void edfs_quit(void *event_data, void *user_data) {
     struct apple_parameters *arg = (struct apple_parameters *)user_data;
-    edfs_edwork_done(edfs_context);
-    edfs_destroy_context(edfs_context);
-    edfs_context = NULL;
-    fuse_unmount(arg->mountpoint, arg->ch);
-    fuse_destroy(arg->se);
+    kill(getpid(), SIGTERM);
     rmdir(arg->mountpoint);
-    exit(0);
 }
 #endif
 #endif
@@ -1068,8 +1076,8 @@ int main(int argc, char *argv[]) {
 #ifdef __APPLE__
                 if (gui) {
                     // Cocoa loop must be in the main thread, so move fuse loop into another thread
-                    thread_ptr_t fuse_thread = edfs_fuse_loop(se);
                     struct apple_parameters arg = { ch, mountpoint, se };
+                    thread_ptr_t fuse_thread = edfs_fuse_loop(&arg);
                     ui_set_event(UI_EVENT_LOOP_EXIT, edfs_quit, &arg);
                     ui_lock();
                     edfs_gui_thread(NULL);
