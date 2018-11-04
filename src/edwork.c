@@ -1931,10 +1931,10 @@ int edwork_get_node_list(struct edwork_data *data, unsigned char *buf, int *buf_
     for (i = 0; i < data->clients_count; i++) {
         if (*buf_size < 14)
             break;
-// #if defined(WITH_SCTP) && defined(SCTP_UDP_ENCAPSULATION)
-//         if ((!data->force_sctp) && (data->clients[i].is_sctp))
-//             continue;
-// #endif
+#if defined(WITH_SCTP) && defined(SCTP_UDP_ENCAPSULATION)
+         if (/*(!data->force_sctp) && */ (data->clients[i].is_sctp) && (data->clients[i].is_listen_socket))
+             continue;
+#endif
         if (data->clients[i].last_seen >= threshold) {
             if (found >= offset) {
                 records ++;

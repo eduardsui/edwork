@@ -548,6 +548,7 @@ void edfs_tray_notify(void *menuwindow) {
 
 void edfs_gui_notify(void *userdata) {
     if (reload_keys) {
+        fprintf(stderr, "HERE: %x\n", gui_window);
         if (gui_window)
             edfs_gui_load(gui_window);
         if (reload_keys != 2)
@@ -643,6 +644,11 @@ void edfs_quit(void *event_data, void *user_data) {
     rmdir(arg->mountpoint);
 }
 #endif
+
+void edfs_window_close(void *window, void *user_data) {
+    if (window == gui_window)
+        gui_window = NULL;
+}
 #endif
 
 #ifdef _WIN32
@@ -1147,9 +1153,7 @@ int main(int argc, char *argv[]) {
                 if (!gui)
                     gui = 1;
             } else {
-#ifdef _WIN32
                 edfs_emulate_console();
-#endif
             }
             HANDLE mutex = CreateMutexA(0, FALSE, "Local\\$edwork$");
             if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -1157,8 +1161,10 @@ int main(int argc, char *argv[]) {
                 edfs_notify_edwork("open");
                 gui = 0;
             } else {
-                if (gui)
+                if (gui) {
                     gui_thread = edfs_gui(gui);
+                    ui_set_event(UI_EVENT_WINDOW_CLOSE, edfs_window_close, NULL);
+                }
 #endif
                 thread_ptr_t pipe_thread = edfs_pipe();
 #ifdef __APPLE__
@@ -1166,6 +1172,7 @@ int main(int argc, char *argv[]) {
                     // Cocoa loop must be in the main thread, so move fuse loop into another thread
                     struct apple_parameters arg = { ch, mountpoint, se };
                     thread_ptr_t fuse_thread = edfs_fuse_loop(&arg);
+                    ui_set_event(UI_EVENT_WINDOW_CLOSE, edfs_window_close, NULL);
                     ui_set_event(UI_EVENT_LOOP_EXIT, edfs_quit, &arg);
                     ui_lock();
                     edfs_gui_thread(NULL);
