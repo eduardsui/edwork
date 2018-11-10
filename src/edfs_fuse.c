@@ -548,7 +548,6 @@ void edfs_tray_notify(void *menuwindow) {
 
 void edfs_gui_notify(void *userdata) {
     if (reload_keys) {
-        fprintf(stderr, "HERE: %x\n", gui_window);
         if (gui_window)
             edfs_gui_load(gui_window);
         if (reload_keys != 2)
