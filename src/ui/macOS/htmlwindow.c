@@ -290,18 +290,53 @@ int ui_app_done() {
 
 void ui_message(const char *title, const char *body, int level) {
     CFStringRef title_str = CFStringCreateWithCString(NULL, title, kCFStringEncodingMacRoman);
+    CFStringRef body_str = CFStringCreateWithCString(NULL, body, kCFStringEncodingMacRoman);
 
-    NSRunAlertPanel(title_str, CFSTR("%s"), CFSTR("OK"), NULL, NULL, body);
-
+    id alert = objc_msgSend(objc_msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
+    switch (level) {
+        case 1:
+            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
+            break;
+        case 2:
+            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
+            break;
+        case 3:
+            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
+            break;
+    }
+    objc_msgSend(alert, sel_getUid("setMessageText:"), title_str);
+    objc_msgSend(alert, sel_getUid("setInformativeText:"), body_str);
+    objc_msgSend(alert, sel_getUid("runModal"));
+    if (body_str)
+        CFRelease(body_str);
     if (title_str)    
         CFRelease(title_str);
 }
 
 int ui_question(const char *title, const char *body, int level) {
     CFStringRef title_str = CFStringCreateWithCString(NULL, title, kCFStringEncodingMacRoman);
+    CFStringRef body_str = CFStringCreateWithCString(NULL, body, kCFStringEncodingMacRoman);
 
-    int yes_no = NSRunAlertPanel(title_str, CFSTR("%s"), CFSTR("Yes"), CFSTR("No"), NULL, body);
+    id alert = objc_msgSend(objc_msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
 
+    switch (level) {
+        case 1:
+            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
+            break;
+        case 2:
+            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
+            break;
+        case 3:
+            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
+            break;
+    }
+    objc_msgSend(alert, sel_getUid("setMessageText:"), title_str);
+    objc_msgSend(alert, sel_getUid("setInformativeText:"), body_str);
+    objc_msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("No"));
+    objc_msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("Yes"));
+    int yes_no = (int)objc_msgSend(alert, sel_getUid("runModal")) - 1000;
+    if (body_str)
+        CFRelease(body_str);
     if (title_str)    
         CFRelease(title_str);
         
