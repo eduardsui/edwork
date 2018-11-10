@@ -1085,8 +1085,8 @@ int main(int argc, char *argv[]) {
                         "    -uri               edfs uri (key)\n"
 #if defined(_WIN32) || defined(__APPLE__)
                         "    -gui               open GUI\n"
-#endif
                         "    -autorun           open in autostart mode\n"
+#endif
                         "    -stop              stop other instances of the application\n"
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
