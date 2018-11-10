@@ -828,8 +828,8 @@ static const char EDFS_BANNER[] =   " _______   ________  ___       __   _______
 
 int main(int argc, char *argv[]) {
 #if defined(_WIN32) || defined(__APPLE__)
-    char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", NULL};
-    struct fuse_args args = FUSE_ARGS_INIT(5, dokan_argv);
+    char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", "-o", "local", NULL};
+    struct fuse_args args = FUSE_ARGS_INIT(7, dokan_argv);
 #else
     struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
 #endif
@@ -1122,8 +1122,8 @@ int main(int argc, char *argv[]) {
         mountpoint = "J";
 #else
 #ifdef __APPLE__
-        wordexp("~/Desktop/edwork", &pathexp, 0);
-        mountpoint = pathexp.we_wordv[0];
+        // wordexp("~/Desktop/edwork", &pathexp, 0);
+        mountpoint = "/Volumes/edwork"; //pathexp.we_wordv[0];
 #else
         fprintf(stderr, "no mount point specified\n");
         exit(-1);
