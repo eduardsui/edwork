@@ -1123,7 +1123,7 @@ int main(int argc, char *argv[]) {
 #else
 #ifdef __APPLE__
         // wordexp("~/Desktop/edwork", &pathexp, 0);
-        mountpoint = "/Volumes/edwork"; //pathexp.we_wordv[0];
+        mountpoint = "/Volumes/edwork"; // pathexp.we_wordv[0];
 #else
         fprintf(stderr, "no mount point specified\n");
         exit(-1);
