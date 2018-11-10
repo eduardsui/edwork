@@ -24,7 +24,6 @@
     #include <sys/types.h>
 #endif
 #ifdef __APPLE__
-    #include <wordexp.h>
     #include <signal.h>
     #include "ui/htmlwindow.h"
     #include "ui/edwork_settings_form.h"
@@ -845,7 +844,6 @@ int main(int argc, char *argv[]) {
     int initial_friend_set = 0;
     int foreground = 1;
 #ifdef __APPLE__
-    wordexp_t pathexp;
     int gui = 0;
 #endif
 
@@ -1054,11 +1052,9 @@ int main(int argc, char *argv[]) {
                     gui = 1;
                 } else
 #endif
-#ifdef _WIN32
                 if (!strcmp(arg, "autorun")) {
                     gui = 2;
                 } else
-#endif
                 if (!strcmp(arg, "stop")) {
                     if (!edfs_notify_edwork(arg)) {
                         fprintf(stderr, "edfs: no other instance found.\n");
@@ -1090,9 +1086,7 @@ int main(int argc, char *argv[]) {
 #if defined(_WIN32) || defined(__APPLE__)
                         "    -gui               open GUI\n"
 #endif
-#ifdef _WIN32
                         "    -autorun           open in autostart mode\n"
-#endif
                         "    -stop              stop other instances of the application\n"
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
@@ -1122,8 +1116,7 @@ int main(int argc, char *argv[]) {
         mountpoint = "J";
 #else
 #ifdef __APPLE__
-        // wordexp("~/Desktop/edwork", &pathexp, 0);
-        mountpoint = "/Volumes/edwork"; // pathexp.we_wordv[0];
+        mountpoint = "/Volumes/edwork";
 #else
         fprintf(stderr, "no mount point specified\n");
         exit(-1);
@@ -1167,6 +1160,10 @@ int main(int argc, char *argv[]) {
 #endif
                 thread_ptr_t pipe_thread = edfs_pipe();
 #ifdef __APPLE__
+                if ((!foreground) || (argc == (uri_parameters + 1))) {
+                    if (!gui)
+                        gui = 1;
+                }
                 if (gui) {
                     // Cocoa loop must be in the main thread, so move fuse loop into another thread
                     struct apple_parameters arg = { ch, mountpoint, se };
@@ -1174,7 +1171,10 @@ int main(int argc, char *argv[]) {
                     ui_set_event(UI_EVENT_WINDOW_CLOSE, edfs_window_close, NULL);
                     ui_set_event(UI_EVENT_LOOP_EXIT, edfs_quit, &arg);
                     ui_lock();
-                    edfs_gui_thread(NULL);
+                    if (gui == 2)
+                        edfs_gui_thread((void *)1);
+                    else
+                        edfs_gui_thread(NULL);
                     ui_unlock();
                     if (fuse_session)
                         fuse_exit(se);
