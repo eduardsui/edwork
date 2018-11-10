@@ -4,6 +4,8 @@
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <objc/NSObjCRuntime.h>
+#define _DARWIN_BETTER_REALPATH
+#include <mach-o/dyld.h>
 #include "../htmlwindow.h"
 
 int NSRunAlertPanel(CFStringRef strTitle, CFStringRef strMsg, CFStringRef strButton1, CFStringRef strButton2, CFStringRef strButton3, ...);
@@ -51,6 +53,30 @@ typedef struct AppDel {
     id window;
 } AppDelegate;
 
+id get_base_url() {
+    char path[1032];
+    char buffer[1024];
+    memset(buffer, 0, sizeof(buffer));
+    memset(path, 0, sizeof(buffer));
+    memcpy(path, "file://", 7);
+    uint32_t size = 1024;
+    _NSGetExecutablePath(buffer, &size);
+    if (!realpath(buffer, path + 7))
+        memcpy(path + 7, buffer, size);
+
+    int len = strlen(path) - 1;
+    while (path[len] != '/')
+        len --;
+    path[len + 1] = 0;
+
+    CFStringRef base_str = CFStringCreateWithCString(NULL, path, kCFStringEncodingMacRoman);
+
+    id baseURL = objc_msgSend((id)objc_getClass("NSURL"), sel_getUid("URLWithString:"), base_str);
+    if (base_str)
+        CFRelease(base_str);
+    return baseURL;
+}
+
 void *ui_window(const char *title, const char *body) {
     id window = objc_msgSend((id)objc_getClass("NSWindow"), sel_getUid("alloc"));
     window = objc_msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (CMRect){0,0,1200,750}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 0, false);
@@ -80,11 +106,14 @@ void *ui_window(const char *title, const char *body) {
             // already null terminated ... kind of useless
             body_with_script[len + sizeof(script)] = 0;
             CFStringRef body_str = CFStringCreateWithCString(NULL, body_with_script, kCFStringEncodingMacRoman);
-
-            objc_msgSend(view, sel_getUid("loadHTMLString:baseURL:"), body_str, NULL);
+            
+            id baseURL = get_base_url();
+            objc_msgSend(view, sel_getUid("loadHTMLString:baseURL:"), body_str, baseURL);
             content_set ++;
             if (body_str)
                 CFRelease(body_str);
+            if (baseURL)
+                CFRelease(baseURL);
 
             free(body_with_script);
         }
@@ -103,9 +132,11 @@ void *ui_window(const char *title, const char *body) {
 
 void ui_window_set_content(void *window, const char *body) {
     CFStringRef body_str = CFStringCreateWithCString(NULL, body ? body : "", kCFStringEncodingMacRoman);
-
-    objc_msgSend(objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("mainFrame")), sel_getUid("loadHTMLString:baseURL:"), body_str, NULL);
+    id baseURL = get_base_url();
+    objc_msgSend(objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("mainFrame")), sel_getUid("loadHTMLString:baseURL:"), body_str, baseURL);
     content_set ++;
+    if (baseURL)
+        CFRelease(baseURL);
     if (body_str)
         CFRelease(body_str);
 }
