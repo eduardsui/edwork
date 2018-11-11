@@ -1051,10 +1051,10 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "gui")) {
                     gui = 1;
                 } else
-#endif
                 if (!strcmp(arg, "autorun")) {
                     gui = 2;
                 } else
+#endif
                 if (!strcmp(arg, "stop")) {
                     if (!edfs_notify_edwork(arg)) {
                         fprintf(stderr, "edfs: no other instance found.\n");

@@ -582,13 +582,16 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
 
             thread_mutex_lock(&edwork->clients_lock);
             uintptr_t data_index = 0;
-            if (addrs)
+            if (addrs) {
                 data_index = (uintptr_t)avl_search(&edwork->tree, (void *)addrs);
+                SCTP_freepaddrs(addrs);
+                addrs = NULL;
+            }
             if (data_index > 1) {
                 if (edwork->clients[data_index - 1].is_listen_socket) {
                     thread_mutex_unlock(&edwork->clients_lock);
                     edwork_remove_addr(edwork, &edwork->clients[data_index - 1].clientaddr, edwork->clients[data_index - 1].clientlen);
-                    goto clients_unlocked;
+                    return;
                 } else {
                     edwork->clients[data_index - 1].is_sctp = 0;
                     edwork->clients[data_index - 1].sctp_timestamp = 0;
@@ -596,11 +599,6 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                 }
             }
             thread_mutex_unlock(&edwork->clients_lock);
-clients_unlocked:
-            if (addrs) {
-                SCTP_freepaddrs(addrs);
-                addrs = NULL;
-            }
         }
     }
 }
