@@ -3,7 +3,7 @@ RM = rm
 RESC = windres
 USRSCTP_CFLAGS = -DSCTP_SIMPLE_ALLOCATOR -DSCTP_PROCESS_LEVEL_LOCKS -D__Userspace__ -D__Userspace_os_Windows -DINET -DINET6 -D_LIB -Isrc/usrsctp
 CFLAGS = -mwindows -O3 -D_FILE_OFFSET_BITS=64 -DUSE_STAT_PATCH -DHAVE_TIMESPEC -DHAVE_TIMEZONE -DEDFS_DEFAULT_HOST=\"discovery.gyrogears.com:4848\" -DEDFS_MULTITHREADED -DWITH_SCTP -DWITH_USRSCTP -Isrc/usrsctp $(USRSCTP_CFLAGS)
-LIBS =  -lws2_32 -liphlpapi -lwinmm -lole32 -loleaut32 -luuid -ldokanfuse1
+LIBS =  -lws2_32 -liphlpapi -lwinmm -lole32 -loleaut32 -luuid -lshlwapi -ldokanfuse1
 BUILDFLAGS= -o edfs_dokan
 
 UI_SRC = src/ui/win32/htmlwindow.c
