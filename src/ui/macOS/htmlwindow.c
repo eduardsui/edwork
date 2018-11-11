@@ -8,8 +8,6 @@
 #include <mach-o/dyld.h>
 #include "../htmlwindow.h"
 
-int NSRunAlertPanel(CFStringRef strTitle, CFStringRef strMsg, CFStringRef strButton1, CFStringRef strButton2, CFStringRef strButton3, ...);
-
 static id pool;
 static id app;
 
