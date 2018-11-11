@@ -5,6 +5,8 @@
 #include <mshtml.h>
 #include <mshtmhst.h>
 #include <crtdbg.h>
+#include <shlwapi.h>
+#include <stdio.h>
 
 #include "../htmlwindow.h"
 #include "resource.h"
@@ -138,9 +140,9 @@ HRESULT STDMETHODCALLTYPE Site_DeactivateAndUndo(IOleInPlaceSite FAR* This);
 HRESULT STDMETHODCALLTYPE Site_OnPosRectChange(IOleInPlaceSite FAR* This, LPCRECT lprcPosRect);
 
 static IOleInPlaceSiteVtbl MyIOleInPlaceSiteTable = {
-    Site_QueryInterface,    
-    Site_AddRef,
-    Site_Release,
+    (HRESULT (*)(IOleInPlaceSite *, const IID * const, void **))Site_QueryInterface,
+    (ULONG (*)(IOleInPlaceSite *))Site_AddRef,
+    (ULONG (*)(IOleInPlaceSite *))Site_Release,
     Site_GetWindow,
     Site_ContextSensitiveHelp,
     Site_CanInPlaceActivate,
@@ -703,6 +705,22 @@ long DisplayHTMLStr(HWND hwnd, LPCTSTR string) {
     browserObject = *((IOleObject **)GetWindowLongPtr(hwnd, GWLP_USERDATA));
     bstr = 0;
 
+    char app_path[MAX_PATH];
+    if (!GetModuleFileNameA(NULL, app_path, MAX_PATH))
+        return -1;
+
+    PathRemoveFileSpecA(app_path);
+
+    int i = 0;
+    while (app_path[i]) {
+        if (app_path[i] == '\\')
+            app_path[i] = '/';
+        i ++;
+    }
+    int len = strlen(string);
+    LPSTR string2 = (LPSTR)malloc(len + MAX_PATH + 32);
+    snprintf(string2, len + MAX_PATH + 32, "<base href='file:///%s/'/>%s", app_path, string);
+
     if (!browserObject->lpVtbl->QueryInterface(browserObject, &IID_IWebBrowser2, (void**)&webBrowser2)) {
         VariantInit(&myURL);
         myURL.vt = VT_BSTR;
@@ -719,15 +737,15 @@ long DisplayHTMLStr(HWND hwnd, LPCTSTR string) {
                             wchar_t        *buffer;
                             DWORD        size;
 
-                            size = MultiByteToWideChar(CP_ACP, 0, string, -1, 0, 0);
+                            size = MultiByteToWideChar(CP_ACP, 0, string2, -1, 0, 0);
                             if (!(buffer = (wchar_t *)GlobalAlloc(GMEM_FIXED, sizeof(wchar_t) * size)))
                                 goto bad;
-                            MultiByteToWideChar(CP_ACP, 0, string, -1, buffer, size);
+                            MultiByteToWideChar(CP_ACP, 0, string2, -1, buffer, size);
                             bstr = SysAllocString(buffer);
                             GlobalFree(buffer);
                         }
 #else
-                        bstr = SysAllocString(string);
+                        bstr = SysAllocString(string2);
 #endif
                         if ((pVar->bstrVal = bstr)) {
                             htmlDoc2->lpVtbl->write(htmlDoc2, sfArray);
@@ -748,6 +766,7 @@ bad:            htmlDoc2->lpVtbl->Release(htmlDoc2);
 
         webBrowser2->lpVtbl->Release(webBrowser2);
     }
+    free(string2);
 
     if (bstr)
         return 0;
