@@ -192,9 +192,11 @@ BOOL AppDel_willTerminate(AppDelegate *self, SEL _cmd, id notification) {
     return YES;
 }
 
-BOOL AppDel_applicationShouldHandleReopen(AppDelegate *self, SEL _cmd, id notification) {
-    if (event_tray_event)
+BOOL AppDel_applicationShouldHandleReopen(AppDelegate *self, SEL _cmd, ...) {
+    if (event_tray_event) {
         event_tray_event(NULL);
+        return NO;
+    }
     return YES;
 }
 
@@ -240,7 +242,7 @@ static void CreateAppDelegate() {
     class_addMethod(AppDelClass, sel_getUid("applicationDidFinishLaunching:"), (IMP)AppDel_didFinishLaunching, "i@:@");
     class_addMethod(AppDelClass, sel_getUid("applicationWillTerminate:"), (IMP)AppDel_willTerminate, "i@:@");
     class_addMethod(AppDelClass, sel_getUid("applicationDidUpdate:"), (IMP)AppDel_applicationDidUpdate, "i@:@");
-    class_addMethod(AppDelClass, sel_getUid("applicationShouldHandleReopen:hasVisibleWindows:"), (IMP)AppDel_applicationShouldHandleReopen, "B@:@");
+    class_addMethod(AppDelClass, sel_getUid("applicationShouldHandleReopen:hasVisibleWindows:"), (IMP)AppDel_applicationShouldHandleReopen, "B@:");
     Protocol *protocol = objc_getProtocol("WKNavigationDelegate");
     assert(protocol);
     class_addProtocol(AppDelClass, protocol);
