@@ -826,11 +826,16 @@ static const char EDFS_BANNER[] =   " _______   ________  ___       __   _______
                                     "    \\|_______|\\|_______|\\|____________|\\|_______|\\|__|\\|__|\\|__| \\|__|\n";
 
 int main(int argc, char *argv[]) {
-#if defined(_WIN32) || defined(__APPLE__)
-    char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", "-o", "local", NULL};
-    struct fuse_args args = FUSE_ARGS_INIT(7, dokan_argv);
+#ifdef _WIN32
+    char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", NULL};
+    struct fuse_args args = FUSE_ARGS_INIT(5, dokan_argv);
+#else
+#ifdef __APPLE__
+    char *osxfuse_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", "-o", "local", NULL};
+    struct fuse_args args = FUSE_ARGS_INIT(7, osxfuse_argv);
 #else
     struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
+#endif
 #endif
     FILE *fp = NULL;
     struct fuse_chan *ch;
