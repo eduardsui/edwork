@@ -17,6 +17,7 @@ Class WebViewClass;
 static ui_idle_event idle_event = NULL;
 static void *idle_userdata = NULL;
 static ui_trigger_event callback_event = NULL;
+static ui_tray_event event_tray_event = NULL;
 static int window_count = 0;
 static int content_set = 0;
 static int gui_lock = 0;
@@ -191,9 +192,15 @@ BOOL AppDel_willTerminate(AppDelegate *self, SEL _cmd, id notification) {
     return YES;
 }
 
+BOOL AppDel_applicationShouldHandleReopen(AppDelegate *self, SEL _cmd, id notification) {
+    if (event_tray_event)
+        event_tray_event(NULL);
+    return YES;
+}
+
 void windowWillClose(id self, SEL _sel, id notification) {
     if (ui_callbacks[UI_EVENT_WINDOW_CLOSE])
-        ui_callbacks[UI_EVENT_WINDOW_CLOSE](self, ui_data[UI_EVENT_WINDOW_CLOSE]);
+        ui_callbacks[UI_EVENT_WINDOW_CLOSE](objc_msgSend(notification, sel_getUid("object")), ui_data[UI_EVENT_WINDOW_CLOSE]);
     if (window_count)
         window_count --;
     if ((window_count <= 0) && (!gui_lock))
@@ -233,6 +240,7 @@ static void CreateAppDelegate() {
     class_addMethod(AppDelClass, sel_getUid("applicationDidFinishLaunching:"), (IMP)AppDel_didFinishLaunching, "i@:@");
     class_addMethod(AppDelClass, sel_getUid("applicationWillTerminate:"), (IMP)AppDel_willTerminate, "i@:@");
     class_addMethod(AppDelClass, sel_getUid("applicationDidUpdate:"), (IMP)AppDel_applicationDidUpdate, "i@:@");
+    class_addMethod(AppDelClass, sel_getUid("applicationShouldHandleReopen:hasVisibleWindows:"), (IMP)AppDel_applicationShouldHandleReopen, "B@:");
     Protocol *protocol = objc_getProtocol("WKNavigationDelegate");
     assert(protocol);
     class_addProtocol(AppDelClass, protocol);
@@ -464,11 +472,15 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
 }
 
 void ui_app_tray_icon(const char *tooltip, char *notification_title, char *notification_text, ui_tray_event event_tray) {
-    // not implemented
+    event_tray_event = event_tray;
+    if (event_tray)
+        window_count ++;
 }
 
 void ui_app_tray_remove() {
-    // not implemented
+    if ((event_tray_event) && (window_count > 0))
+        window_count --;
+    event_tray_event = NULL;
 }
 
 void ui_free_string(void *ptr) {
