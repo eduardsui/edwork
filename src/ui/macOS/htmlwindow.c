@@ -240,7 +240,7 @@ static void CreateAppDelegate() {
     class_addMethod(AppDelClass, sel_getUid("applicationDidFinishLaunching:"), (IMP)AppDel_didFinishLaunching, "i@:@");
     class_addMethod(AppDelClass, sel_getUid("applicationWillTerminate:"), (IMP)AppDel_willTerminate, "i@:@");
     class_addMethod(AppDelClass, sel_getUid("applicationDidUpdate:"), (IMP)AppDel_applicationDidUpdate, "i@:@");
-    class_addMethod(AppDelClass, sel_getUid("applicationShouldHandleReopen:hasVisibleWindows:"), (IMP)AppDel_applicationShouldHandleReopen, "B@:");
+    class_addMethod(AppDelClass, sel_getUid("applicationShouldHandleReopen:hasVisibleWindows:"), (IMP)AppDel_applicationShouldHandleReopen, "B@:@");
     Protocol *protocol = objc_getProtocol("WKNavigationDelegate");
     assert(protocol);
     class_addProtocol(AppDelClass, protocol);
