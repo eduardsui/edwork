@@ -84,8 +84,8 @@ void *ui_window(const char *title, const char *body) {
     if (title) {
         CFStringRef title_str = CFStringCreateWithCString(NULL, title, kCFStringEncodingMacRoman);
         objc_msgSend(window, sel_getUid("setTitle:"), title_str);
-        if (title_str)
-            CFRelease(title_str);
+        // if (title_str)
+        //     CFRelease(title_str);
     }
     objc_msgSend(window, sel_getUid("setDelegate:"), objc_msgSend(app, sel_getUid("delegate")));
     
@@ -109,10 +109,10 @@ void *ui_window(const char *title, const char *body) {
             id baseURL = get_base_url();
             objc_msgSend(view, sel_getUid("loadHTMLString:baseURL:"), body_str, baseURL);
             content_set ++;
-            if (body_str)
-                CFRelease(body_str);
-            if (baseURL)
-                CFRelease(baseURL);
+            // if (body_str)
+            //     CFRelease(body_str);
+            // if (baseURL)
+            //     CFRelease(baseURL);
 
             free(body_with_script);
         }
@@ -134,10 +134,10 @@ void ui_window_set_content(void *window, const char *body) {
     id baseURL = get_base_url();
     objc_msgSend(objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("mainFrame")), sel_getUid("loadHTMLString:baseURL:"), body_str, baseURL);
     content_set ++;
-    if (baseURL)
-        CFRelease(baseURL);
-    if (body_str)
-        CFRelease(body_str);
+    // if (baseURL)
+    //     CFRelease(baseURL);
+    // if (body_str)
+    //     CFRelease(body_str);
 }
 
 void ui_window_close(void *window) {

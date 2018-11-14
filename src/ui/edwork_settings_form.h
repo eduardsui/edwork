@@ -44,6 +44,7 @@ static const char *edwork_settings_form =
     "        <a id=\"showsettings\" href='javascript: document.getElementById(\"showsettings\").style.display = \"none\"; document.getElementById(\"settings\").style.display = \"block\"; void(0);'>Show advanced settings</a>\n"
     "        <div id=\"settings\" style=\"display: none;\">\n"
     "          <p>Settings:</p>\n"
+#ifndef __APPLE__
     "          <div class=\"grid\">\n"
     "            <div class=\"grid__column\">\n"
     "              <span>Autostart edwork at login</span><br/>\n"
@@ -54,6 +55,7 @@ static const char *edwork_settings_form =
     "            </div>\n"
     "          </div>\n"
     "          <br/>\n"
+#endif
     "          <div class=\"grid\">\n"
     "            <div class=\"grid__column\">\n"
     "              <span>Manual discovery peer host</span><br/><span class=\"color-dark\">By default, edwork uses an built in hostname for initial peer discovery. You may manually add additional hosts to be used for peer discovery.</span>\n"
