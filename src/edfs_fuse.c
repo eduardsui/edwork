@@ -498,18 +498,20 @@ void edfs_gui_callback(void *window) {
                 log_trace("edwork disconnect requested");
                 if (server_pipe_is_valid)
                     server_pipe_is_valid = 0;
-
+#ifdef __APPLE__
+                ui_app_quit();
+#else
                 if (fuse_session) {
                     fuse_exit(fuse_session);
                     fuse_session = NULL;
                     ui_window_close(gui_window);
                     gui_window = NULL;
-#ifdef __APPLE__
-                    ui_unlock();
+                    // __APPLE__
+                    // ui_unlock();
                     // fuse exit doesn't exit the fuse loop
-                    kill(getpid(), SIGTERM);
-#endif
+                    // kill(getpid(), SIGTERM);
                 }
+#endif
                 break;
             case 'a':
 #ifdef _WIN32
