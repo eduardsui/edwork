@@ -284,6 +284,25 @@ int ui_app_init(ui_trigger_event event_handler) {
     
     objc_msgSend(app, sel_getUid("setDelegate:"), appDelObj);
 
+    id menubar = objc_msgSend((id)objc_getClass("NSMenu"), sel_getUid("new"));
+    menubar = objc_msgSend(menubar, sel_getUid("autorelease"));
+
+    id appMenuItem = objc_msgSend((id)objc_getClass("NSMenuItem"), sel_getUid("new"));
+    appMenuItem = objc_msgSend(appMenuItem, sel_getUid("autorelease"));
+
+    objc_msgSend(menubar, sel_getUid("addItem:"), appMenuItem);
+
+    objc_msgSend(app, sel_getUid("setMainMenu:"), menubar);
+
+    id appMenu = objc_msgSend((id)objc_getClass("NSMenu"), sel_getUid("new"));
+    appMenu = objc_msgSend(appMenu, sel_getUid("autorelease"));
+    
+    id quitMenuItem = objc_msgSend((id)objc_getClass("NSMenuItem"), sel_getUid("alloc"));
+    objc_msgSend(quitMenuItem, sel_getUid("initWithTitle:action:keyEquivalent:"), CFSTR("Quit"), sel_getUid("terminate:"), CFSTR("q"));
+    objc_msgSend(appMenu, sel_getUid("addItem:"), quitMenuItem);
+
+    objc_msgSend(appMenuItem, sel_getUid("setSubmenu:"), appMenu);
+
     callback_event = event_handler;
     return 1;
 }
