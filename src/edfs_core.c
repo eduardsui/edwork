@@ -2583,7 +2583,7 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
         uint64_t last_sent = start;
         while ((!chunk_exists(path, chunk)) && (microseconds() - start < timeout)) {
             usleep(1000);
-            if (microseconds() - last_sent >= 50000) {
+            if (microseconds() - last_sent >= 250000) {
                 notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
                 last_sent = microseconds();
             }
@@ -3059,7 +3059,7 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
 
         if ((add_directory) && (!off)) {
             b->size += add_directory(".", ino, type, 0, created, modified, timestamp / 1000000, userdata);
-            b->size += add_directory("..", ino, type, 0, created, modified, timestamp / 1000000, userdata);
+            b->size += add_directory("..", parent, type, 0, created, modified, timestamp / 1000000, userdata);
         }
         int64_t index = 0;
         int64_t start_at = b->start;
