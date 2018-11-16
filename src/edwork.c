@@ -553,7 +553,6 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
                         edwork->clients[i].socket = 0;
                         edwork->clients[i].is_sctp = 0;
                         edwork->clients[i].sctp_timestamp = 0;
-                        edwork->clients[i].is_listen_socket = 0;
                         if (addrs) {
                             if (reset == 2) {
                                 if (addrs->sa_family == AF_INET6)
@@ -1500,9 +1499,13 @@ int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key
                                 data->clients[i].is_sctp = 0;
                                 if (data->clients[i].socket) {
                                     SCTP_close(data->clients[i].socket);
-                                    data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, data->clients[i].encapsulation_port);
-                                    if (data->clients[i].socket)
-                                        log_trace("reconnecting SCTP socket");
+                                    if (data->clients[i].is_listen_socket) {
+                                        data->clients[i].socket = 0;
+                                    } else {
+                                        data->clients[i].socket = edwork_sctp_connect(data, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, data->clients[i].encapsulation_port);
+                                        if (data->clients[i].socket)
+                                            log_trace("reconnecting SCTP socket");
+                                    }
                                 }
                             }
                         } else
@@ -1742,7 +1745,8 @@ int edwork_remove_addr(struct edwork_data *data, void *sin, int client_len) {
         for (i = index - 1; i < data->clients_count; i++) {
             struct sockaddr_in *addr_key = (struct sockaddr_in *)malloc(sizeof(struct sockaddr_in));
             if (addr_key) {
-                memcpy(addr_key, &data->clients[index].clientaddr, sizeof(struct sockaddr_in));
+                memcpy(addr_key, &data->clients[i].clientaddr, sizeof(struct sockaddr_in));
+                // avl_insert replaces the old key, no need to call avl_remove
                 avl_insert(&data->tree, addr_key, (void *)(uintptr_t)(i + 1));
             }
 
