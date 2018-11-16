@@ -366,6 +366,8 @@ int edfs_init(struct edfs *edfs_context);
 static void recursive_mkdir(const char *dir);
 void edfs_warm_cache(struct edfs *edfs_context, const char *working_directory, edfs_ino_t ino, uint64_t chunk, uint64_t max_chunks);
 void edfs_request_cache_warming(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk);
+int edfs_check_descriptors(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data);
+int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data);
 
 uint64_t microseconds() {
     struct timeval tv;
@@ -4426,6 +4428,10 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
         edwork_broadcast_discovery_key(edfs_context, edfs_context->key_data);
 #endif
+        edfs_schedule(edfs_context, edfs_check_descriptors, 10000000, 0, 0, 0, 0, 0, 0, edfs_context->key_data);
+        edfs_context->key_data->hblk_scheduled = 1;
+        edfs_schedule(edfs_context, edfs_blockchain_request, 50000, 0, 0, 0, 0, 0, 0, edfs_context->key_data);
+        edfs_context->key_data->block_timestamp = time(NULL) + 20;
     }
 
     if (!edfs_context->primary_key)
