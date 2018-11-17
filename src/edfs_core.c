@@ -5707,10 +5707,7 @@ one_loop:
 #ifndef EDFS_DISABLE_FORWARD_BLOCK_SEND
                         if ((is_sctp) && (loop_count < 2)) {
                             chunk_hash = 0;
-                            if (loop_count == 0)
-                                chunk += 10;
-                            else
-                                chunk ++;
+                            chunk += 10;
                             loop_count ++;
                             goto one_loop;
                         }
