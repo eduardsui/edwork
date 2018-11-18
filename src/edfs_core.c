@@ -5689,6 +5689,11 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
 
             log_debug("big chunk requested (%i chunks)", (int)other_chunks);
 
+            if (other_chunks > 10) {
+                log_warn("too many forward chunks requested");
+                return;
+            }
+
             if (payload_size < 70 + other_chunks * sizeof(uint64_t)) {
                 log_warn("WANT packet too small");
                 return;
@@ -7435,6 +7440,7 @@ void edfs_set_forward_chunks(struct edfs *edfs_context, int forward_chunks) {
         return;
     edfs_context->forward_chunks = forward_chunks;
 }
+
 void edfs_set_rebroadcast(struct edfs *edfs_context, int rebroadcast_val) {
     if (!edfs_context)
         return;
