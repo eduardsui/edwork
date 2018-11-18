@@ -2605,8 +2605,8 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
         thread_mutex_unlock(&key->ino_cache_lock);
 
 #ifdef WITH_SCTP
-    notify_io(edfs_context, key, "wan5", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     if ((is_sctp) && (use_clientaddr) && (clientaddr_size)) {
+        notify_io(edfs_context, key, "wan5", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
         uint64_t start = microseconds();
         uint64_t last_sent = start;
         while ((!chunk_exists(path, chunk)) && (microseconds() - start < timeout)) {
@@ -2616,10 +2616,9 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
                 last_sent = microseconds();
             }
         }
-    }
-#else
-    notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+    } else
 #endif
+    notify_io(edfs_context, key, "wan4", additional_data, 20, edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     return is_sctp;
 }
 
