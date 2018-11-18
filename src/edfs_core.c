@@ -2545,10 +2545,36 @@ int request_data(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_
 }
 
 int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk, int use_cached_addr, unsigned char *proof_cache, int *proof_size, uint32_t chunk_hash, const char *path, int timeout) {
+#ifdef WITH_SCTP
+    unsigned char additional_data[62];
+#else
     unsigned char additional_data[20];
+#endif
     *(uint64_t *)additional_data = htonll(ino);
-    *(uint64_t *)(additional_data + 8)= htonll(chunk);
-    *(uint32_t *)(additional_data + 16)= htonl(chunk_hash);
+    *(uint64_t *)(additional_data + 8) = htonll(chunk);
+    *(uint32_t *)(additional_data + 16) = htonl(chunk_hash);
+#ifdef WITH_SCTP
+    // up to 5 forward chunks
+    int forward_chunks = 5;
+    *(uint16_t *)(additional_data + 20) = htons(forward_chunks);
+    int i;
+    int forward_chunk_index = chunk + 20;
+    int loop_count = 0;
+
+    for (i = 0; i < forward_chunks; i++) {
+        int exists = chunk_exists(path, forward_chunk_index);
+        while (exists) {
+            loop_count ++;
+            if (loop_count > 50)
+                break;
+            forward_chunk_index += 10;
+            exists = chunk_exists(path, forward_chunk_index);
+        }
+        *(uint64_t *)(additional_data + 22 + i * sizeof(uint64_t)) = htonll(forward_chunk_index);
+        if ((!exists) && (loop_count <= 50))
+            forward_chunk_index += 10;
+    }
+#endif
 
     struct sockaddr_in *use_clientaddr = NULL;
     int clientaddr_size = 0;
@@ -2578,19 +2604,21 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
     if (edfs_context->mutex_initialized)
         thread_mutex_unlock(&key->ino_cache_lock);
 
-    notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
 #ifdef WITH_SCTP
+    notify_io(edfs_context, key, "wan5", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     if ((is_sctp) && (use_clientaddr) && (clientaddr_size)) {
         uint64_t start = microseconds();
         uint64_t last_sent = start;
         while ((!chunk_exists(path, chunk)) && (microseconds() - start < timeout)) {
             usleep(1000);
             if (microseconds() - last_sent >= 250000) {
-                notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+                notify_io(edfs_context, key, "wan5", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
                 last_sent = microseconds();
             }
         }
     }
+#else
+    notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
 #endif
     return is_sctp;
 }
@@ -5610,7 +5638,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         edwork_confirm_seq(edwork, key, ntohll(*(uint64_t *)payload), 1);
         return;
     }
-    if ((!memcmp(type, "want", 4)) || (!memcmp(type, "wan3", 4)) || (!memcmp(type, "wan4", 4))) {
+    if ((!memcmp(type, "want", 4)) || (!memcmp(type, "wan3", 4)) || (!memcmp(type, "wan4", 4)) || (!memcmp(type, "wan5", 4))) {
         log_info("WANT received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
 #ifdef EDFS_RANDOMLY_IGNORE_REQUESTS
         int magnitude = edwork_magnitude(edwork);
@@ -5636,7 +5664,8 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         }
 #endif
 
-        int is_encrypted = !memcmp(type, "wan4", 4);
+        int is_bigchunk = !memcmp(type, "wan5", 4);
+        int is_encrypted = (is_bigchunk) || (!memcmp(type, "wan4", 4));
 
         if ((!payload) || (payload_size < 68)) {
             log_warn("WANT packet too small");
@@ -5649,16 +5678,29 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
             return;
         }
 
-        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         uint64_t ino = ntohll(*(uint64_t *)payload);
         uint64_t chunk = ntohll(*(uint64_t *)(payload + 8));
+        unsigned short other_chunks = 0;
+        int other_chunk_index = 0;
+        int payload_offset;
+        if (is_bigchunk) {
+            other_chunks = ntohs(*(uint16_t *)(payload + 20));
+            payload_offset = 54 + other_chunks * sizeof(uint64_t);
 
-        int payload_offset = is_encrypted ? 52 : 20;
+            log_debug("big chunk requested (%i chunks)", (int)other_chunks);
+
+            if (payload_size < 70 + other_chunks * sizeof(uint64_t)) {
+                log_warn("WANT packet too small");
+                return;
+            }
+        } else
+            payload_offset = is_encrypted ? 52 : 20;
         if (!edwork_check_proof_of_work(edwork, payload, payload_size, payload_offset, timestamp, EDWORK_WANT_WORK_LEVEL, EDWORK_WANT_WORK_PREFIX, who_am_i)) {
             log_warn("no valid proof of work");
             return;
         }
 
+        void *clientinfo = edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         if (clientinfo) {
             uint64_t last_ino;
             uint64_t last_chunk;
@@ -5692,7 +5734,10 @@ one_loop:
                     }
                     unsigned char shared_secret[32];
                     
-                    curve25519(shared_secret, edfs_context->key.secret, payload + 20);
+                    if (is_bigchunk)
+                        curve25519(shared_secret, edfs_context->key.secret, payload + 22 + other_chunks * sizeof(uint64_t));
+                    else
+                        curve25519(shared_secret, edfs_context->key.secret, payload + 20);
 
                     unsigned char buf2[BLOCK_SIZE_MAX];
                     memcpy(buf2, edfs_context->key.pk, 32);
@@ -5704,7 +5749,19 @@ one_loop:
                             log_trace("token unspent");
                     } else {
                         log_info("DAT4 sent");
+                        if (other_chunks > 0) {
+                            if (other_chunk_index < other_chunks) {
+                                chunk_hash = 0;
+                                uint64_t other_chunk = ntohll(*(uint64_t *)(payload + 22 + other_chunk_index * sizeof(uint64_t)));
+                                if (other_chunk != chunk) {
+                                    other_chunk_index ++;
+                                    chunk = other_chunk;
+                                    goto one_loop;
+                                }
+                            }
+                        }
 #ifndef EDFS_DISABLE_FORWARD_BLOCK_SEND
+                        else
                         if ((is_sctp) && (loop_count < 2)) {
                             chunk_hash = 0;
                             chunk += 10;
