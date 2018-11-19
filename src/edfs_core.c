@@ -2553,28 +2553,6 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
     *(uint64_t *)additional_data = htonll(ino);
     *(uint64_t *)(additional_data + 8) = htonll(chunk);
     *(uint32_t *)(additional_data + 16) = htonl(chunk_hash);
-#ifdef WITH_SCTP
-    // up to 5 forward chunks
-    int forward_chunks = 5;
-    *(uint16_t *)(additional_data + 20) = htons(forward_chunks);
-    int i;
-    int forward_chunk_index = chunk + 20;
-    int loop_count = 0;
-
-    for (i = 0; i < forward_chunks; i++) {
-        int exists = chunk_exists(path, forward_chunk_index);
-        while (exists) {
-            loop_count ++;
-            if (loop_count > 50)
-                break;
-            forward_chunk_index += 10;
-            exists = chunk_exists(path, forward_chunk_index);
-        }
-        *(uint64_t *)(additional_data + 22 + i * sizeof(uint64_t)) = htonll(forward_chunk_index);
-        if ((!exists) && (loop_count <= 50))
-            forward_chunk_index += 10;
-    }
-#endif
 
     struct sockaddr_in *use_clientaddr = NULL;
     int clientaddr_size = 0;
@@ -2606,13 +2584,34 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
 
 #ifdef WITH_SCTP
     if ((is_sctp) && (use_clientaddr) && (clientaddr_size)) {
-        notify_io(edfs_context, key, "wan5", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+        // up to 5 forward chunks
+        int forward_chunks = 5;
+        *(uint16_t *)(additional_data + 20) = htons(forward_chunks);
+        int i = 0;
+        int forward_chunk_index = chunk + 10;
+        int loop_count = 0;
+
+        for (i = 0; i < forward_chunks; i++) {
+            int exists = chunk_exists(path, forward_chunk_index);
+            while (exists) {
+                loop_count ++;
+                if (loop_count > 50)
+                    goto loop_out;
+                forward_chunk_index += 10;
+                exists = chunk_exists(path, forward_chunk_index);
+            }
+            *(uint64_t *)(additional_data + 22 + i * sizeof(uint64_t)) = htonll(forward_chunk_index);
+            if ((!exists) && (loop_count <= 50))
+                forward_chunk_index += 10;
+        }
+loop_out:
+        notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
         uint64_t start = microseconds();
         uint64_t last_sent = start;
         while ((!chunk_exists(path, chunk)) && (microseconds() - start < timeout)) {
             usleep(1000);
             if (microseconds() - last_sent >= 250000) {
-                notify_io(edfs_context, key, "wan5", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+                notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
                 last_sent = microseconds();
             }
         }
