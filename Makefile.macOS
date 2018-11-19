@@ -11,12 +11,14 @@ SRC = $(UI_SRC) $(USRSCTP_SRC) src/sha256.c src/xxhash.c src/base64.c src/base32
 OBJS = $(SRC: .c=.o)
 
 edfs: ${OBJS}
-	${CC} ${BUILDFLAGS} ${CFLAGS} ${OBJS} ${LIBS}
+	rm -r edwork.app
+	${CC} ${BUILDFLAGS} ${CFLAGS} ${OBJS} ${LIBS} && ./appify.sh --script edwork.sh --icons edwork.icns && rm edfs_mount
 
 %.o:
 	${CC} ${CFLAGS} -c $<
 
 .PHONY: clean
 clean:
+	rm -r ./edwork.app
 	@echo all cleaned up!
 
