@@ -1293,8 +1293,8 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             if (is_sctp & 1) {
                 peer->sctp_socket |= 1;
                 if (((is_listen_socket) || (is_callback))) {
-                    if ((!peer->is_sctp) && (!peer->socket))
-                        peer->socket = edwork_sctp_connect(data, (const struct sockaddr *)&sin, client_len, encapsulation_port);
+                    if ((!peer->is_sctp) && (!peer->socket) && (!is_listen_socket))
+                         peer->socket = edwork_sctp_connect(data, (const struct sockaddr *)&sin, client_len, encapsulation_port);
                     peer->is_sctp = 1;
                 }
             } else
@@ -1490,7 +1490,9 @@ int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key
                     log_debug("not broadcasting to same client");
                 } else
                 if ((data->clients[i].last_seen >= threshold) || (i == 0) || (force_udp)) { // i == 0 => means first addres (broadcast address)
+#ifdef WITH_SCTP
                     try_sctp = ((force_udp) && ((!data->clients[i].is_sctp) || (data->clients[i].sctp_socket & 2))) ? 0 : 1;
+#endif
                     if (safe_sendto(data, &data->clients[i], (const char *)ptr, len, 0, (struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, try_sctp) <= 0) {
 #ifdef _WIN32
                         log_trace("error %i in sendto (client #%i: %s)", (int)WSAGetLastError(), i, edwork_addr_ipv4(&data->clients[i].clientaddr));
@@ -1515,7 +1517,7 @@ int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key
                         } else
                         if (errno != 11)
 #endif
-                            data->clients[i].last_seen = threshold - 180;
+                            data->clients[i].last_seen = threshold - EDWROK_LAST_SEEN_TIMEOUT;
                     } else {
                         send_to ++;
 #ifdef WITH_SCTP

@@ -2544,7 +2544,7 @@ int request_data(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_
     return is_sctp;
 }
 
-int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk, int use_cached_addr, unsigned char *proof_cache, int *proof_size, uint32_t chunk_hash, const char *path, int timeout) {
+int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, uint64_t chunk, int use_cached_addr, unsigned char *proof_cache, int *proof_size, uint32_t chunk_hash, const char *path, int timeout, int *proof_type) {
 #ifdef WITH_SCTP
     unsigned char additional_data[62];
 #else
@@ -2572,10 +2572,10 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
                 memcpy(&addrbuffer, &avl_cache->clientaddr[edwork_random() % avl_cache->len], avl_cache->clientaddr_size);
                 use_clientaddr = &addrbuffer;
                 clientaddr_size = avl_cache->clientaddr_size;
-    #ifdef WITH_SCTP
+#ifdef WITH_SCTP
                 if (!edfs_context->force_sctp)
                     is_sctp = edwork_is_sctp(edfs_context->edwork, use_clientaddr);
-    #endif
+#endif
             }
         }
     }
@@ -2605,19 +2605,32 @@ int request_data_sctp(struct edfs *edfs_context, struct edfs_key_data *key, edfs
                 forward_chunk_index += 10;
         }
 loop_out:
+        if ((proof_type) && (*proof_type != 2)) {
+            if (proof_size)
+                *proof_size = 0;
+            *proof_type = 2;
+        }
         notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
         uint64_t start = microseconds();
         uint64_t last_sent = start;
         while ((!chunk_exists(path, chunk)) && (microseconds() - start < timeout)) {
             usleep(1000);
-            if (microseconds() - last_sent >= 250000) {
+            if (microseconds() - last_sent >= 200000) {
                 notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
                 last_sent = microseconds();
             }
         }
-    } else
-#endif
+    } else {
+        if ((proof_type) && (*proof_type != 1)) {
+            if (proof_size)
+                *proof_size = 0;
+            *proof_type = 1;
+        }
+        notify_io(edfs_context, key, "wan4", additional_data, 20, edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+    }
+#else
     notify_io(edfs_context, key, "wan4", additional_data, 20, edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+#endif
     return is_sctp;
 }
 
@@ -2769,6 +2782,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
     int do_forward = 1;
     int is_sctp = 0;
     int reset_cache_tree = 0;
+    int proof_type = 0;
 
     uint64_t proof_timestamp = microseconds();
 #ifdef EDFS_USE_READ_QUEUE
@@ -2889,7 +2903,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
             }
             uint64_t wait_count = (EDWORK_SCTP_TTL / 2) * 1000;
 #else
-            is_sctp = request_data_sctp(edfs_context, key, ino, chunk, use_addr_cache, proof_cache, &proof_size, sig_hash, path, EDWORK_SCTP_TTL / 2 * 1000);
+            is_sctp = request_data_sctp(edfs_context, key, ino, chunk, use_addr_cache, proof_cache, &proof_size, sig_hash, path, EDWORK_SCTP_TTL / 2 * 1000, &proof_type);
             if (is_sctp)
                 do_forward = 0;
             log_trace("requesting chunk %s:%" PRIu64 " (sctp: %i)", path, chunk, is_sctp);
@@ -4613,7 +4627,7 @@ int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *s
 }
 
 int edfs_peers_info(struct edfs *edfs_context, char *buffer, int buffer_size, int html) {
-    return edwork_debug_node_list(edfs_context->edwork, buffer, buffer_size, (unsigned int)0, time(NULL) - 180, html);
+    return edwork_debug_node_list(edfs_context->edwork, buffer, buffer_size, (unsigned int)0, time(NULL) - EDWROK_LAST_SEEN_TIMEOUT, html);
 }
 
 int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size) {
@@ -5816,7 +5830,7 @@ one_loop:
         // add offset
         int size = BLOCK_SIZE - 4;
         memcpy(buffer, payload, 4);
-        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - 180, 0);
+        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - EDWROK_LAST_SEEN_TIMEOUT, 0);
         log_info("%i records found (offset: %i)", records, offset);
         if (records > 0) {
             size += 4;
@@ -7066,8 +7080,8 @@ int edwork_thread(void *userdata) {
                 edwork_broadcast_discovery(edfs_context);
 #endif
 #ifdef WITH_SCTP
-            if (time(NULL) - startup > 180) {
-                int reconnected_count = edwork_reconnect(edwork, 180);
+            if (time(NULL) - startup > EDWROK_LAST_SEEN_TIMEOUT) {
+                int reconnected_count = edwork_reconnect(edwork, EDWROK_LAST_SEEN_TIMEOUT);
                 if (reconnected_count)
                     log_trace("tried to reconnect %i SCTP sockets", reconnected_count);
             }
