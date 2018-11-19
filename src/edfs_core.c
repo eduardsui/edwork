@@ -2613,12 +2613,14 @@ loop_out:
         notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
         uint64_t start = microseconds();
         uint64_t last_sent = start;
+        thread_set_high_priority();
         while ((!chunk_exists(path, chunk)) && (microseconds() - start < timeout)) {
             usleep(1000);
             if (microseconds() - last_sent >= 200000) {
                 notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
                 last_sent = microseconds();
             }
+            thread_yield();
         }
     } else {
         if ((proof_type) && (*proof_type != 1)) {
