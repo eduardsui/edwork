@@ -25,7 +25,7 @@ static const char *edwork_settings_form =
     "       window.Clipboard=function(t,o,a){var c;function d(){var e,n;a.userAgent.match(/ipad|iphone/i)?((e=o.createRange()).selectNodeContents(c),(n=t.getSelection()).removeAllRanges(),n.addRange(e),c.setSelectionRange(0,999999)):c.select()}return{copy:function(e){var n;n=e,(c=o.createElement(\"textArea\")).value=n,o.body.appendChild(c),d(),o.execCommand(\"copy\"),o.body.removeChild(c)}}}(window,document,navigator);"
     "    </script>\n"
     "  </head>\n"
-    "  <body onload=\"uiloaded()\" style=\"background-image: url('branding.png'); background-repeat: no-repeat; background-position: right;\">\n"
+    "  <body onload=\"uiloaded()\" style=\"background-image: url('branding.png'); background-repeat: no-repeat; background-position: right top;\">\n"
     "    <main class=\"mastcontent\">\n"
     "      <div class=\"container\">\n"
     "        <h2 class=\"subtitle subtitle--xxl\">edwork management tool</h2>\n"
