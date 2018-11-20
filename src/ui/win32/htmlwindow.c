@@ -719,7 +719,7 @@ long DisplayHTMLStr(HWND hwnd, LPCTSTR string) {
     }
     int len = strlen(string);
     LPSTR string2 = (LPSTR)malloc(len + MAX_PATH + 32);
-    snprintf(string2, len + MAX_PATH + 32, "<base href='file:///%s/'/>%s", app_path, string);
+    snprintf(string2, len + MAX_PATH + 32, "<base href='file:///%s/'/>\n%s", app_path, string);
 
     if (!browserObject->lpVtbl->QueryInterface(browserObject, &IID_IWebBrowser2, (void**)&webBrowser2)) {
         VariantInit(&myURL);
