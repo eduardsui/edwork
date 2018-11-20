@@ -1,5 +1,7 @@
 # edwork
-[![Donate Bitcoin](https://img.shields.io/badge/donate%20bitcoin-19VuR1YuM2eSX5dgAmV5ZudwpQdfhdxpze-green.svg)](bitcoin:19VuR1YuM2eSX5dgAmV5ZudwpQdfhdxpze?label=beer%20%26%20chicks)
+You may donate Bitcoin for this project at 14LqvMzFfaJ82C7wY5iavvTf9HPELYWsax
+
+![14LqvMzFfaJ82C7wY5iavvTf9HPELYWsax](btcaddress.png)
 
 edwork is a lightweight decentralized, distributed read-write filesystem. It uses UDP and SCTP/UDP protocol for node sync. For now, it should not be used in production.
 
