@@ -1674,6 +1674,7 @@ int edfs_schedule_iterate(struct edfs *edfs_context, unsigned int *idle_ref) {
             }
             if (root->when_idle)
                 idle_count ++;
+            thread_yield();
         }
         prev = root;
         root = next;
@@ -2940,8 +2941,10 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
 #endif
 #endif
             uint64_t start = microseconds();
-            while ((!chunk_exists(path, chunk)) && (microseconds() - start < wait_count))
+            while ((!chunk_exists(path, chunk)) && (microseconds() - start < wait_count)) {
                 usleep(1000);
+                thread_yield();
+            }
         } else {
 #ifdef EDFS_USE_READ_QUEUE
             if (!chunk_exists(path, chunk + 1)) {
@@ -3269,6 +3272,8 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                 usleep(50000);
 #endif
                 read_file_json(edfs_context, key, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+
+                thread_yield();
             } while (!valid_hash);
 
             if (valid_hash) {

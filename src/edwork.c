@@ -300,7 +300,7 @@ void edwork_init() {
     usrsctp_sysctl_set_sctp_sack_freq_default(1);
     usrsctp_sysctl_set_sctp_delayed_sack_time_default(50);
     usrsctp_sysctl_set_sctp_max_burst_default(1);
-    usrsctp_sysctl_set_sctp_enable_sack_immediately(1);
+    // usrsctp_sysctl_set_sctp_enable_sack_immediately(1);
     usrsctp_sysctl_set_sctp_nat_friendly(1);
     usrsctp_sysctl_set_sctp_inits_include_nat_friendly(1);
     usrsctp_sysctl_set_sctp_mobility_base(1);
@@ -308,8 +308,8 @@ void edwork_init() {
     usrsctp_sysctl_set_sctp_blackhole(2);
     usrsctp_sysctl_set_sctp_default_frag_interleave(2);
     usrsctp_sysctl_set_sctp_ecn_enable(1);
-    usrsctp_sysctl_set_sctp_min_split_point(1000);
-    usrsctp_sysctl_set_sctp_min_residual(1000);
+    usrsctp_sysctl_set_sctp_min_split_point(1452);
+    // usrsctp_sysctl_set_sctp_min_residual(1000);
     usrsctp_sysctl_set_sctp_max_chunks_on_queue(1024);
 #endif
 }
