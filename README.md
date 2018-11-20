@@ -1,7 +1,7 @@
 # edwork
 You may donate Bitcoin for this project at 14LqvMzFfaJ82C7wY5iavvTf9HPELYWsax
 
-![14LqvMzFfaJ82C7wY5iavvTf9HPELYWsax](btcaddress.png)
+![](bwallet.png)
 
 edwork is a lightweight decentralized, distributed read-write filesystem. It uses UDP and SCTP/UDP protocol for node sync. For now, it should not be used in production.
 
