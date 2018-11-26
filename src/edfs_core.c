@@ -4633,6 +4633,93 @@ int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *s
     return -1;
 }
 
+static int edfs_data_dir_remove(struct edfs *edfs_context, struct edfs_key_data *key, const char *path) {
+    tinydir_dir dir;
+    size_t path_len = strlen(path);
+
+    if (!tinydir_open_sorted(&dir, path)) {
+        int i;
+        for (i = 0; i < dir.n_files; i++) {
+            tinydir_file file;
+            tinydir_readfile_n(&dir, &file, i);
+
+            char *buf;
+            size_t len;
+
+            if ((strcmp(file.name, ".")) && (strcmp(file.name, "..")) && (file.is_dir)) {
+                len = path_len + strlen(file.name) + 2; 
+                buf = (char *)malloc(len);
+
+                if (buf) {
+                    struct stat statbuf;
+                    snprintf(buf, len, "%s/%s", path, file.name);
+                    unsigned char data[MAX_INODE_DESCRIPTOR_SIZE];
+                    int edfs_inode_is_dir = 0;
+                    int data_size = edfs_read_file(edfs_context, key, path, file.name, (unsigned char *)data, MAX_INODE_DESCRIPTOR_SIZE - 1, ".json", 1, 1, 0, NULL, 0, 0);
+                    if (data_size > 0) {
+                        JSON_Value *root_value = json_parse_string(data);
+                        if (json_value_get_type(root_value) == JSONObject) {
+                            JSON_Object *root_object = json_value_get_object(root_value);
+                            edfs_inode_is_dir = ((int)json_object_get_number(root_object, "type")) & S_IFDIR;
+                            if ((int)json_object_get_number(root_object, "deleted"))
+                                edfs_inode_is_dir = 0;
+                        }
+                        json_value_free(root_value);
+                    }
+                    if (!edfs_inode_is_dir)
+                        recursive_rmdir(buf);
+                    free(buf);
+                }
+            }
+        }
+        tinydir_close(&dir);
+    } else
+        return -1;
+    return 0;
+}
+
+int edfs_remove_data(struct edfs *edfs_context, const char *key_id) {
+    if ((!edfs_context) || (!key_id))
+        return -1;
+
+    if ((!edfs_context) || (!key_id))
+        return -1;
+
+    uint64_t use_key_id = 0;
+    if (strlen(key_id) > 32) {
+        unsigned char public_key[MAX_KEY_SIZE];
+        size_t len = base64_decode_no_padding((const BYTE *)key_id, public_key, MAX_KEY_SIZE);
+        if (len >= 32) {
+            if (len == 64) {
+                public_key[0] &= 248;
+                public_key[31] &= 63;
+                public_key[31] |= 64;
+
+                ed25519_get_pubkey(public_key, public_key);
+            }
+            unsigned char hash[32];
+            sha256(public_key, 32, hash);
+            use_key_id = htonll(XXH64(hash, 32, 0));
+        }
+    } else
+        base32_decode((const BYTE *)key_id, (BYTE *)&use_key_id, sizeof(uint64_t));
+
+    struct edfs_key_data *key = edfs_context->key_data;
+    struct edfs_key_data *prev_key = NULL;
+    while (key) {
+        if (key->key_id_xxh64_be == use_key_id) {
+            char fullpath[MAX_PATH_LEN];
+            fullpath[0] = 0;
+            snprintf(fullpath, MAX_PATH_LEN, "%s/%s/inode", edfs_context->edfs_directory, key_id);
+
+            return edfs_data_dir_remove(edfs_context, key, fullpath);
+        }
+        prev_key = key;
+        key = (struct edfs_key_data *)key->next_key;
+    }
+    return -1;
+}
+
 int edfs_peers_info(struct edfs *edfs_context, char *buffer, int buffer_size, int html) {
     return edwork_debug_node_list(edfs_context->edwork, buffer, buffer_size, (unsigned int)0, time(NULL) - EDWROK_LAST_SEEN_TIMEOUT, html);
 }

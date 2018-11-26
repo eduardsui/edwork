@@ -262,7 +262,7 @@ int main(int argc, char *argv[]) {
 
     log_info("starting edfs on port %i", port);
 
-    fprintf(stdout, "Welcome to edwork 0.1BETA console\nSupported commands are: ls, cd, get, put, rmdir, rm, open, lk, chkey, newkey, addkey, exit\n");
+    fprintf(stdout, "Welcome to edwork 0.1BETA console\nSupported commands are: ls, cd, get, put, rmdir, rm, open, lk, chkey, newkey, addkey, clean [key], exit\n");
     char buffer[0x100];
     edfs_edwork_init(edfs_context, port);
     char working_dir[4096];
@@ -325,6 +325,13 @@ int main(int argc, char *argv[]) {
                     // include null character at the end of parameters
                     memcpy(key_buffer, parameters, strlen(parameters) + 1);
                 }
+                continue;
+            }
+            if (!strcmp(cmd, "clean")) {
+                if ((parameters) && (parameters[0]))
+                    edfs_remove_data(edfs_context, parameters);
+                else
+                    edfs_remove_data(edfs_context, key_buffer);
                 continue;
             }
             if (!strcmp(cmd, "newkey")) {

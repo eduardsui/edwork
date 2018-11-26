@@ -155,6 +155,7 @@ int edfs_rmkey(struct edfs *edfs_context, const char *key_id);
 int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *size, uint64_t *files, uint64_t *directories, uint64_t *top_block, uint64_t *timestamp);
 int edfs_peers_info(struct edfs *edfs_context, char *buffer, int buffer_size, int html);
 int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size);
+int edfs_remove_data(struct edfs *edfs_context, const char *key_id);
 
 void *edfs_get_key(struct edfs *edfs_context);
 void *edfs_next_key(void *key);
