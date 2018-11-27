@@ -4657,7 +4657,7 @@ static int edfs_data_dir_remove(struct edfs *edfs_context, struct edfs_key_data 
                     int edfs_inode_is_dir = 0;
                     int data_size = edfs_read_file(edfs_context, key, path, file.name, (unsigned char *)data, MAX_INODE_DESCRIPTOR_SIZE - 1, ".json", 1, 1, 0, NULL, 0, 0);
                     if (data_size > 0) {
-                        JSON_Value *root_value = json_parse_string(data);
+                        JSON_Value *root_value = json_parse_string((const char *)data);
                         if (json_value_get_type(root_value) == JSONObject) {
                             JSON_Object *root_object = json_value_get_object(root_value);
                             edfs_inode_is_dir = ((int)json_object_get_number(root_object, "type")) & S_IFDIR;
