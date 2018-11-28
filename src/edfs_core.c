@@ -2855,18 +2855,19 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
         if (read_size < 0) {
             if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                 log_error("read timed out");
+                if (is_sctp) {
+                    if ((microseconds() - last_key_timestamp >= 1500000)) {
+                        EDFS_THREAD_LOCK(edfs_context);
+                        edfs_make_key(edfs_context);
+                        EDFS_THREAD_UNLOCK(edfs_context);
+                        last_key_timestamp = microseconds();
+                    }
+                }
                 break;
             }
-            if (is_sctp) {
-                if ((microseconds() - last_key_timestamp >= 1500000)) {
-                    EDFS_THREAD_LOCK(edfs_context);
-                    edfs_make_key(edfs_context);
-                    EDFS_THREAD_UNLOCK(edfs_context);
-                    last_key_timestamp = microseconds();
-                }
-            } else {
-                if ((microseconds() - last_key_timestamp >= 1000000)) {
-                    // new key every second
+            if (!is_sctp) {
+                if ((microseconds() - last_key_timestamp >= 2000000)) {
+                    // new key every 2 seconds
                     EDFS_THREAD_LOCK(edfs_context);
                     edfs_make_key(edfs_context);
                     EDFS_THREAD_UNLOCK(edfs_context);
@@ -2884,8 +2885,8 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 if (edfs_context->mutex_initialized)
                     thread_mutex_unlock(&key->ino_cache_lock);
             }
-            if (microseconds() - proof_timestamp >= 500000) {
-                // new proof every 500ms
+            if (((is_sctp) && (microseconds() - proof_timestamp >= 500000)) || ((!is_sctp) && (microseconds() - proof_timestamp >= 200000))) {
+                // new proof every 500ms (SCTP), 200ms (UDP)
 #ifdef EDFS_USE_READ_QUEUE
                 filebuf->proof_size = 0;
 #else
@@ -2911,9 +2912,9 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 do_forward = 0;
             log_trace("requesting chunk %s:%" PRIu64 " (sctp: %i)", path, chunk, is_sctp);
 #ifdef WITH_SCTP
-            uint64_t wait_count = is_sctp ? (EDWORK_SCTP_TTL / 2) * 1000 : 150000;
+            uint64_t wait_count = is_sctp ? (EDWORK_SCTP_TTL / 2) * 1000 : 50000;
 #else
-            uint64_t wait_count = 150000;
+            uint64_t wait_count = 50000;
 #endif
 #ifndef EDFS_NO_FORWARD_WAIT
             if (do_forward) {
@@ -2928,13 +2929,24 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                         }
                     }
                     if (forward_chunk <= last_file_chunk) {
-                        forward_chunks_requested ++;
-                        request_data(edfs_context, key, ino, forward_chunk ++, 1, 1, NULL, NULL, 0);
-                        uint64_t delta = (microseconds() - start);
-                        if ((delta >= wait_count) || (delta < 2000))
-                            continue;
+                        int i;
+                        // wait 10 ms before requesting another chunk
+                        int exists = 0;
+                        for (i = 0; i < 10; i++) {
+                            usleep(1000);
+                            exists = chunk_exists(path, chunk);
+                            if (exists)
+                                break;
+                        }
+                        if (!exists) {
+                            forward_chunks_requested ++;
+                            request_data(edfs_context, key, ino, forward_chunk ++, 1, 1, NULL, NULL, 0);
+                            uint64_t delta = (microseconds() - start);
+                            if ((delta >= wait_count) || (delta < 2000))
+                                continue;
 
-                        wait_count = delta;
+                            wait_count = delta;
+                        }
                     }
                 }
             }
