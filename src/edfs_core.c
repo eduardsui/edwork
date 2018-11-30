@@ -7158,7 +7158,7 @@ int edwork_thread(void *userdata) {
             uint64_t key_buffer[1000];
             int key_buffer_index = 0;
             key = edfs_context->key_data;
-            int force_broadcast_to_all = ((ping_count % 15) == 0);
+            int force_broadcast_to_all = ((ping_count % 90) == 0);
             while (key) {
                 key_buffer[key_buffer_index ++] = key->key_id_xxh64_be;
                 key = (struct edfs_key_data *)key->next_key;
