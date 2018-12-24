@@ -4853,8 +4853,11 @@ int edfs_shard_data_request(struct edfs *edfs_context, uint64_t inode, uint64_t 
     // file was deleted
     if (get_deleted_json(edfs_context, key, inode))
         return 1;
-
+#ifdef WITH_SCTP
+    request_data_sctp(edfs_context, key, inode, chunk, edwork_random() % 10, NULL, NULL, 0, fullpath, 0, NULL);
+#else
     request_data(edfs_context, key, inode, chunk, 1, edwork_random() % 10, NULL, NULL, 0);
+#endif
     return 0;
 }
 
