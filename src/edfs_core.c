@@ -1895,8 +1895,9 @@ JSON_Value *read_json(struct edfs *edfs_context, struct edfs_key_data *key, cons
     }
     // signature is ok, proceed to processing
     JSON_Value *root_value = json_parse_string(data);
-    if (json_value_get_type(root_value) != JSONObject) {
-        json_value_free(root_value);
+    if ((!root_value) || (json_value_get_type(root_value) != JSONObject)) {
+        if (root_value)
+            json_value_free(root_value);
         log_error("invlaid root object in JSON file");
         return 0;
     }
@@ -4529,6 +4530,7 @@ int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
             edwork_broadcast_discovery_key(edfs_context, key);
 #endif
+            edfs_settings_set_number(edfs_context, "edfs.primary_key", XXH32(key->key_id, sizeof(key->key_id), 0));
             return 0;
         }
         key = (struct edfs_key_data *)key->next_key;
@@ -7025,12 +7027,16 @@ int edwork_load_keys(struct edfs *edfs_context) {
         return 0;
 
     int loaded = 0;
+    uint64_t primary_key_id = (uint64_t)edfs_settings_get_number(edfs_context, "edfs.primary_key");
     while (dir.has_next) {
         tinydir_file file;
         tinydir_readfile(&dir, &file);
         if ((file.is_dir) && (file.name[0] != '.')) {
-            if (edwork_load_key(edfs_context, file.name))
+            if (edwork_load_key(edfs_context, file.name)) {
+                if ((primary_key_id) && (!edfs_context->use_key_id) && (edfs_context->key_data) && (XXH32(edfs_context->key_data->key_id, sizeof(edfs_context->key_data->key_id), 0) == primary_key_id))
+                    edfs_context->primary_key = edfs_context->key_data;
                 loaded ++;
+            }
         }
         tinydir_next(&dir);
     }
@@ -7668,4 +7674,106 @@ void edfs_set_partition_key(struct edfs *edfs_context, char *key_id) {
             base32_decode((const BYTE *)key_id, (BYTE *)&edfs_context->use_key_id, sizeof(uint64_t));
     } else
         edfs_context->use_key_id = 0;
+}
+
+static JSON_Value *read_json_settings(const struct edfs *edfs_context, int create_new) {
+    char fullpath[MAX_PATH_LEN];
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/settings.json", edfs_context->edfs_directory);
+
+    JSON_Value *root_value = json_parse_file(fullpath);
+    if ((!root_value) || (json_value_get_type(root_value) != JSONObject)) {
+        if (root_value)
+            json_value_free(root_value);
+
+        if (create_new)
+            return json_value_init_object();
+
+        if (root_value)
+            log_error("invlaid root object in JSON file");
+        return 0;
+    }
+
+    return root_value;
+}
+
+int edfs_settings_set(const struct edfs *edfs_context, const char *key, const char *value) {
+    if (!edfs_context)
+        return -1;
+
+    JSON_Value *root_value = read_json_settings(edfs_context, 1);
+    if (!root_value)
+        return -1;
+
+    JSON_Object *root_object = json_value_get_object(root_value);
+    if (root_object) {
+        if (value)
+            json_object_dotset_string(root_object, key ? key : "", value);
+        else
+            json_object_dotremove(root_object, key ? key : "");
+        char fullpath[MAX_PATH_LEN];
+        fullpath[0] = 0;
+        snprintf(fullpath, MAX_PATH_LEN, "%s/settings.json", edfs_context->edfs_directory);
+        json_serialize_to_file_pretty(root_value, fullpath);
+    }
+    json_value_free(root_value);
+
+    return 0;
+}
+
+int edfs_settings_set_number(const struct edfs *edfs_context, const char *key, double value) {
+    if (!edfs_context)
+        return -1;
+
+    JSON_Value *root_value = read_json_settings(edfs_context, 1);
+    if (!root_value)
+        return -1;
+
+    JSON_Object *root_object = json_value_get_object(root_value);
+    if (root_object) {
+        json_object_dotset_number(root_object, key ? key : "", value);
+        char fullpath[MAX_PATH_LEN];
+        fullpath[0] = 0;
+        snprintf(fullpath, MAX_PATH_LEN, "%s/settings.json", edfs_context->edfs_directory);
+        json_serialize_to_file_pretty(root_value, fullpath);
+    }
+    json_value_free(root_value);
+
+    return 0;
+}
+
+int edfs_settings_get(const struct edfs *edfs_context, const char *key, char *value, int value_len) {
+    if (!edfs_context)
+        return -1;
+
+    JSON_Value *root_value = read_json_settings(edfs_context, 0);
+    if (!root_value) {
+        if ((value) && (value_len > 0))
+            value[0] = 0;
+        return 0;
+    }
+
+    if ((value) && (value_len > 0))
+        value[0] = 0;
+
+    JSON_Object *root_object = json_value_get_object(root_value);
+    const char *json_value = json_object_dotget_string(root_object, key ? key : "");
+    if ((json_value) && (value) && (value_len > 0))
+        strncpy(value, json_value, value_len);
+    json_value_free(root_value);
+    return 1;
+}
+
+double edfs_settings_get_number(const struct edfs *edfs_context, const char *key) {
+    if (!edfs_context)
+        return 0;
+
+    JSON_Value *root_value = read_json_settings(edfs_context, 0);
+    if (!root_value)
+        return 0;
+
+    JSON_Object *root_object = json_value_get_object(root_value);
+    double json_value = json_object_dotget_number(root_object, key ? key : "");
+    json_value_free(root_value);
+    return json_value;
 }

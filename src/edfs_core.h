@@ -173,6 +173,11 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
 int edfs_schedule_remove(struct edfs *edfs_context, edfs_schedule_callback callback, uint64_t userdata_a, uint64_t userdata_b);
 int edfs_schedule_iterate(struct edfs *edfs_context, unsigned int *idle_ref);
 
+int edfs_settings_set(const struct edfs *edfs_context, const char *key, const char *value);
+int edfs_settings_set_number(const struct edfs *edfs_context, const char *key, double value);
+int edfs_settings_get(const struct edfs *edfs_context, const char *key, char *value, int value_len);
+double edfs_settings_get_number(const struct edfs *edfs_context, const char *key);
+
 struct edfs *edfs_create_context(const char *use_working_directory);
 void edfs_destroy_context(struct edfs *edfs_context);
 
