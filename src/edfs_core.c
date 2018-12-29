@@ -4401,6 +4401,7 @@ int edfs_create_key(struct edfs *edfs_context) {
     if ((edwork_load_key(edfs_context, b64buffer)) && (edfs_context->key_data)) {
         edfs_genesis_if_new(edfs_context, edfs_context->key_data);
         edfs_context->primary_key = edfs_context->key_data;
+        edfs_settings_set_number(edfs_context, "edfs.primary_key", XXH32(edfs_context->primary_key->key_id, sizeof(edfs_context->primary_key->key_id), 0));
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
         edwork_broadcast_discovery_key(edfs_context, edfs_context->key_data);
 #endif
