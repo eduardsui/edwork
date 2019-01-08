@@ -44,6 +44,9 @@
 #ifdef EDFS_EMULTATED_STORE
     #include "store.h"
 #endif
+#ifdef __APPLE__
+    #include <CoreFoundation/CoreFoundation.h>
+#endif
 
 #define BLOCK_SIZE_MAX          BLOCK_SIZE + 0x3000
 #define EDFS_INO_CACHE_ADDR     20
@@ -849,6 +852,31 @@ char *store_adjustpath2(struct edfs_key_data *key_data, char *fullpath, const ch
     return fullpath;
 }
 
+#ifdef __APPLE__
+const char *normalizedname(const char *name, int name_len, char *normalized_filename, int normalized_size) {
+    normalized_filename[0] = 0;
+    if (name_len > normalized_size - 1)
+        name_len = normalized_size - 1;
+    CFStringRef cfStringRef = CFStringCreateWithBytes(kCFAllocatorDefault, (const unsigned char *)name, name_len, kCFStringEncodingUTF8, FALSE);
+    if (!cfStringRef)
+        cfStringRef = CFStringCreateWithBytes(kCFAllocatorDefault, (const unsigned char *)name, name_len, kCFStringEncodingWindowsLatin1, FALSE);
+    if (cfStringRef) {
+        CFMutableStringRef cfMutable = CFStringCreateMutableCopy(NULL, 0, cfStringRef);
+        CFStringNormalize(cfMutable, kCFStringNormalizationFormC);
+        if (!CFStringGetCString(cfMutable, normalized_filename, normalized_size - 1, kCFStringEncodingUTF8)) {
+            memcpy(normalized_filename, name, name_len);
+            normalized_filename[name_len] = 0;
+        }
+        CFRelease(cfStringRef);
+        CFRelease(cfMutable);
+    } else {
+        memcpy(normalized_filename, name, name_len);
+        normalized_filename[name_len] = 0;
+    }
+    return normalized_filename;
+}
+#endif
+
 uint64_t computeinode2(struct edfs_key_data *key, uint64_t parent_inode, const char *name, int name_len) {
     unsigned char hash[32];
     uint64_t inode;
@@ -872,8 +900,16 @@ uint64_t computeinode2(struct edfs_key_data *key, uint64_t parent_inode, const c
     if ((key) && (!parent_inode))
         sha256_update(&ctx, (const BYTE *)&key->key_id_xxh64_be, sizeof(uint64_t));
     sha256_update(&ctx, (const BYTE *)&parent_inode, sizeof(parent_inode));
+#ifdef __APPLE__
+    if (name) {
+        char normalized_filename[MAX_PATH_LEN];
+        normalizedname(name, name_len, normalized_filename, sizeof(normalized_filename));
+        sha256_update(&ctx, (const BYTE *)normalized_filename, strlen(normalized_filename));
+    }
+#else
     if (name)
         sha256_update(&ctx, (const BYTE *)name, name_len);
+#endif
     sha256_final(&ctx, hash);
 
     inode = XXH64(hash, 32, 0);
@@ -2321,6 +2357,13 @@ int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *e
 
     int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, ensure_name ? namebuf : NULL, ensure_name ? sizeof(namebuf) : 0, NULL, NULL, NULL, NULL);
     if ((type) && (ensure_name) && (strncmp(namebuf, ensure_name, sizeof(namebuf)))) {
+    #ifdef __APPLE__
+        char normalized_filename[MAX_PATH_LEN];
+        normalizedname(ensure_name, strlen(ensure_name), normalized_filename, sizeof(normalized_filename));
+        // is valid (just needs normalization)
+        if (!strncmp(namebuf, normalized_filename, MAX_PATH_LEN))
+            return type;
+    #endif
         log_error("%s collides with %s", ensure_name, namebuf);
         return 0;
     }
