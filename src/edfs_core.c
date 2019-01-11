@@ -3162,7 +3162,8 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
 
         if ((add_directory) && (!off)) {
             b->size += add_directory(".", ino, type, 0, created, modified, timestamp / 1000000, userdata);
-            b->size += add_directory("..", parent, type, 0, created, modified, timestamp / 1000000, userdata);
+            if (parent)
+                b->size += add_directory("..", parent, type, 0, created, modified, timestamp / 1000000, userdata);
         }
         int64_t index = 0;
         int64_t start_at = b->start;
@@ -7363,6 +7364,27 @@ void edfs_edwork_init(struct edfs *edfs_context, int port) {
         edfs_context->start_timestamp = microseconds();
     } else
         log_error("edwork already initialized");
+}
+
+int edfs_edwork_is_initialized(struct edfs *edfs_context) {
+    if (!edfs_context)
+        return 0;
+
+    if (!edfs_context->mutex_initialized)
+        return 0;
+
+    if (!edfs_context->primary_key)
+        return 0;
+}
+
+int edfs_edwork_wait_initialization(struct edfs *edfs_context, int timeout_ms) {
+    uint64_t timeout = microseconds() + timeout_ms * 1000;
+    while (!edfs_edwork_is_initialized(edfs_context)) {
+        if (microseconds() >= timeout)
+            return 0;
+        usleep(5000);
+    }
+    return 1;
 }
 
 void edfs_edwork_done(struct edfs *edfs_context) {

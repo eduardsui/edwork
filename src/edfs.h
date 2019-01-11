@@ -1,19 +1,15 @@
 #ifndef __EDFS_H
 #define __EDFS_H
 
-#ifdef _WIN32
-    #define USE_STAT_PATCH
-#else
-    #include <sys/stat.h>
-#endif
-
-#include "edwork.h"
-#include "edfs_core.h"
 #include <dirent.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <utime.h>
+
+#include "edwork.h"
+#include "edfs_core.h"
 
 #define EDFS_DIR_BUFFER     128
 

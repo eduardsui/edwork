@@ -134,6 +134,8 @@ int edfs_create_key(struct edfs *edfs_context);
 int edfs_use_key(struct edfs *edfs_context, const char *public_key, const char *private_key);
 void edfs_edwork_init(struct edfs *edfs_context, int port);
 void edfs_edwork_done(struct edfs *edfs_context);
+int edfs_edwork_is_initialized(struct edfs *edfs_context);
+int edfs_edwork_wait_initialization(struct edfs *edfs_context, int timeout_ms);
 int edfs_file_exists(const char *name);
 
 ssize_t edfs_read_simple_key(struct edfs *edfs_context, void *ptr, size_t size, FILE *stream);

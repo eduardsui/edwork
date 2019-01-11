@@ -97,6 +97,8 @@ size_t ed_fread(void *ptr, size_t size, size_t nmemb, EDFS_FILE *f) {
         return 0;
     }
     f->offset += err;
+    if (size)
+        return (size_t)err / size;
     return (size_t)err;
 }
 
@@ -112,6 +114,8 @@ size_t ed_fwrite(const void *ptr, size_t size, size_t nmemb, EDFS_FILE *f) {
         return 0;
     }
     f->offset += err;
+    if (size)
+        return (size_t)err / size;
     return (size_t)err;
 }
 
@@ -233,7 +237,7 @@ struct dirent *ed_readdir(EDFS_DIR *dir) {
         errno = -err;
         return NULL;
     }
-
+    dir->offset += dir->dir_buffer_size;
     if (dir->dir_buffer_offset < dir->dir_buffer_size)
         return &dir->dir_buffer[dir->dir_buffer_offset ++];
 
