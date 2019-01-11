@@ -11,9 +11,8 @@ int main() {
     if (f) {
         char buf[8192];
         int size = ed_fread(buf, 1, sizeof(buf), f);
-        if (size > 0) {
+        if (size > 0)
             fwrite(buf, size, 1, stdout);
-        }
         ed_fclose(f);
     } else
         perror("ed_fopen");
@@ -38,4 +37,6 @@ int main() {
     // standard deinitialization //
     edfs_edwork_done(edfs_context);
     edfs_destroy_context(edfs_context);
+
+    return 0;
 }
