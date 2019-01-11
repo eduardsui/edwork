@@ -23,20 +23,20 @@
 
 #ifdef USE_STAT_PATCH
     struct stat64_win32 {
-	    dev_t         st_dev;
-	    uint64_t      st_ino;
-	    mode_t        st_mode;
-	    short          st_nlink;
-	    unsigned int  st_uid;
-	    unsigned int  st_gid;
-	    dev_t st_rdev;
+        dev_t         st_dev;
+        uint64_t      st_ino;
+        mode_t        st_mode;
+        short          st_nlink;
+        unsigned int  st_uid;
+        unsigned int  st_gid;
+        dev_t st_rdev;
         short         dummy;
-	    int64_t       st_size;
-	    time_t st_atime;
+        int64_t       st_size;
+        time_t st_atime;
         int dummy2;
-	    time_t st_mtime;
+        time_t st_mtime;
         int dummy3;
-	    time_t st_ctime;
+        time_t st_ctime;
         int dummy4;
     };
     #define edfs_stat struct stat64_win32
