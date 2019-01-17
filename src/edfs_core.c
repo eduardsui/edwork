@@ -7375,6 +7375,8 @@ int edfs_edwork_is_initialized(struct edfs *edfs_context) {
 
     if (!edfs_context->primary_key)
         return 0;
+
+    return 1;
 }
 
 int edfs_edwork_wait_initialization(struct edfs *edfs_context, int timeout_ms) {
