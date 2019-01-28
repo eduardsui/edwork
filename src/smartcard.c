@@ -1,3 +1,5 @@
+#include <stdlib.h>
+#include <string.h>
 #ifdef _WIN32
     #undef UNICODE
     #include <windows.h>
@@ -134,11 +136,11 @@ const char *SCardGetErrorString(LONG lRetValue) {
 
 LONG SC_ListReaders(SCARDCONTEXT m_hContext, LPTSTR *pszaReaders, int max_readers) {
     LONG lRetValue;
-	LPTSTR          pmszReaders = NULL;
-	LPTSTR          pszReader;
-	DWORD           cch = SCARD_AUTOALLOCATE;
-	INT				iNumberOfReaders;
-	INT				iSelectedReader;
+    LPTSTR pmszReaders = NULL;
+    LPTSTR pszReader;
+    DWORD cch = SCARD_AUTOALLOCATE;
+    int iNumberOfReaders;
+    int iSelectedReader;
 
     SC_errno = 0;
 
@@ -146,30 +148,30 @@ LONG SC_ListReaders(SCARDCONTEXT m_hContext, LPTSTR *pszaReaders, int max_reader
         pszaReaders[0] = 0;
     max_readers --;
     if (max_readers <= 0)
-        return 0;
+    return 0;
 
-	lRetValue = SCardListReaders(m_hContext, NULL, (LPTSTR)&pmszReaders, &cch);
-	if (lRetValue != SCARD_S_SUCCESS) {
+    lRetValue = SCardListReaders(m_hContext, NULL, (LPTSTR)&pmszReaders, &cch);
+    if (lRetValue != SCARD_S_SUCCESS) {
         SC_errno = lRetValue;
         return -1;
-	}
-		
-	iNumberOfReaders = 0;
-	pszReader = pmszReaders;
+    }
+        
+    iNumberOfReaders = 0;
+    pszReader = pmszReaders;
 
-	while ((*pszReader != '\0') && (iNumberOfReaders < max_readers)) {
-		pszaReaders[iNumberOfReaders] = strdup((LPTSTR)pszReader);
-		pszReader = pszReader + strlen(pszReader) + 1;
-		iNumberOfReaders++;
-	}
+    while ((*pszReader != '\0') && (iNumberOfReaders < max_readers)) {
+        pszaReaders[iNumberOfReaders] = strdup((LPTSTR)pszReader);
+        pszReader = pszReader + strlen(pszReader) + 1;
+        iNumberOfReaders++;
+    }
     pszaReaders[iNumberOfReaders] = 0;
-	
-	// Releases memory that has been returned from the resource manager 
+    
+    // Releases memory that has been returned from the resource manager 
     // using the SCARD_AUTOALLOCATE length designator.
-	lRetValue = SCardFreeMemory(m_hContext, pmszReaders);
-	if (lRetValue != SCARD_S_SUCCESS)
+    lRetValue = SCardFreeMemory(m_hContext, pmszReaders);
+    if (lRetValue != SCARD_S_SUCCESS)
         SC_errno = lRetValue;
-	return iNumberOfReaders;
+    return iNumberOfReaders;
 }
 
 void SC_FreeReaders(char **readers) {
@@ -181,31 +183,31 @@ void SC_FreeReaders(char **readers) {
     }
 }
 SCARDCONTEXT SC_Connect() {
-	LONG lRetValue;
+    LONG lRetValue;
     SCARDCONTEXT m_hContext;
     
     SC_errno = 0;
 
-	LONG error = SCardEstablishContext(SCARD_SCOPE_USER, NULL, NULL, &m_hContext);
+    LONG error = SCardEstablishContext(SCARD_SCOPE_USER, NULL, NULL, &m_hContext);
     if (error) {
         SC_errno = error;
         return -1;
     }
-	return m_hContext;
+    return m_hContext;
 }
 
 int SC_Disconnect(SCARDCONTEXT m_hContext) {
     SC_errno = 0;
-	LONG error = SCardReleaseContext(m_hContext);	
+    LONG error = SCardReleaseContext(m_hContext);    
     if (error) {
         SC_errno = error;
         return -1;
     }
-	return 0;
+    return 0;
 }
 
 
-int SC_WaitForCard(SCARDCONTEXT m_hContext, CHAR *m_szSelectedReader, int max_time) {
+int SC_WaitForCard(SCARDCONTEXT m_hContext, char *m_szSelectedReader, int max_time) {
     SCARD_READERSTATE sReaderState;
     LONG lRetValue;
 
@@ -222,7 +224,7 @@ int SC_WaitForCard(SCARDCONTEXT m_hContext, CHAR *m_szSelectedReader, int max_ti
         // wait for card
         do {
             lRetValue = SCardGetStatusChange(m_hContext, 30, &sReaderState, 1);
-	        if (lRetValue != SCARD_S_SUCCESS) {
+            if (lRetValue != SCARD_S_SUCCESS) {
                 SC_errno = lRetValue;
                 return 0;
             }
@@ -235,7 +237,7 @@ int SC_WaitForCard(SCARDCONTEXT m_hContext, CHAR *m_szSelectedReader, int max_ti
     return 1;
 }
 
-int SC_WaitForCardRemoval(SCARDCONTEXT m_hContext, CHAR *m_szSelectedReader, int max_time) {
+int SC_WaitForCardRemoval(SCARDCONTEXT m_hContext, char *m_szSelectedReader, int max_time) {
     SCARD_READERSTATE sReaderState;
     LONG lRetValue;
 
@@ -247,7 +249,7 @@ int SC_WaitForCardRemoval(SCARDCONTEXT m_hContext, CHAR *m_szSelectedReader, int
     
     lRetValue = SCardGetStatusChange(m_hContext, 30, &sReaderState, 1);
     if (lRetValue)
-        return 0;    
+        return 0;
     
     if((sReaderState.dwEventState & SCARD_STATE_EMPTY) != SCARD_STATE_EMPTY) {
         do {
