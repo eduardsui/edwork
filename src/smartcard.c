@@ -1,17 +1,11 @@
-#include <stdlib.h>
-#include <string.h>
-#ifdef _WIN32
-    #undef UNICODE
-    #include <windows.h>
-    #include <winscard.h>
-#else
-    #include <PCSC/winscard.h>
-    #include <PCSC/wintypes.h>
-#endif
+#include "smartcard.h"
 
 static LONG SC_errno;
 
-const char *SCardGetErrorString(LONG lRetValue) {
+static const BYTE SC_GET_DATA_APDU[]            = { 0xFF, 0xCA, 0x00, 0x00, 0x00};
+static const BYTE SC_GET_JAVA_CARD_ID_APDU[]    = { 0x80, 0xCA, 0x9F, 0x7F, 0x00 };
+
+const char *SC_GetErrorString(LONG lRetValue) {
     switch (lRetValue) {
         case 0x0l:
             return "SCard OK";
@@ -134,7 +128,7 @@ const char *SCardGetErrorString(LONG lRetValue) {
     }
 }
 
-LONG SC_ListReaders(SCARDCONTEXT m_hContext, LPTSTR *pszaReaders, int max_readers) {
+LONG SC_ListReaders(SCARDCONTEXT hContext, LPTSTR *pszaReaders, int max_readers) {
     LONG lRetValue;
     LPTSTR pmszReaders = NULL;
     LPTSTR pszReader;
@@ -150,7 +144,7 @@ LONG SC_ListReaders(SCARDCONTEXT m_hContext, LPTSTR *pszaReaders, int max_reader
     if (max_readers <= 0)
     return 0;
 
-    lRetValue = SCardListReaders(m_hContext, NULL, (LPTSTR)&pmszReaders, &cch);
+    lRetValue = SCardListReaders(hContext, NULL, (LPTSTR)&pmszReaders, &cch);
     if (lRetValue != SCARD_S_SUCCESS) {
         SC_errno = lRetValue;
         return -1;
@@ -168,7 +162,7 @@ LONG SC_ListReaders(SCARDCONTEXT m_hContext, LPTSTR *pszaReaders, int max_reader
     
     // Releases memory that has been returned from the resource manager 
     // using the SCARD_AUTOALLOCATE length designator.
-    lRetValue = SCardFreeMemory(m_hContext, pmszReaders);
+    lRetValue = SCardFreeMemory(hContext, pmszReaders);
     if (lRetValue != SCARD_S_SUCCESS)
         SC_errno = lRetValue;
     return iNumberOfReaders;
@@ -182,23 +176,24 @@ void SC_FreeReaders(char **readers) {
         readers ++;
     }
 }
+
 SCARDCONTEXT SC_Connect() {
     LONG lRetValue;
-    SCARDCONTEXT m_hContext;
+    SCARDCONTEXT hContext;
     
     SC_errno = 0;
 
-    LONG error = SCardEstablishContext(SCARD_SCOPE_USER, NULL, NULL, &m_hContext);
+    LONG error = SCardEstablishContext(SCARD_SCOPE_USER, NULL, NULL, &hContext);
     if (error) {
         SC_errno = error;
         return -1;
     }
-    return m_hContext;
+    return hContext;
 }
 
-int SC_Disconnect(SCARDCONTEXT m_hContext) {
+int SC_Disconnect(SCARDCONTEXT hContext) {
     SC_errno = 0;
-    LONG error = SCardReleaseContext(m_hContext);    
+    LONG error = SCardReleaseContext(hContext);    
     if (error) {
         SC_errno = error;
         return -1;
@@ -206,24 +201,23 @@ int SC_Disconnect(SCARDCONTEXT m_hContext) {
     return 0;
 }
 
-
-int SC_WaitForCard(SCARDCONTEXT m_hContext, char *m_szSelectedReader, int max_time) {
+int SC_WaitForCard(SCARDCONTEXT hContext, char *szSelectedReader, int max_time) {
     SCARD_READERSTATE sReaderState;
     LONG lRetValue;
 
     SC_errno = 0;
-    sReaderState.szReader = m_szSelectedReader;
+    sReaderState.szReader = szSelectedReader;
     sReaderState.dwCurrentState = SCARD_STATE_UNAWARE;
     sReaderState.dwEventState = SCARD_STATE_UNAWARE;
 
-    lRetValue = SCardGetStatusChange(m_hContext, 30000, &sReaderState, 1);
+    lRetValue = SCardGetStatusChange(hContext, 30000, &sReaderState, 1);
     if (lRetValue)
         return 0;
     
     if ((sReaderState.dwEventState & SCARD_STATE_PRESENT) != SCARD_STATE_PRESENT) {
         // wait for card
         do {
-            lRetValue = SCardGetStatusChange(m_hContext, 30, &sReaderState, 1);
+            lRetValue = SCardGetStatusChange(hContext, 30, &sReaderState, 1);
             if (lRetValue != SCARD_S_SUCCESS) {
                 SC_errno = lRetValue;
                 return 0;
@@ -237,23 +231,23 @@ int SC_WaitForCard(SCARDCONTEXT m_hContext, char *m_szSelectedReader, int max_ti
     return 1;
 }
 
-int SC_WaitForCardRemoval(SCARDCONTEXT m_hContext, char *m_szSelectedReader, int max_time) {
+int SC_WaitForCardRemoval(SCARDCONTEXT hContext, char *szSelectedReader, int max_time) {
     SCARD_READERSTATE sReaderState;
     LONG lRetValue;
 
     SC_errno = 0;
 
-    sReaderState.szReader = m_szSelectedReader;
+    sReaderState.szReader = szSelectedReader;
     sReaderState.dwCurrentState = SCARD_STATE_UNAWARE;
     sReaderState.dwEventState = SCARD_STATE_UNAWARE;
     
-    lRetValue = SCardGetStatusChange(m_hContext, 30, &sReaderState, 1);
+    lRetValue = SCardGetStatusChange(hContext, 30, &sReaderState, 1);
     if (lRetValue)
         return 0;
     
     if((sReaderState.dwEventState & SCARD_STATE_EMPTY) != SCARD_STATE_EMPTY) {
         do {
-            lRetValue = SCardGetStatusChange(m_hContext,30,&sReaderState,1);
+            lRetValue = SCardGetStatusChange(hContext,30,&sReaderState,1);
             if (lRetValue) {
                 SC_errno = lRetValue;
                 return 0;
@@ -266,3 +260,114 @@ int SC_WaitForCardRemoval(SCARDCONTEXT m_hContext, char *m_szSelectedReader, int
     }
     return 1;
 }
+
+SCARDHANDLE SC_ActivateCard(SCARDCONTEXT hContext, char *szSelectedReader, DWORD *protocol) {
+    LONG lRetValue;
+    SCARDHANDLE hCard;
+    DWORD m_dwActiveProtocol;
+
+    SC_errno = 0;
+    if (protocol)
+        *protocol = 0;
+
+    lRetValue = SCardConnect(hContext, szSelectedReader, SCARD_SHARE_EXCLUSIVE, SCARD_PROTOCOL_Tx, &hCard, &m_dwActiveProtocol);
+    if (lRetValue) {
+        SC_errno = lRetValue;
+        return 0;
+    }
+
+    if (protocol)
+        *protocol = m_dwActiveProtocol;
+
+    switch(m_dwActiveProtocol) {
+        case SCARD_PROTOCOL_T0:
+        case SCARD_PROTOCOL_T1:
+            break;
+
+        case SCARD_PROTOCOL_UNDEFINED:
+            SC_errno = 0x8010000f;
+            break;
+    }
+    return hCard;
+}
+
+static int SC_DisconnectCardDisposition(SCARDHANDLE hCard, DWORD dwDisposition) {
+    SC_errno = SCardDisconnect(hCard, dwDisposition);
+    if (SC_errno)
+        return 0;
+    return 1;
+}
+
+int SC_DisconnectCard(SCARDHANDLE hCard) {
+    return SC_DisconnectCardDisposition(hCard, SCARD_UNPOWER_CARD);
+}
+
+int SC_ResetCard(SCARDHANDLE hCard) {
+    return SC_DisconnectCardDisposition(hCard, SCARD_RESET_CARD);
+}
+
+int SC_EjectCard(SCARDHANDLE hCard) {
+    return SC_DisconnectCardDisposition(hCard, SCARD_EJECT_CARD);
+}
+
+int SC_GetAttributeType(SCARDHANDLE hCard, DWORD dwAttrId, char *pbAttr, DWORD *len) {
+    SC_errno = SCardGetAttrib(hCard, dwAttrId, (LPBYTE)pbAttr, len);
+    if (SC_errno)
+        return 0;
+    return 1;
+}
+
+int SC_GetAttribute(SCARDHANDLE hCard, char *pbAttr, DWORD *len) {
+    return SC_GetAttributeType(hCard, SCARD_ATTR_ATR_STRING, pbAttr, len);
+}
+
+int SC_Exchange(SCARDHANDLE hCard, DWORD m_dwActiveProtocol, LPCBYTE pbSendBuffer, DWORD cbSendLength, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength) {
+    LPCSCARD_IO_REQUEST ioRequest;
+    LONG lRetValue;
+
+    switch (m_dwActiveProtocol) {
+        case SCARD_PROTOCOL_T0:
+            ioRequest = SCARD_PCI_T0;
+            break;
+        case SCARD_PROTOCOL_T1:
+            ioRequest = SCARD_PCI_T1;
+            break;
+        default:
+            ioRequest = SCARD_PCI_RAW;
+            break;
+    }
+
+    SC_errno = SCardTransmit(hCard, ioRequest, pbSendBuffer, cbSendLength, NULL, pbRecvBuffer, pcbRecvLength);
+    if (SC_errno)
+        return 0;
+
+    return 1;
+}
+
+int SC_Control(SCARDHANDLE hCard, DWORD dwControlCode, LPCBYTE pbSendBuffer, DWORD cbSendLength, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength) {
+    DWORD lpBytesReturned;
+    LONG lRetValue;
+
+    SC_errno = SCardControl(hCard, dwControlCode, pbSendBuffer, cbSendLength, pbRecvBuffer, *pcbRecvLength, &lpBytesReturned);
+    *pcbRecvLength = lpBytesReturned;
+    if (SC_errno)
+        return 0;
+
+    return 1;
+}
+
+int SC_Features(SCARDHANDLE hCard, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength) {
+    return SC_Control(hCard, 1107299656, NULL, 0, pbRecvBuffer, pcbRecvLength);
+}
+
+/*
+int SC_VerifyPIN(SCARDHANDLE hCard) {
+    BYTE bSendBuffer[300] = { 0x00, 0x20, 0x00, 0x00, 0x08, 0x30, 0x30, 0x30, 0x30, 0x00, 0x00, 0x00, 0x00};
+    BYTE baResponseApdu[300];
+    DWORD lResponseApduLen = sizeof(baResponseApdu);
+
+    int offset;
+
+    return SC_Control(hCard, 0, bSendBuffer, offset, baResponseApdu, &lResponseApduLen);
+}
+*/
