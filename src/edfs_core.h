@@ -3,6 +3,9 @@
 
 #include <inttypes.h>
 #include "edwork.h"
+#ifdef WITH_SMARTCARD
+    #include "edwork_smartcard.h"
+#endif
 
 #ifdef _WIN32
     #ifndef _MODE_T_
@@ -182,5 +185,10 @@ double edfs_settings_get_number(const struct edfs *edfs_context, const char *key
 
 struct edfs *edfs_create_context(const char *use_working_directory);
 void edfs_destroy_context(struct edfs *edfs_context);
+#ifdef WITH_SMARTCARD
+    void edfs_set_smartcard_callback(struct edfs *edfs_context, edwork_smartcard_ui_callback callback);
+    struct edwork_smartcard_context *edfs_get_smartcard_context(struct edfs *edfs_context);
+
+#endif
 
 #endif

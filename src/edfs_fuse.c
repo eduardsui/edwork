@@ -383,6 +383,23 @@ int edfs_auto_startup() {
 }
 #endif
 
+#ifdef WITH_SMARTCARD
+    #if defined(_WIN32) || defined(__APPLE__)
+        void edfs_tray_notify(void *menuwindow);
+
+        void smartcard_status_changed(struct edwork_smartcard_context *smartcard_context) {
+            switch (smartcard_context->status) {
+                case 4:
+                    ui_app_tray_icon("Smartcard user", smartcard_context->buf_name, "Added new signature.", edfs_tray_notify);
+                    break;
+                case 22:
+                    ui_app_tray_icon("Smartcard user", smartcard_context->buf_name, "Removed signature.", edfs_tray_notify);
+                    break;
+            }
+        }
+    #endif
+#endif
+
 void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_directory, const char *storage_key) {
     edfs_fuse->getattr      = edfs_fuse_getattr;
     edfs_fuse->readdir      = edfs_fuse_readdir;
@@ -412,6 +429,11 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
     edfs_context = edfs_create_context(working_directory);
     if (storage_key)
         edfs_set_store_key(edfs_context, (const unsigned char *)storage_key, strlen(storage_key));
+#ifdef WITH_SMARTCARD
+    #if defined(_WIN32) || defined(__APPLE__)
+        edfs_set_smartcard_callback(edfs_context, smartcard_status_changed);
+    #endif
+#endif
 }
 
 #if defined(_WIN32) || defined(__APPLE__)
@@ -443,6 +465,13 @@ void edfs_gui_load(void *window) {
     const char *arguments[] = {"true", NULL};
     if (edfs_auto_startup())
         ui_call(window, "set_autorun", arguments);
+#endif
+#ifdef WITH_SMARTCARD
+    struct edwork_smartcard_context *smartcard = edfs_get_smartcard_context(edfs_context);
+    const char *smartcard_arguments[] = {"", NULL};
+    if (smartcard)
+        smartcard_arguments[0] = smartcard->buf_name;
+    ui_call(window, "set_username", smartcard_arguments);
 #endif
 }
 

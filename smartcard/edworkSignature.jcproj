@@ -1,0 +1,40 @@
+<JavaCardProject name="edworkSignature" version="2">
+<USER>
+<PKG name="edwork" aid="ED ED ED ED ED" major="1" minor="0">
+<APPLET aid="ED ED ED ED ED 01" instanceaid="" parameter="" authority="" privileges="" index="-27784" name="edwork"/>
+<CLASS name="SecP256r1"/>
+</PKG>
+</USER>
+<BuildPropertyConfig>
+<JCKit_Option>
+<OutType>EXP JCA CAP</OutType>
+<_SupportInt>1</_SupportInt>
+<_verbos>0</_verbos>
+<_nowarn>0</_nowarn>
+<_debug>1</_debug>
+<_nobanner>0</_nobanner>
+<_noverify>0</_noverify>
+<_mask>0</_mask>
+<_Adddition/>
+</JCKit_Option>
+<JavaCompilerOption>
+<_Source>1.5</_Source>
+<_Target>1.5</_Target>
+<_Encoding>windows-1252</_Encoding>
+<_GenAllDegugInfo>1</_GenAllDegugInfo>
+<_GenNoWarnings>0</_GenNoWarnings>
+<_OutputAboutCompilerDoing>0</_OutputAboutCompilerDoing>
+<_OutputWhereDeprecatedApisAre>1</_OutputWhereDeprecatedApisAre>
+<_Adddition/>
+</JavaCompilerOption>
+<Buildpaths>
+<ClasspathEntry>
+<CPE_CONTAINER name="java_card_kit-2_2_2" kind="K_DEFAULT_SYSTEM_JCRE"/>
+<CPE_CONTAINER name="Global Platform 2.1.1" kind="K_DEFAULT_GP"/>
+</ClasspathEntry>
+<ConvertorBinDirPath/>
+</Buildpaths>
+<LocalJavaHome JavaHome="C:\Program Files\Java\jdk1.8.0_201"/>
+</BuildPropertyConfig>
+<solution_relate_to_project/>
+</JavaCardProject>

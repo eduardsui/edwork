@@ -339,6 +339,10 @@ struct edfs {
     thread_ptr_t warmup_thread;
 #endif
     uint64_t use_key_id;
+
+#ifdef WITH_SMARTCARD
+    struct edwork_smartcard_context smartcard_context;
+#endif
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -1862,6 +1866,33 @@ uint64_t unpacked_ino(const char *data) {
     return ino;
 }
 
+#ifdef WITH_SMARTCARD
+static void smartcard_sign_json(struct edfs *edfs_context, JSON_Object *root_object, const unsigned char *last_hash, int hash_size) {
+    if (edwork_smartcard_valid(&edfs_context->smartcard_context)) {
+        char smartcard_signature[0x100];
+        log_info("smartcard signing for %s", edfs_context->smartcard_context.buf_name);
+        int smartcard_signature_size = edwork_smartcard_sign(&edfs_context->smartcard_context, last_hash, hash_size, smartcard_signature, sizeof(smartcard_signature));
+        if (smartcard_signature_size > 0) {
+            char signature_json_buffer[0x200];
+            int signature_json_len = base64_encode_no_padding((const BYTE *)smartcard_signature, smartcard_signature_size, (BYTE *)signature_json_buffer, sizeof(signature_json_buffer) - 1);
+            if (signature_json_len < 0)
+                signature_json_len = 0;
+            signature_json_buffer[signature_json_len] = 0;
+            json_object_set_string(root_object, "owner", edfs_context->smartcard_context.buf_name);
+            json_object_set_string(root_object, "signature", signature_json_buffer);
+
+            signature_json_len = base64_encode_no_padding((const BYTE *)edfs_context->smartcard_context.public_key, edfs_context->smartcard_context.public_key_len, (BYTE *)signature_json_buffer, sizeof(signature_json_buffer) - 1);
+            if (signature_json_len < 0)
+                signature_json_len = 0;
+            signature_json_buffer[signature_json_len] = 0;
+
+            json_object_set_string(root_object, "identity", signature_json_buffer);
+        } else
+            log_warn("error signing for identity %s", edfs_context->smartcard_context.buf_name);
+    }
+}
+#endif
+
 void write_json(struct edfs *edfs_context, struct edfs_key_data *key, const char *base_path, const char *name, int64_t size, uint64_t inode, uint64_t parent, int type, unsigned char *last_hash, time_t created, time_t modified, uint64_t timestamp, uint64_t generation) {
     JSON_Value *root_value = json_value_init_object();
     JSON_Object *root_object = json_value_get_object(root_value);
@@ -1896,6 +1927,9 @@ void write_json(struct edfs *edfs_context, struct edfs_key_data *key, const char
         buffer[len] = 0;
 
         json_object_set_string(root_object, "iostamp", buffer);
+#ifdef WITH_SMARTCARD
+        smartcard_sign_json(edfs_context, root_object, last_hash, 32);
+#endif
     }
     json_object_set_number(root_object, "version", generation);
     serialized_string = json_serialize_to_string_pretty(root_value);
@@ -2069,6 +2103,9 @@ int edfs_update_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
                 len = 0;
             buffer[len] = 0;
             json_object_set_string(root_object, key, buffer);
+#ifdef WITH_SMARTCARD
+            smartcard_sign_json(edfs_context, root_object, value, 32);
+#endif
         } else
             json_object_set_string(root_object, key, value);
     } while (*keys_value);
@@ -7189,6 +7226,9 @@ int edwork_thread(void *userdata) {
     }
 
     int ping_count = 0;
+#ifdef WITH_SMARTCARD
+    uint64_t smartcard_check = microseconds() + 1000000;
+#endif
     while (!edfs_context->network_done) {
         if ((edfs_context->resync) && (time(NULL) - startup >= EDWORK_INIT_INTERVAL)) {
             uint64_t ack = htonll(1);
@@ -7270,6 +7310,16 @@ int edwork_thread(void *userdata) {
         }
         flush_queue(edfs_context);
         edwork_dispatch(edwork, edwork_callback, 100, edfs_context);
+#ifdef WITH_SMARTCARD
+        if (smartcard_check <= microseconds()) {
+            edwork_smartcard_iterate(&edfs_context->smartcard_context);
+            if (edwork_smartcard_valid(&edfs_context->smartcard_context))
+                smartcard_check = microseconds() + 1000;
+            else
+                smartcard_check = microseconds() + 200;
+        }
+#endif
+
     }
 
     log_set_lock(NULL);
@@ -7591,6 +7641,9 @@ struct edfs *edfs_create_context(const char *use_working_directory) {
         avl_initialize(&edfs_context->peer_discovery, ino_compare, avl_ino_destructor);
 #endif
         avl_initialize(&edfs_context->key_tree, ino_compare, avl_ino_destructor);
+#ifdef WITH_SMARTCARD
+        edwork_smartcard_init(&edfs_context->smartcard_context);
+#endif
     }
     return edfs_context;
 }
@@ -7620,7 +7673,9 @@ void edfs_destroy_context(struct edfs *edfs_context) {
     free(edfs_context->nodes_file);
     free(edfs_context->default_nodes);
     free(edfs_context->host_and_port);
-
+#ifdef WITH_SMARTCARD
+    edwork_smartcard_done(&edfs_context->smartcard_context);
+#endif
     free(edfs_context);
 }
 
@@ -7845,3 +7900,17 @@ double edfs_settings_get_number(const struct edfs *edfs_context, const char *key
     json_value_free(root_value);
     return json_value;
 }
+
+#ifdef WITH_SMARTCARD
+void edfs_set_smartcard_callback(struct edfs *edfs_context, edwork_smartcard_ui_callback callback) {
+    if (!edfs_context)
+        return;
+    edfs_context->smartcard_context.status_changed = callback;
+}
+
+struct edwork_smartcard_context *edfs_get_smartcard_context(struct edfs *edfs_context) {
+    if (!edfs_context)
+        return NULL;
+    return &edfs_context->smartcard_context;
+}
+#endif

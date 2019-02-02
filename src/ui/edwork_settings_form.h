@@ -28,7 +28,7 @@ static const char *edwork_settings_form =
     "  <body onload=\"uiloaded()\" style=\"background-image: url('branding.png'); background-repeat: no-repeat; background-position: right top;\">\n"
     "    <main class=\"mastcontent\">\n"
     "      <div class=\"container\">\n"
-    "        <h2 class=\"subtitle subtitle--xxl\">edwork management tool</h2>\n"
+    "        <h2 class=\"subtitle subtitle--xxl\">edwork management tool<span id='username'></span></h2>\n"
     "        <hr/>\n"
     "        <p>Partitions:</p>\n"
     "        <div class=\"grid\">\n"
@@ -147,6 +147,9 @@ static const char *edwork_settings_form =
     "      var text = document.getElementById(\"use\").value;\n"
     "      document.getElementById(\"use\").value = \"\";\n"
     "      return text;\n"
+    "    }\n"
+    "    function set_username(username) {\n"
+    "      document.getElementById(\"username\").innerHTML = (username === \"\") ? username : \" - \" + username;\n"
     "    }\n"
     "  </script>\n"
     "</html>";

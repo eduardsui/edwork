@@ -78,7 +78,7 @@ id get_base_url() {
 
 void *ui_window(const char *title, const char *body) {
     id window = objc_msgSend((id)objc_getClass("NSWindow"), sel_getUid("alloc"));
-    window = objc_msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (CMRect){0,0,1200,750}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 2, kCFBooleanFalse);
+    window = objc_msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (CMRect){0,0,1200,750}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 0, false);
     objc_msgSend(window, sel_getUid("center"));
 
     if (title) {
@@ -93,7 +93,7 @@ void *ui_window(const char *title, const char *body) {
 
     objc_msgSend(view, sel_getUid("setNavigationDelegate:"), objc_msgSend(app, sel_getUid("delegate")));
     
-    objc_msgSend(view, sel_getUid("setAllowsBackForwardNavigationGestures:"), kCFBooleanTrue);
+    objc_msgSend(view, sel_getUid("setAllowsBackForwardNavigationGestures:"), TRUE);
 
     if (body) {
         int len = strlen(body);
