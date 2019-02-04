@@ -6,7 +6,7 @@ import javacard.security.*;
 
 public class edwork extends Applet {
     private byte[] hello;
-    private byte[] password                                = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    private byte[] password                                = {0x48, 0x48, 0x48, 0x48, 0x48, 0x48};
     private static final byte INS_HELLO                    = (byte)0x01;
     private static final byte INS_ECC_GEN_KEYPAIR          = (byte)0x41;
     private static final byte INS_ECC_GENW                 = (byte)0x45;
@@ -32,7 +32,7 @@ public class edwork extends Applet {
         eccKey = SecP256r1.newKeyPair();
         eccKey.genKeyPair();
         ecdsa = Signature.getInstance(Signature.ALG_ECDSA_SHA, false);
-        flags = JCSystem.makeTransientByteArray((short)0, JCSystem.CLEAR_ON_DESELECT);
+        flags = JCSystem.makeTransientByteArray((short)16, JCSystem.CLEAR_ON_DESELECT);
     }
 
     public void process(APDU apdu) {
@@ -44,7 +44,7 @@ public class edwork extends Applet {
 
         byte[] buf = apdu.getBuffer();
         short len = apdu.setIncomingAndReceive();
-        if (buf[ISO7816.OFFSET_CLA] == (byte)0x10) {
+        if ((buf[ISO7816.OFFSET_CLA] == (byte)0x10) && (isContactless())) {
             switch (buf[ISO7816.OFFSET_INS]) {
                 case INS_HELLO:
                     if ((hello != null) && (hello.length > 0)) {
@@ -76,7 +76,7 @@ public class edwork extends Applet {
         if (buf[ISO7816.OFFSET_CLA] == (byte)0x00) {
             switch (buf[ISO7816.OFFSET_INS]) {
                 case (byte)0x2A:
-                    if (!flags[0])
+                    if (flags[0] != 1)
                         ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
                     if ((buf[ISO7816.OFFSET_P1] == (byte)0x9E) && (buf[ISO7816.OFFSET_P2] == (byte)0x9A))
                         Ecc_Sign(apdu, len);
@@ -86,7 +86,7 @@ public class edwork extends Applet {
                 case (byte)0x20:
                     if ((buf[ISO7816.OFFSET_P1] == (byte)0x00) && ((buf[ISO7816.OFFSET_P2] == (byte)0x81) || (buf[ISO7816.OFFSET_P2] == (byte)0x82))) {
                         if (len >= 6) {
-                            if ((password.length != len) || (Utils.arrayCompare(buf, ISO7816.OFFSET_CDATA, password, (byte)0, password.length) != 0)) {
+                            if ((password.length != len) || (Util.arrayCompare(buf, (byte)ISO7816.OFFSET_CDATA, password, (byte)0, (byte)password.length) != 0)) {
                                 ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
                                 wrong_pin ++;
                             } else {
@@ -103,18 +103,18 @@ public class edwork extends Applet {
                     break;
                 case (byte)0x24:
                     if ((buf[ISO7816.OFFSET_P1] == (byte)0x00) && (buf[ISO7816.OFFSET_P2] == (byte)0x81)) {
-                        if ((len >= password.length + 6) && (buf[ISO7816.OFFSET_LC] + password.length == len)) {
-                            if ((password.length != len) || (Utils.arrayCompare(buf, ISO7816.OFFSET_CDATA, password, (byte)0, password.length) != 0)) {
+                        if ((len >= (byte)password.length + (byte)6) && ((byte)buf[ISO7816.OFFSET_LC] >= (byte)password.length + (byte)6)) {
+                            if (Util.arrayCompare(buf, (byte)ISO7816.OFFSET_CDATA, password, (byte)0, (byte)password.length) != 0) {
                                 ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
                                 wrong_pin ++;
                             } else {
-                                byte new_len = buf[ISO7816.OFFSET_LC] - password.length;
-                                byte offset = ISO7816.OFFSET_CDATA + password.length;
+                                byte new_len = (byte)(buf[ISO7816.OFFSET_LC] - (byte)password.length);
+                                byte offset = (byte)(ISO7816.OFFSET_CDATA + (byte)password.length);
                                 flags[0] = 0;
                                 if (wrong_pin > 0)
                                     wrong_pin = 0;
                                 password = new byte[new_len];
-                                Util.arrayCopy(buf, offset, password, (short)0, (byte)new_len);
+                                Util.arrayCopy(buf, offset, password, (byte)0, (byte)new_len);
                             }
                         } else
                             ISOException.throwIt(ISO7816.SW_CORRECT_LENGTH_00);
