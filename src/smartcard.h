@@ -32,6 +32,7 @@ int SC_GetAttribute(SCARDHANDLE hCard, char *pbAttr, DWORD *len);
 int SC_GetAttributeAuto(SCARDHANDLE hCard, char **pbAttr, DWORD *len);
 int SC_Exchange(SCARDHANDLE hCard, DWORD m_dwActiveProtocol, LPCBYTE pbSendBuffer, DWORD cbSendLength, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength);
 int SC_Control(SCARDHANDLE hCard, DWORD dwControlCode, LPCBYTE pbSendBuffer, DWORD cbSendLength, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength);
+int SC_SelectApplet(SCARDHANDLE hCard, DWORD protocol, unsigned char *applet_id, int len_applet_id);
 int SC_Features(SCARDHANDLE hCard, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength);
 void SC_Free(SCARDCONTEXT hContext, LPBYTE addr);
 

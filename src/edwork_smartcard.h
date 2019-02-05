@@ -17,7 +17,7 @@ struct edwork_smartcard_context {
     DWORD protocol;
 
     char buf_name[0x100];
-    char public_key[0x100];
+    char public_key[1024];
     int public_key_len;
 
     time_t timestamp;
@@ -30,8 +30,8 @@ struct edwork_smartcard_context {
 
 void edwork_smartcard_init(struct edwork_smartcard_context *context);
 int edwork_smartcard_iterate(struct edwork_smartcard_context *context);
-int edwork_smartcard_sign(struct edwork_smartcard_context *context, const char *buffer, int buf_len, char *signature, int sig_len);
-int edwork_smartcard_verify(struct edwork_smartcard_context *context, const char *buffer, int buf_len, const char *signature, int sig_len);
+int edwork_smartcard_sign(struct edwork_smartcard_context *context, const unsigned char *buffer, int buf_len, unsigned char *signature, int sig_len);
+int edwork_smartcard_verify(struct edwork_smartcard_context *context, const unsigned char *buffer, int buf_len, const unsigned char *signature, int sig_len);
 int edwork_smartcard_valid(struct edwork_smartcard_context *context);
 void edwork_smartcard_done(struct edwork_smartcard_context *context);
 

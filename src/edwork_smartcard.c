@@ -3,6 +3,8 @@
 #include "edwork_smartcard.h"
 #include "log.h"
 
+#ifdef EDWORK_NO_SMARTCARD_PLUGINS
+
 static const BYTE SC_EDWORK_HELLO[]            =   {0x10, 0x01, 0x00,0x00, 0x00};
 static const BYTE SC_EDWORK_PUBLIC_KEY[]       =   {0x10, 0x45, 0x00,0x00, 0x00};
 static const BYTE SC_EDWORK_SIGN[]             =   {0x10, 0x48, 0x00,0x00, 0x00};
@@ -68,7 +70,7 @@ static int edwork_smartcard_get_public_key(struct edwork_smartcard_context *cont
     return 0;
 }
 
-int edwork_smartcard_sign(struct edwork_smartcard_context *context, const char *buffer, int buf_len, char *signature, int sig_len) {
+int edwork_smartcard_sign(struct edwork_smartcard_context *context, const char *buffer, int buf_len, unsigned char *signature, int sig_len) {
     BYTE baResponseApdu[300];
     DWORD lResponseApduLen = sizeof(baResponseApdu);
     LPBYTE apdu;
@@ -239,6 +241,128 @@ int edwork_smartcard_iterate(struct edwork_smartcard_context *context) {
     thread_mutex_unlock(&context->lock);
     return 0;
 }
+#else
+
+#include "edwork_smartcard_plugin.h"
+
+int edwork_smartcard_sign(struct edwork_smartcard_context *context, const unsigned char *buffer, int buf_len, unsigned char *signature, int sig_len) {
+    thread_mutex_lock(&context->lock);
+    int is_signed = edwork_plugin_sign_data(context->hCard, context->protocol, buffer, buf_len, signature, &sig_len);
+    thread_mutex_unlock(&context->lock);
+    if (is_signed)
+        return sig_len;
+    return 0;
+}
+
+int edwork_smartcard_verify(struct edwork_smartcard_context *context, const unsigned char *buffer, int buf_len, const unsigned char *signature, int sig_len) {
+    thread_mutex_lock(&context->lock);
+    int is_verified = edwork_plugin_verify_data(context->hCard, context->protocol, buffer, buf_len, signature, sig_len);
+    thread_mutex_unlock(&context->lock);
+    return is_verified;
+}
+
+int edwork_smartcard_iterate(struct edwork_smartcard_context *context) {
+    if (!context)
+        return -1;
+
+    char pin[0x100];
+    int count;
+    int pin_len;
+
+    thread_mutex_lock(&context->lock);
+    switch (context->status) {
+        case 0:
+            context->hContext = SC_Connect();
+            if (!SC_errno) {
+                char *readers[16];
+                count = SC_ListReaders(context->hContext, readers, 16);
+                if (count > 0) {
+                    free(context->reader);
+                    context->reader = NULL;
+                    for (int i = 0; i < count; i++) {
+                        char *reader = readers[i];
+                        if (reader) {
+                            context->protocol = 0;
+                            if (SC_WaitForCard(context->hContext, reader, 0)) {
+                                context->hCard = SC_ActivateCard(context->hContext, reader, &context->protocol);
+                                if (SC_errno) {
+                                    log_warn("smartcard/reader %s error %x: %s", reader, (int)SC_errno, SC_GetErrorString(SC_errno));
+                                } else
+                                if (edwork_plugin_init_smartcard(context->hCard, context->protocol)) {
+                                    log_info("using smartcard reader %s", reader);
+                                    context->status = 3;
+                                    context->reader = strdup(reader);
+                                    break;
+                                } else {
+                                    SC_DisconnectCard(context->hCard);
+                                    log_trace("unrecognized smartcard (%s)", reader);
+                                }
+                            }
+                        }
+                    }
+                    SC_FreeReaders(readers);
+                } else {
+                    SC_Disconnect(context->hContext);
+                }
+            }
+            break;
+        case 3:
+            printf("PIN: ");
+            scanf("%20s", pin);
+            pin_len = strlen(pin);
+            
+            if (edwork_plugin_verify_smartcard(context->hCard, context->protocol, pin, pin_len)) {
+                log_info("pin %s ok", pin);
+                context->status = 4;
+
+                int buf_name_size = sizeof(context->buf_name);
+                context->public_key_len = sizeof(context->public_key);
+                if (!edwork_plugin_get_id_data(context->hCard, context->protocol, context->buf_name, &buf_name_size, context->public_key, &context->public_key_len))
+                    context->public_key_len = 0;
+
+                if (context->status_changed)
+                    context->status_changed(context);
+            } else {
+                context->status = 20;
+                log_error("invalid pin");
+            }
+            break;
+        case 4:
+            if ((SC_WaitForCardRemoval(context->hContext, context->reader, 0)) || (SC_errno)) {
+                context->status = 22;
+                if (context->status_changed)
+                    context->status_changed(context);
+                context->public_key_len = 0;
+                memset(context->public_key, 0, sizeof(context->public_key));
+                memset(context->buf_name, 0, sizeof(context->buf_name));
+            }
+            break;
+        case 20:
+            edwork_plugin_deinit_smartcard(context->hCard, context->protocol);
+            SC_DisconnectCard(context->hCard);
+            context->status = 21;
+            context->timestamp = time(NULL);
+            break;
+        case 21:
+            if ((SC_WaitForCardRemoval(context->hContext, context->reader, 0)) || (SC_errno))
+                context->status = 22;
+            else
+            if (time(NULL) - context->timestamp >= 3)
+                context->status = 22;
+            break;
+        case 22:
+            edwork_plugin_deinit_smartcard(context->hCard, context->protocol);
+            SC_Disconnect(context->hContext);
+            free(context->reader);
+            context->reader = NULL;
+            context->status = 0;
+            break;
+    }
+    thread_mutex_unlock(&context->lock);
+    return 0;
+}
+
+#endif
 
 int edwork_smartcard_valid(struct edwork_smartcard_context *context) {
     if ((context) && (context->status == 4))

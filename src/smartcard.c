@@ -4,6 +4,7 @@ LONG SC_errno = 0;
 
 const BYTE SC_GET_DATA_APDU[]            = { 0x00, 0xCA, 0x00, 0x00, 0x00};
 const BYTE SC_GET_JAVA_CARD_ID_APDU[]    = { 0x80, 0xCA, 0x9F, 0x7F, 0x00 };
+const BYTE SC_SELECT_APPLET[]            = { 0x00, 0xA4, 0x04, 0x00, 0x00 };
 
 const char *SC_GetErrorString(LONG lRetValue) {
     switch (lRetValue) {
@@ -373,4 +374,30 @@ int SC_Control(SCARDHANDLE hCard, DWORD dwControlCode, LPCBYTE pbSendBuffer, DWO
 
 int SC_Features(SCARDHANDLE hCard, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength) {
     return SC_Control(hCard, 1107299656, NULL, 0, pbRecvBuffer, pcbRecvLength);
+}
+
+int SC_SelectApplet(SCARDHANDLE hCard, DWORD protocol, unsigned char *applet_id, int len_applet_id) {
+    BYTE baResponseApdu[300];
+    DWORD lResponseApduLen = sizeof(baResponseApdu);
+    LPBYTE apdu;
+
+    if ((!applet_id) || (len_applet_id <= 0))
+        return 0;
+
+    apdu = (LPBYTE)malloc(5 + len_applet_id + 1);
+    if (!apdu)
+        return 0;
+  
+    memcpy(apdu, SC_SELECT_APPLET, 5);
+    memcpy(apdu + 5, applet_id, len_applet_id);
+    apdu[4] = (BYTE)len_applet_id;
+    apdu[5 + len_applet_id] = 0;
+
+    if (SC_Exchange(hCard, protocol, apdu, 5 + len_applet_id + 1, baResponseApdu, &lResponseApduLen)) {
+        free(apdu);
+        if ((lResponseApduLen == 2) && (baResponseApdu[0] == 0x90) && (baResponseApdu[1] == 0x00))
+            return 1;
+    }
+    free(apdu);
+    return 0;
 }

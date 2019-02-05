@@ -1869,11 +1869,11 @@ uint64_t unpacked_ino(const char *data) {
 #ifdef WITH_SMARTCARD
 static void smartcard_sign_json(struct edfs *edfs_context, JSON_Object *root_object, const unsigned char *last_hash, int hash_size) {
     if (edwork_smartcard_valid(&edfs_context->smartcard_context)) {
-        char smartcard_signature[0x100];
+        char smartcard_signature[2048];
         log_info("smartcard signing for %s", edfs_context->smartcard_context.buf_name);
         int smartcard_signature_size = edwork_smartcard_sign(&edfs_context->smartcard_context, last_hash, hash_size, smartcard_signature, sizeof(smartcard_signature));
         if (smartcard_signature_size > 0) {
-            char signature_json_buffer[0x200];
+            char signature_json_buffer[4096];
             int signature_json_len = base64_encode_no_padding((const BYTE *)smartcard_signature, smartcard_signature_size, (BYTE *)signature_json_buffer, sizeof(signature_json_buffer) - 1);
             if (signature_json_len < 0)
                 signature_json_len = 0;
