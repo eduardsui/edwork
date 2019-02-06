@@ -372,6 +372,10 @@ int ui_question(const char *title, const char *body, int level) {
     return yes_no;
 }
 
+int ui_input(const char *title, const char *body, char *val, int val_len, int masked) {
+    return 0;
+}
+
 void ui_app_quit() {
     if (app) {
         objc_msgSend(app, sel_getUid("terminate:"), app);

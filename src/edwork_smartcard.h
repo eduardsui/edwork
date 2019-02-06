@@ -8,6 +8,7 @@
 struct edwork_smartcard_context;
 
 typedef void (*edwork_smartcard_ui_callback)(struct edwork_smartcard_context *context);
+typedef int (*edwork_smartcard_read_pin_callback)(struct edwork_smartcard_context *context, char *reader, unsigned char *pin, int *max_len);
 
 struct edwork_smartcard_context {
     SCARDCONTEXT hContext;
@@ -26,6 +27,7 @@ struct edwork_smartcard_context {
     thread_mutex_t lock;
 
     edwork_smartcard_ui_callback status_changed;
+    edwork_smartcard_read_pin_callback read_pin;
 };
 
 void edwork_smartcard_init(struct edwork_smartcard_context *context);

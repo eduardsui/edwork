@@ -397,6 +397,25 @@ int edfs_auto_startup() {
                     break;
             }
         }
+
+        int smartcard_read_pin(struct edwork_smartcard_context *smartcard_context, char *reader, unsigned char *pin, int *max_len) {
+            int data_entered = ui_input("Enter PIN", reader, pin, *max_len, 1);
+            if (data_entered) {
+                *max_len = 0;
+                *max_len = strlen(pin);
+            }
+            return data_entered;
+        }
+    #else
+        int smartcard_read_pin(struct edwork_smartcard_context *smartcard_context, char *reader, unsigned char *pin, int *max_len) {
+            printf("PIN for %s: ", reader);
+            scanf("%20s", pin);
+            if (max_len)
+                *max_len = strlen(pin);
+            if (*max_len)
+                return 1;
+            return 0;
+        }
     #endif
 #endif
 
@@ -433,6 +452,7 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
     #if defined(_WIN32) || defined(__APPLE__)
         edfs_set_smartcard_callback(edfs_context, smartcard_status_changed);
     #endif
+    edfs_set_smartcard_pin_callback(edfs_context, smartcard_read_pin);
 #endif
 }
 

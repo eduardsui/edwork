@@ -7908,6 +7908,12 @@ void edfs_set_smartcard_callback(struct edfs *edfs_context, edwork_smartcard_ui_
     edfs_context->smartcard_context.status_changed = callback;
 }
 
+void edfs_set_smartcard_pin_callback(struct edfs *edfs_context, edwork_smartcard_read_pin_callback callback) {
+    if (!edfs_context)
+        return;
+    edfs_context->smartcard_context.read_pin = callback;
+}
+
 struct edwork_smartcard_context *edfs_get_smartcard_context(struct edfs *edfs_context) {
     if (!edfs_context)
         return NULL;

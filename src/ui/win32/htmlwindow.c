@@ -6,6 +6,7 @@
 #include <mshtmhst.h>
 #include <crtdbg.h>
 #include <shlwapi.h>
+#include <wincred.h>
 #include <stdio.h>
 
 #include "../htmlwindow.h"
@@ -1076,6 +1077,32 @@ int ui_question(const char *title, const char *body, int level) {
     }
 
     if (yes_or_no == IDYES)
+        return 1;
+
+    return 0;
+}
+
+int ui_input(const char *title, const char *body, char *val, int val_len, int masked) {
+    // unmasked text not supported
+    if ((!masked) || (!val) || (!val_len))
+        return 0;
+    CREDUI_INFO info;
+    TCHAR pszName[CREDUI_MAX_USERNAME_LENGTH + 1];
+    BOOL fSave;
+    DWORD dwErr;
+ 
+    info.cbSize = sizeof(CREDUI_INFO);
+    info.hwndParent = NULL;
+
+    info.pszMessageText = body ? body : "";
+    info.pszCaptionText = title ? title : "";
+    info.hbmBanner = NULL;
+    fSave = FALSE;
+    SecureZeroMemory(pszName, sizeof(pszName));
+    SecureZeroMemory(val, val_len);
+    dwErr = CredUIPromptForCredentials(&info, TEXT("edwork"), NULL, 0, pszName, 0, val, val_len - 1, &fSave, CREDUI_FLAGS_KEEP_USERNAME | CREDUI_FLAGS_PASSWORD_ONLY_OK | CREDUI_FLAGS_GENERIC_CREDENTIALS | CREDUI_FLAGS_ALWAYS_SHOW_UI | CREDUI_FLAGS_DO_NOT_PERSIST);
+
+    if (!dwErr)
         return 1;
 
     return 0;

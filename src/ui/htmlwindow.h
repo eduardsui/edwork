@@ -22,6 +22,7 @@ void ui_set_event(int eid, ui_event callback, void *event_userdata);
 
 void ui_message(const char *title, const char *body, int level);
 int ui_question(const char *title, const char *body, int level);
+int ui_input(const char *title, const char *body, char *val, int val_len, int masked);
 void ui_js(void *wnd, const char *js);
 char *ui_call(void *wnd, const char *function, const char *arguments[]);
 void ui_free_string(void *ptr);

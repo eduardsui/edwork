@@ -307,27 +307,32 @@ int edwork_smartcard_iterate(struct edwork_smartcard_context *context) {
             }
             break;
         case 3:
-            printf("PIN: ");
-            scanf("%20s", pin);
-            pin_len = strlen(pin);
-            
-            if (edwork_plugin_verify_smartcard(context->hCard, context->protocol, pin, pin_len)) {
-                log_info("pin %s ok", pin);
+            if (context->read_pin) {
+                pin_len = sizeof(pin);
+                int read_pin = context->read_pin(context, context->reader, pin, &pin_len);
+                if ((read_pin) && (edwork_plugin_verify_smartcard(context->hCard, context->protocol, pin, pin_len))) {
+                    log_info("pin %s ok", pin);
+                    context->status = 4;
+
+                    int buf_name_size = sizeof(context->buf_name);
+                    context->public_key_len = sizeof(context->public_key);
+                    if (!edwork_plugin_get_id_data(context->hCard, context->protocol, context->buf_name, &buf_name_size, context->public_key, &context->public_key_len))
+                        context->public_key_len = 0;
+
+                    if (context->status_changed)
+                        context->status_changed(context);
+                } else {
+                    context->status = 20;
+                    if (read_pin)
+                        log_error("invalid pin");
+                    else
+                        context->status = -1;
+                }
+            } else
                 context->status = 4;
-
-                int buf_name_size = sizeof(context->buf_name);
-                context->public_key_len = sizeof(context->public_key);
-                if (!edwork_plugin_get_id_data(context->hCard, context->protocol, context->buf_name, &buf_name_size, context->public_key, &context->public_key_len))
-                    context->public_key_len = 0;
-
-                if (context->status_changed)
-                    context->status_changed(context);
-            } else {
-                context->status = 20;
-                log_error("invalid pin");
-            }
             break;
         case 4:
+        case 99:
             if ((SC_WaitForCardRemoval(context->hContext, context->reader, 0)) || (SC_errno)) {
                 context->status = 22;
                 if (context->status_changed)
