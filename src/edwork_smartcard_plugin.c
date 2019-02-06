@@ -47,7 +47,7 @@ static int helper_do_expect_success(SCARDHANDLE hCard, DWORD protocol, const uns
         apdu[4] = (BYTE)data_len;
         if (apdu_len > 5)
             apdu[4] += (BYTE)(apdu_len - 5);
-        apdu[buf_len] = 0;
+        apdu[buf_len - 1] = 0;
     } else
         apdu = (LPBYTE)use_apdu;
 
@@ -146,7 +146,7 @@ int edwork_plugin_sign_data(SCARDHANDLE hCard, DWORD protocol, const unsigned ch
     TRY_APDU(SELECT_CERT);
     TRY_APDU(MSU_RESTORE);
     TRY_APDU_DATA(SET_HASH, hash_data, len);
-    TRY_APDU(DO_SIGNATURE);
+    TRY_APDU_RESPONSE(DO_SIGNATURE, sig_data, sig_len);
     return 1;
 }
 

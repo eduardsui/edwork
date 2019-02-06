@@ -7314,9 +7314,9 @@ int edwork_thread(void *userdata) {
         if (smartcard_check <= microseconds()) {
             edwork_smartcard_iterate(&edfs_context->smartcard_context);
             if (edwork_smartcard_valid(&edfs_context->smartcard_context))
-                smartcard_check = microseconds() + 1000;
+                smartcard_check = microseconds() + 2000;
             else
-                smartcard_check = microseconds() + 200;
+                smartcard_check = microseconds() + 1000;
         }
 #endif
 

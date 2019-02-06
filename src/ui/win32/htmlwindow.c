@@ -17,7 +17,7 @@ static const TCHAR *ClassName = "edwork Window";
 static const SAFEARRAYBOUND ArrayBound = {1, 0};
 static ui_trigger_event callback_event;
 static ui_tray_event event_tray_event;
-static NOTIFYICONDATA tray_icon; 
+static NOTIFYICONDATAW tray_icon; 
 static int gui_lock = 0;
 static ui_event ui_callbacks[UI_EVENTS];
 static void *ui_data[UI_EVENTS];
@@ -737,10 +737,10 @@ long DisplayHTMLStr(HWND hwnd, LPCTSTR string) {
                             wchar_t        *buffer;
                             DWORD        size;
 
-                            size = MultiByteToWideChar(CP_ACP, 0, string2, -1, 0, 0);
+                            size = MultiByteToWideChar(CP_UTF8, 0, string2, -1, 0, 0);
                             if (!(buffer = (wchar_t *)GlobalAlloc(GMEM_FIXED, sizeof(wchar_t) * size)))
                                 goto bad;
-                            MultiByteToWideChar(CP_ACP, 0, string2, -1, buffer, size);
+                            MultiByteToWideChar(CP_UTF8, 0, string2, -1, buffer, size);
                             bstr = SysAllocString(buffer);
                             GlobalFree(buffer);
                         }
@@ -789,10 +789,10 @@ long DisplayHTMLPage(HWND hwnd, LPTSTR webPageName) {
         wchar_t        *buffer;
         DWORD        size;
 
-        size = MultiByteToWideChar(CP_ACP, 0, webPageName, -1, 0, 0);
+        size = MultiByteToWideChar(CP_UTF8, 0, webPageName, -1, 0, 0);
         if (!(buffer = (wchar_t *)GlobalAlloc(GMEM_FIXED, sizeof(wchar_t) * size)))
             goto badalloc;
-        MultiByteToWideChar(CP_ACP, 0, webPageName, -1, buffer, size);
+        MultiByteToWideChar(CP_UTF8, 0, webPageName, -1, buffer, size);
         myURL.bstrVal = SysAllocString(buffer);
         GlobalFree(buffer);
         }
@@ -983,25 +983,28 @@ void ui_app_tray_icon(const char *tooltip, char *notification_title, char *notif
         tray_icon.uTimeout    = 3000;
 
         if (notification_title)
-            strncpy(tray_icon.szInfoTitle, notification_title, 64);
+            MultiByteToWideChar(CP_UTF8, 0, notification_title, -1, tray_icon.szInfoTitle, 64);
+            // strncpy(tray_icon.szInfoTitle, notification_title, 64);
 
         if (notification_text)
-            strncpy(tray_icon.szInfo, notification_text, 256);
+            MultiByteToWideChar(CP_UTF8, 0, notification_text, -1, tray_icon.szInfo, 256);
+            // strncpy(tray_icon.szInfo, notification_text, 256);
     }
 
     if (tooltip)
-        strncpy(tray_icon.szTip, tooltip, sizeof(tray_icon.szTip));
+        MultiByteToWideChar(CP_UTF8, 0, tooltip, -1, tray_icon.szTip, sizeof(tray_icon.szTip) / 2);
+        // strncpy(tray_icon.szTip, tooltip, sizeof(tray_icon.szTip));
     else
         tray_icon.szTip[0] = 0;
 
-    if (Shell_NotifyIcon(exists ? NIM_MODIFY : NIM_ADD, &tray_icon))
+    if (Shell_NotifyIconW(exists ? NIM_MODIFY : NIM_ADD, &tray_icon))
         event_tray_event = event_tray;
 }
 
 void ui_app_tray_remove() {
     int exists = tray_icon.uID;
     if (exists)
-        Shell_NotifyIcon(NIM_DELETE, &tray_icon);
+        Shell_NotifyIconW(NIM_DELETE, &tray_icon);
 }
 
 void CALLBACK TimerProc(HWND hwnd, UINT uMsg, UINT timerId, DWORD dwTime) {
@@ -1085,10 +1088,10 @@ BSTR MakeBSTR(const char *js) {
         wchar_t        *buffer;
         DWORD        size;
 
-        size = MultiByteToWideChar(CP_ACP, 0, js, -1, 0, 0);
+        size = MultiByteToWideChar(CP_UTF8, 0, js, -1, 0, 0);
         if (!(buffer = (wchar_t *)GlobalAlloc(GMEM_FIXED, sizeof(wchar_t) * size)))
             return NULL;
-        MultiByteToWideChar(CP_ACP, 0, js, -1, buffer, size);
+        MultiByteToWideChar(CP_UTF8, 0, js, -1, buffer, size);
         bstr = SysAllocString(buffer);
         GlobalFree(buffer);
     }
