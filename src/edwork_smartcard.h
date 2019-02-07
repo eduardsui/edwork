@@ -8,7 +8,7 @@
 struct edwork_smartcard_context;
 
 typedef void (*edwork_smartcard_ui_callback)(struct edwork_smartcard_context *context);
-typedef int (*edwork_smartcard_read_pin_callback)(struct edwork_smartcard_context *context, char *reader, unsigned char *pin, int *max_len);
+typedef int (*edwork_smartcard_read_pin_callback)(struct edwork_smartcard_context *context, const char *reader, char *pin, int *max_len);
 
 struct edwork_smartcard_context {
     SCARDCONTEXT hContext;
@@ -18,7 +18,7 @@ struct edwork_smartcard_context {
     DWORD protocol;
 
     char buf_name[0x100];
-    char public_key[1024];
+    unsigned char public_key[1024];
     int public_key_len;
 
     time_t timestamp;

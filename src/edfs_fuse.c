@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <inttypes.h>
 #include <fuse.h>
 #ifdef _WIN32
     #include <windows.h>
@@ -398,7 +399,7 @@ int edfs_auto_startup() {
             }
         }
 
-        int smartcard_read_pin(struct edwork_smartcard_context *smartcard_context, char *reader, unsigned char *pin, int *max_len) {
+        int smartcard_read_pin(struct edwork_smartcard_context *smartcard_context, const char *reader, char *pin, int *max_len) {
             int data_entered = ui_input("Enter PIN", reader, pin, *max_len, 1);
             if (data_entered) {
                 *max_len = 0;
@@ -407,7 +408,7 @@ int edfs_auto_startup() {
             return data_entered;
         }
     #else
-        int smartcard_read_pin(struct edwork_smartcard_context *smartcard_context, char *reader, unsigned char *pin, int *max_len) {
+        int smartcard_read_pin(struct edwork_smartcard_context *smartcard_context, char *reader, char *pin, int *max_len) {
             printf("PIN for %s: ", reader);
             scanf("%20s", pin);
             if (max_len)
@@ -823,7 +824,7 @@ int edfs_loop_named_pipe() {
 }
 #endif
 
-int edfs_notify_edwork(char *uri) {
+int edfs_notify_edwork(const char *uri) {
 #ifdef _WIN32
     if (!uri)
         return 0;
@@ -893,7 +894,7 @@ int main(int argc, char *argv[]) {
 #endif
     FILE *fp = NULL;
     struct fuse_chan *ch;
-    char *mountpoint = NULL;
+    const char *mountpoint = NULL;
     char *working_directory = NULL;
     char *storage_key = NULL;
     int err = -1;

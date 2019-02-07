@@ -496,7 +496,7 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
     return data;
 }
 
-void ui_app_tray_icon(const char *tooltip, char *notification_title, char *notification_text, ui_tray_event event_tray) {
+void ui_app_tray_icon(const char *tooltip, const char *notification_title, const char *notification_text, ui_tray_event event_tray) {
     event_tray_event = event_tray;
     if (event_tray)
         window_count ++;

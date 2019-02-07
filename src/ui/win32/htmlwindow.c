@@ -959,7 +959,7 @@ int ui_app_done() {
     return 1;
 }
 
-void ui_app_tray_icon(const char *tooltip, char *notification_title, char *notification_text, ui_tray_event event_tray) {
+void ui_app_tray_icon(const char *tooltip, const char *notification_title, const char *notification_text, ui_tray_event event_tray) {
     int exists = tray_icon.uID;
 
     if (!exists) {

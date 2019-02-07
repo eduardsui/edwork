@@ -1869,7 +1869,7 @@ uint64_t unpacked_ino(const char *data) {
 #ifdef WITH_SMARTCARD
 static void smartcard_sign_json(struct edfs *edfs_context, JSON_Object *root_object, const unsigned char *last_hash, int hash_size) {
     if (edwork_smartcard_valid(&edfs_context->smartcard_context)) {
-        char smartcard_signature[2048];
+        unsigned char smartcard_signature[2048];
         log_info("smartcard signing for %s", edfs_context->smartcard_context.buf_name);
         int smartcard_signature_size = edwork_smartcard_sign(&edfs_context->smartcard_context, last_hash, hash_size, smartcard_signature, sizeof(smartcard_signature));
         if (smartcard_signature_size > 0) {
@@ -1890,6 +1890,7 @@ static void smartcard_sign_json(struct edfs *edfs_context, JSON_Object *root_obj
         } else
             log_warn("error signing for identity %s", edfs_context->smartcard_context.buf_name);
     }
+    json_object_remove(root_object, "signature");
 }
 #endif
 
@@ -2000,6 +2001,73 @@ int write_json2(struct edfs *edfs_context, struct edfs_key_data *key, const char
     return written;
 }
 
+#ifdef WITH_SMARTCARD
+char *edfs_smartcard_get_signature(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
+    char *buffer = NULL;
+    JSON_Value *root_value = read_json(edfs_context, key, key->working_directory, inode);
+    if (!root_value) {
+        log_trace("invalid JSON file");
+        return buffer;
+    }
+    JSON_Object *root_object = json_value_get_object(root_value);
+
+    const char *iostamp     = json_object_get_string(root_object, "iostamp");
+    const char *owner       = json_object_get_string(root_object, "owner");
+    const char *signature   = json_object_get_string(root_object, "signature");
+    const char *identity    = json_object_get_string(root_object, "identity");
+
+    if ((iostamp) && (signature) && (identity)) {
+        int id_len = strlen(identity);
+        int len = strlen(iostamp) + strlen(signature) + id_len + 4096;
+        if (owner)
+            len += strlen(owner);
+        buffer = (char *)malloc(len);
+        if (buffer) {
+            buffer[0] = 0;
+            if (id_len > 128) {
+                snprintf(buffer, len, 
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                    "<Signature xmlns=\"http://www.w3.org/2000/09/xmldsig#\">\n"
+                    "  <SignedInfo>\n"
+                    "    <CanonicalizationMethod Algorithm=\"http://www.w3.org/TR/2001/REC-xml-c14n-20010315\"/>\n"
+                    "    <SignatureMethod Algorithm=\"http://www.w3.org/2000/09/xmldsig#rsa-sha256\"/>\n"
+                    "    <Reference URI=\"#object\">\n"
+                    "      <DigestMethod Algorithm=\"http://www.w3.org/2000/09/xmldsig#sha256\"/>\n"
+                    "      <DigestValue>%s</DigestValue>\n"
+                    "    </Reference>\n"
+                    "  </SignedInfo>\n"
+                    "  <SignatureValue>%s</SignatureValue>\n"
+                    "  <KeyInfo>\n"
+                    "    <KeyValue>\n"
+                    "      <RSAKeyValue><Modulus>%s</Modulus><Exponent>%s</Exponent></RSAKeyValue>\n"
+                    "    </KeyValue>\n"
+                    "  </KeyInfo>\n"
+                    "  <Object Id=\"object\"><![CDATA[%s]]></Object>\n"
+                    "</Signature>\n"
+                , iostamp, signature, identity, "AQAB", owner);
+            } else {
+                JSON_Value *root_value2 = json_value_init_object();
+                JSON_Object *root_object2 = json_value_get_object(root_value2);
+                json_object_set_string(root_object2, "owner", owner);
+                json_object_set_string(root_object2, "stamp", iostamp);
+                json_object_set_string(root_object2, "signature", signature);
+                json_object_set_string(root_object2, "identity", identity);
+
+                char *serialized_string = json_serialize_to_string_pretty(root_value2);
+                if (serialized_string) {
+                    snprintf(buffer, len, "%s", serialized_string);
+                    json_free_serialized_string(serialized_string);
+                }
+                json_value_free(root_value2);
+            }
+        }
+    }
+
+    json_value_free(root_value);
+    return buffer;
+}
+#endif
+
 uint64_t edfs_root_inode(struct edfs_key_data *key) {
     uint64_t root = 1;
     if (key)
@@ -2008,7 +2076,7 @@ uint64_t edfs_root_inode(struct edfs_key_data *key) {
     return root;
 }
 
-int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, uint64_t *parent, int64_t *size, uint64_t *timestamp, edfs_add_directory add_directory, struct dirbuf *b, char *namebuf, int len_namebuf, time_t *created, time_t *modified, uint64_t *generation, unsigned char *iohash) {
+int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, uint64_t *parent, int64_t *size, uint64_t *timestamp, edfs_add_directory add_directory, struct dirbuf *b, char *namebuf, int len_namebuf, time_t *created, time_t *modified, uint64_t *generation, unsigned char *iohash, int *has_signature) {
     JSON_Value *root_value = read_json(edfs_context, key, key->working_directory, inode);
     if (!root_value) {
         if (inode == edfs_root_inode(key)) {
@@ -2050,7 +2118,8 @@ int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_
             }
         }
     }
-
+    if (has_signature)
+        *has_signature = 0;
 
     if (parent) {
         const char *parent_str = json_object_get_string(root_object, "parent");
@@ -2076,6 +2145,11 @@ int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_
                 memset(iohash, 0, 32);
         } else
             memset(iohash, 0, 32);
+    }
+    if (has_signature) {
+        const char *signature = json_object_get_string(root_object, "signature");
+        if (signature)
+            *has_signature = 1;
     }
 
     json_value_free(root_value);
@@ -2104,7 +2178,7 @@ int edfs_update_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
             buffer[len] = 0;
             json_object_set_string(root_object, key, buffer);
 #ifdef WITH_SMARTCARD
-            smartcard_sign_json(edfs_context, root_object, value, 32);
+            smartcard_sign_json(edfs_context, root_object, (const unsigned char *)value, 32);
 #endif
         } else
             json_object_set_string(root_object, key, value);
@@ -2197,7 +2271,7 @@ int update_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
     }
     char name[MAX_PATH_LEN];
     name[0] = 0;
-    int type = read_file_json(edfs_context, key, inode, &parent, &size, &timestamp, NULL, NULL, name, MAX_PATH_LEN, &created, &modified, &generation, hash);
+    int type = read_file_json(edfs_context, key, inode, &parent, &size, &timestamp, NULL, NULL, name, MAX_PATH_LEN, &created, &modified, &generation, hash, NULL);
     if ((!type) || (name[0] == 0))
         return 0;
 
@@ -2295,7 +2369,7 @@ int makenode(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t pa
     if (inode_ref)
         *inode_ref = inode;
     
-    int type = read_file_json(edfs_context, key, parent, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, old_hash);
+    int type = read_file_json(edfs_context, key, parent, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, old_hash, NULL);
     if (!type)
         return -EPERM;
 
@@ -2309,7 +2383,7 @@ int makenode(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t pa
     uint64_t version = (uint64_t)0;
 
     // increment version for previously deleted object, if any
-    read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &version, NULL);
+    read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &version, NULL, NULL);
 
     write_json(edfs_context, key, key->working_directory, name, 0, inode, parent, attr, NULL, 0, 0, 0, version);
     
@@ -2364,7 +2438,7 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
     if (!key)
         return -ENOENT;
 
-    int type = read_file_json(edfs_context, key, ino, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
+    int type = read_file_json(edfs_context, key, ino, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL, NULL);
     if (!type)
         return -ENOENT;
 
@@ -2387,12 +2461,13 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
 
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name) {
     char namebuf[MAX_PATH_LEN];
+    int signature = 0;
 
     struct edfs_key_data *key = edfs_context->primary_key;
     if (!key)
         return 0;
 
-    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, ensure_name ? namebuf : NULL, ensure_name ? sizeof(namebuf) : 0, NULL, NULL, NULL, NULL);
+    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, ensure_name ? namebuf : NULL, ensure_name ? sizeof(namebuf) : 0, NULL, NULL, NULL, NULL, &signature);
     if ((type) && (ensure_name) && (strncmp(namebuf, ensure_name, sizeof(namebuf)))) {
     #ifdef __APPLE__
         char normalized_filename[MAX_PATH_LEN];
@@ -2404,6 +2479,15 @@ int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *e
         log_error("%s collides with %s", ensure_name, namebuf);
         return 0;
     }
+#ifdef WITH_SMARTCARD
+    if (signature) {
+        char *sig = edfs_smartcard_get_signature(edfs_context, key, inode);
+        if (sig) {
+            log_info("%s has signature\n%s", ensure_name, sig);
+            free(sig);
+        }
+    }
+#endif
     return type;
 }
 
@@ -2412,13 +2496,14 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
     uint64_t timestamp = 0;
     time_t modified = 0;
     time_t created = 0;
+    int signature = 0;
 
     struct edfs_key_data *key = edfs_context->primary_key;
     if (!key)
         return 0;
 
     uint64_t inode = computeinode(key, parent, name);
-    int type = read_file_json(edfs_context, key, inode, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
+    int type = read_file_json(edfs_context, key, inode, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL, NULL);
     if (!type)
         return 0;
 
@@ -2533,7 +2618,7 @@ int edfs_reply_hash(struct edfs *edfs_context, struct edfs_key_data *key, edfs_i
         unsigned char hash[32];
         unsigned char computed_hash[32];
         int64_t file_size = 0;
-        if ((!read_file_json(edfs_context, key, ino, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash)) || (XXH32(hash, 32, 0) != file_hash)) {
+        if ((!read_file_json(edfs_context, key, ino, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash, NULL)) || (XXH32(hash, 32, 0) != file_hash)) {
             log_warn("descriptor has different hash than requested");
             err = 0;
         }
@@ -3183,7 +3268,7 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
         return -EIO;
 
     char b64name[MAX_B64_HASH_LEN];
-    int type = read_file_json(edfs_context, dbuf->key, ino, &parent, NULL, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL);
+    int type = read_file_json(edfs_context, dbuf->key, ino, &parent, NULL, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL, NULL);
     if (type & S_IFDIR) {
         struct dirbuf dirbuf_container;
         computename(ino, b64name);
@@ -3216,7 +3301,7 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
                 index ++;
                 if ((start_at < index) && (!file.is_dir)) {
                     if ((verify_file(edfs_context, b->key, fullpath, file.name)) || (dbuf->key->read_only)) {
-                        read_file_json(edfs_context, b->key, unpacked_ino(file.name), NULL, NULL, NULL, add_directory, b, NULL, 0, NULL, NULL, NULL, NULL);
+                        read_file_json(edfs_context, b->key, unpacked_ino(file.name), NULL, NULL, NULL, add_directory, b, NULL, 0, NULL, NULL, NULL, NULL, NULL);
                         if (b->size >= off + size)
                             break;
                     } else
@@ -3248,7 +3333,7 @@ int edfs_request_hash_if_needed(struct edfs *edfs_context, struct edfs_key_data 
     unsigned char hash[32];
     unsigned char computed_hash[32];
     int64_t size = 0;
-    int type = read_file_json(edfs_context, key, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    int type = read_file_json(edfs_context, key, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash, NULL);
     if ((!type) || (!size))
         return 0;
 
@@ -3284,7 +3369,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
     if (!key)
         return -EACCES;
 
-    int type = read_file_json(edfs_context, key, ino, NULL, &size, &blockchain_limit, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    int type = read_file_json(edfs_context, key, ino, NULL, &size, &blockchain_limit, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash, NULL);
     if (!type)
         return -EACCES;
     if (type & S_IFDIR)
@@ -3365,7 +3450,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
 #else
                 usleep(50000);
 #endif
-                read_file_json(edfs_context, key, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+                read_file_json(edfs_context, key, ino, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash, NULL);
 
                 thread_yield();
             } while (!valid_hash);
@@ -3490,7 +3575,7 @@ int edfs_set_size(struct edfs *edfs_context, uint64_t inode, int64_t new_size) {
 int64_t get_size_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
     int64_t size;
 
-    int type = read_file_json(edfs_context, key, inode, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+    int type = read_file_json(edfs_context, key, inode, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL);
     if (!type)
         return 0;
 
@@ -3500,7 +3585,7 @@ int64_t get_size_json(struct edfs *edfs_context, struct edfs_key_data *key, uint
 uint64_t get_version_plus_one_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
     uint64_t version = 0;
 
-    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &version, NULL);
+    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &version, NULL, NULL);
     if (!type)
         return 0;
 
@@ -3510,7 +3595,7 @@ uint64_t get_version_plus_one_json(struct edfs *edfs_context, struct edfs_key_da
 int get_deleted_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
     int64_t size;
 
-    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL);
     if (!type)
         return 1;
 
@@ -4098,7 +4183,7 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
     if (!key)
         return NULL;
 
-    int type = read_file_json(edfs_context, key, ino, NULL, NULL, &blockchain_limit, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash);
+    int type = read_file_json(edfs_context, key, ino, NULL, NULL, &blockchain_limit, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash, NULL);
     int found_in_blockchain = edfs_lookup_blockchain(edfs_context, key, ino, blockchain_limit, blockchainhash, &blockchain_generation, &blockchain_timestamp);
     if ((type & S_IFDIR) == 0)
         return NULL;
@@ -4158,7 +4243,7 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
                     thread_mutex_unlock(&key->ino_cache_lock);
                     break;
                 }
-                if (!read_file_json(edfs_context, key, ino, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash)) {
+                if (!read_file_json(edfs_context, key, ino, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash, NULL)) {
                     log_warn("directory does not exists anymore");
                     thread_mutex_lock(&key->ino_cache_lock);
                     avl_insert(&key->ino_checksum_mismatch, (void *)(uintptr_t)ino, (void *)1);
@@ -4337,7 +4422,7 @@ int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t in
         return -EROFS;
 
     uint64_t generation;
-    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
+    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL, NULL);
     if (!type)
         return -ENOENT;
     if (type & S_IFDIR) {
@@ -4359,7 +4444,7 @@ int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t i
         return -EROFS;
 
     uint64_t generation;
-    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
+    int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL, NULL);
     if (!type)
         return -ENOENT;
     if (type & S_IFDIR)
@@ -5103,7 +5188,7 @@ int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, co
         uint64_t current_generation = 0;
         uint64_t current_timestamp = 0;
         if ((parent == 0) && (inode == edfs_root_inode(key)) && (!deleted) && (b64name)) {
-            read_file_json(edfs_context, key, inode, NULL, NULL, &current_timestamp, NULL, NULL, NULL, 0, NULL, NULL, &current_generation, NULL);
+            read_file_json(edfs_context, key, inode, NULL, NULL, &current_timestamp, NULL, NULL, NULL, 0, NULL, NULL, &current_generation, NULL, NULL);
             if ((current_generation > generation) || ((current_generation == generation) && (current_timestamp >= timestamp))) {
                 if (current_generation != generation)
                     log_warn("refused to update descriptor: received version is older (%" PRIu64 " > %" PRIu64 ")", current_generation, generation);
@@ -5121,7 +5206,7 @@ int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, co
             time_t current_modified = 0;
             time_t current_created = 0;
             int64_t current_size = 0;
-            int current_type = read_file_json(edfs_context, key, inode, &current_parent, &current_size, &current_timestamp, NULL, NULL, NULL, 0, &current_created, &current_modified, &current_generation, NULL);
+            int current_type = read_file_json(edfs_context, key, inode, &current_parent, &current_size, &current_timestamp, NULL, NULL, NULL, 0, &current_created, &current_modified, &current_generation, NULL, NULL);
             int do_write = 1;
             if ((current_type) || (current_generation)) {
                 // check all the parameters, not just modified, in case of a setattr(mtime)
@@ -5399,7 +5484,7 @@ int edwork_delete(struct edfs *edfs_context, struct edfs_key_data *key, const un
     uint64_t timestamp;
     uint64_t generation;
 
-    int type = read_file_json(edfs_context, key, inode, &parent, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL);
+    int type = read_file_json(edfs_context, key, inode, &parent, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, NULL, NULL);
 
     if (!type) {
         log_info("nothing to delete (file does not exists)");
@@ -5558,7 +5643,7 @@ void edfs_try_new_block(struct edfs *edfs_context, struct edfs_key_data *key) {
                 uint64_t generation = 0;
                 uint64_t timestamp = 0;
                 // set hash to 0 for deleted file
-                if (!read_file_json(edfs_context, key, inode, NULL, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t)))
+                if (!read_file_json(edfs_context, key, inode, NULL, NULL, &timestamp, NULL, NULL, NULL, 0, NULL, NULL, &generation, ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), NULL))
                     memset(ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), 0, 32);
 
                 if (edfs_block_contains_descriptor(key->chain, inode, generation)) {
@@ -5701,7 +5786,7 @@ void edfs_new_chain_request_descriptors(struct edfs *edfs_context, struct edfs_k
                 uint64_t inode = ntohll(*(uint64_t *)ptr);
                 uint64_t inode_version = 0;
                 int64_t file_size = 0;
-                int type = read_file_json(edfs_context, key, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash);
+                int type = read_file_json(edfs_context, key, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash, NULL);
                 memcpy(&generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
                 generation = ntohll(generation);
                 if ((generation > inode_version) || ((generation == inode_version) && (memcmp(hash, ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), 32))))
@@ -5737,7 +5822,7 @@ void edfs_chain_ensure_descriptors(struct edfs *edfs_context, struct edfs_key_da
                 uint64_t inode_version = 0;
                 int64_t file_size = 0;
 
-                int type = read_file_json(edfs_context, key, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash);
+                int type = read_file_json(edfs_context, key, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash, NULL);
                 memcpy(&generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
                 generation = ntohll(generation);
                 if (generation > inode_version)
@@ -7553,7 +7638,7 @@ int edfs_init(struct edfs *edfs_context) {
         // init root foloder
         key = edfs_context->key_data;
         while (key) {
-            read_file_json(edfs_context, key, 0, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+            read_file_json(edfs_context, key, 0, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL);
             key = (struct edfs_key_data *)key->next_key;
         }
     }
