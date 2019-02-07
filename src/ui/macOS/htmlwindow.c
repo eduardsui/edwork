@@ -32,20 +32,20 @@ enum {
     NSResizableWindowMask       = 1 << 3,
 };
 
-typedef struct CMPoint {
+typedef struct edworkPoint {
     double x;
     double y;
-} CMPoint;
+} edworkPoint;
 
-typedef struct CMSize {
+typedef struct edworkSize {
     double width;
     double height;
-} CMSize;
+} edworkSize;
 
-typedef struct CMRect {
-    CMPoint origin;
-    CMSize size;
-} CMRect;
+typedef struct edworkRect {
+    edworkPoint origin;
+    edworkSize size;
+} edworkRect;
 
 typedef struct AppDel {
     Class isa;    
@@ -78,7 +78,7 @@ id get_base_url() {
 
 void *ui_window(const char *title, const char *body) {
     id window = objc_msgSend((id)objc_getClass("NSWindow"), sel_getUid("alloc"));
-    window = objc_msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (CMRect){0,0,1200,750}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 0, false);
+    window = objc_msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (edworkRect){0, 0, 1200, 750}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 0, false);
     objc_msgSend(window, sel_getUid("center"));
 
     if (title) {
@@ -373,7 +373,38 @@ int ui_question(const char *title, const char *body, int level) {
 }
 
 int ui_input(const char *title, const char *body, char *val, int val_len, int masked) {
-    return 0;
+    CFStringRef title_str = CFStringCreateWithCString(NULL, title, kCFStringEncodingMacRoman);
+    CFStringRef body_str = CFStringCreateWithCString(NULL, body, kCFStringEncodingMacRoman);
+    if ((val_len > 0) && (val))
+        val[0] = 0;
+    id alert = objc_msgSend(objc_msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
+    id textfield;
+    if (masked)
+        textfield = objc_msgSend(objc_msgSend((id)objc_getClass("NSSecureTextField"), sel_registerName("alloc")), sel_registerName("initWithFrame:"), (edworkRect){0, 0, 295, 22});
+    else
+        textfield = objc_msgSend(objc_msgSend((id)objc_getClass("NSTextField"), sel_registerName("alloc")), sel_registerName("initWithFrame:"), (edworkRect){0, 0, 295, 22});
+    objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
+    objc_msgSend(alert, sel_getUid("setMessageText:"), title_str);
+    objc_msgSend(alert, sel_getUid("setInformativeText:"), body_str);
+    objc_msgSend(alert, sel_getUid("setAccessoryView:"), textfield);
+    objc_msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("Yes"));
+    objc_msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("No"));
+    int yes_no = (int)objc_msgSend(alert, sel_getUid("runModal")) - 1000;
+    if (body_str)
+        CFRelease(body_str);
+    if (title_str)    
+        CFRelease(title_str);
+        
+    if (yes_no < 0)
+        yes_no = 0;
+    else
+        yes_no = !yes_no;
+    if (yes_no) {
+        CFStringRef str = (CFStringRef)objc_msgSend(textfield, sel_getUid("stringValue"));
+        if (str)
+            CFStringGetCString(str, val, val_len, kCFStringEncodingUTF8);
+    }
+    return yes_no;
 }
 
 void ui_app_quit() {

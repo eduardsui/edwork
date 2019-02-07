@@ -31,7 +31,7 @@
     
     struct apple_parameters {
         struct fuse_chan *ch;
-        char *mountpoint;
+        const char *mountpoint;
         struct fuse *se;
     };
 #endif
