@@ -1096,15 +1096,17 @@ int main(int argc, char *argv[]) {
                     uri += 7;
                     uri_sent += edfs_notify_edwork(uri);
                     int err;
-                    if (strlen(argv[i]) > 64)
-                        err = edfs_use_key(edfs_context, uri, NULL);
-                    else
-                        err = edfs_use_key(edfs_context, NULL, uri);
-                    if (err) {
-                        fprintf(stderr, "edfs: invalid uri key\n");
-                        exit(-1);
+                    if (!uri_sent) {
+                        if (strlen(argv[i]) > 64)
+                            err = edfs_use_key(edfs_context, uri, NULL);
+                        else
+                            err = edfs_use_key(edfs_context, NULL, uri);
+                        if (err) {
+                            fprintf(stderr, "edfs: invalid uri key\n");
+                            exit(-1);
+                        }
+                        edfs_set_partition_key(edfs_context, uri);
                     }
-                    edfs_set_partition_key(edfs_context, uri);
                     uri_parameters += 2;
                 } else
 #if defined(_WIN32) || defined(__APPLE__)

@@ -2103,12 +2103,19 @@ int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_
         type = 0;
     }
 
+    if (parent) {
+        const char *parent_str = json_object_get_string(root_object, "parent");
+        *parent = unpacked_ino(parent_str);
+    }
+
     if ((add_directory) || ((namebuf) && (len_namebuf > 0))) {
         const char *name = json_object_get_string(root_object, "name");
         if ((name) && (name[0])) {
             // ignore deleted objects
-            if ((add_directory) && (type))
-                b->size += add_directory(name, inode, type, (int64_t)json_object_get_number(root_object, "size"), (time_t)json_object_get_number(root_object, "created"), (time_t)json_object_get_number(root_object, "modified"), (time_t)(json_object_get_number(root_object, "timestamp") / 1000000), b->userdata);
+            if ((add_directory) && (type)) {
+                if ((!parent) || (b->ino == *parent))
+                    b->size += add_directory(name, inode, type, (int64_t)json_object_get_number(root_object, "size"), (time_t)json_object_get_number(root_object, "created"), (time_t)json_object_get_number(root_object, "modified"), (time_t)(json_object_get_number(root_object, "timestamp") / 1000000), b->userdata);
+            }
             if ((namebuf) && (len_namebuf)) {
                 int name_len = strlen(name);
                 if (name_len > len_namebuf - 1)
@@ -2121,10 +2128,6 @@ int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_
     if (has_signature)
         *has_signature = 0;
 
-    if (parent) {
-        const char *parent_str = json_object_get_string(root_object, "parent");
-        *parent = unpacked_ino(parent_str);
-    }
     if (size)
         *size = (int64_t)json_object_get_number(root_object, "size");
     if (timestamp)
@@ -3300,12 +3303,11 @@ int edfs_readdir(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t
                 tinydir_readfile(&dir, &file);
                 index ++;
                 if ((start_at < index) && (!file.is_dir)) {
-                    if ((verify_file(edfs_context, b->key, fullpath, file.name)) || (dbuf->key->read_only)) {
-                        read_file_json(edfs_context, b->key, unpacked_ino(file.name), NULL, NULL, NULL, add_directory, b, NULL, 0, NULL, NULL, NULL, NULL, NULL);
-                        if (b->size >= off + size)
-                            break;
-                    } else
-                        log_error("%s verification failed", file.name);
+                    // no need for verify_file(edfs_context, b->key, fullpath, file.name) || (dbuf->key->read_only) anymore (added verify in json + parent check)
+                    uint64_t parent_inode = 0;
+                    read_file_json(edfs_context, b->key, unpacked_ino(file.name), &parent_inode, NULL, NULL, add_directory, b, NULL, 0, NULL, NULL, NULL, NULL, NULL);
+                    if (b->size >= off + size)
+                        break;
                 }
                 tinydir_next(&dir);
             }
@@ -4178,12 +4180,13 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
     uint64_t blockchain_timestamp = 0;
     uint64_t blockchain_generation = 0;
     uint64_t blockchain_limit = 0;
+    uint64_t parent = 0;
 
     struct edfs_key_data *key = edfs_context->primary_key;
     if (!key)
         return NULL;
 
-    int type = read_file_json(edfs_context, key, ino, NULL, NULL, &blockchain_limit, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash, NULL);
+    int type = read_file_json(edfs_context, key, ino, &parent, NULL, &blockchain_limit, NULL, NULL, NULL, 0, NULL, NULL, NULL, hash, NULL);
     int found_in_blockchain = edfs_lookup_blockchain(edfs_context, key, ino, blockchain_limit, blockchainhash, &blockchain_generation, &blockchain_timestamp);
     if ((type & S_IFDIR) == 0)
         return NULL;
@@ -4650,8 +4653,11 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
         json_serialize_to_file_pretty(root_value, fullpath);
 
     json_value_free(root_value);
-
-    if (edwork_load_key(edfs_context, b64buffer)) {
+    int key_loaded = edwork_load_key(edfs_context, b64buffer);
+    if (key_loaded) {
+        // for upgraded key, do nothing
+        if (key_loaded == 2)
+            return 0;
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
         edwork_broadcast_discovery_key(edfs_context, edfs_context->key_data);
 #endif
@@ -4659,7 +4665,8 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
         edfs_context->key_data->hblk_scheduled = 1;
         edfs_schedule(edfs_context, edfs_blockchain_request, 50000, 0, 0, 0, 0, 0, 0, edfs_context->key_data);
         edfs_context->key_data->block_timestamp = time(NULL) + 20;
-    }
+    } else
+        return -1;
 
     if (!edfs_context->primary_key)
         edfs_context->primary_key = edfs_context->key_data;
@@ -7145,7 +7152,8 @@ int edwork_load_key(struct edfs *edfs_context, const char *filename) {
         sha256(key->pubkey, 32, hash);
         key->key_id_xxh64_be = htonll(XXH64(hash, 32, 0));
 
-        if ((key->key_id_xxh64_be) && (edfs_find_key(key->key_id_xxh64_be, edfs_context))) {
+        struct edfs_key_data *old_key = edfs_find_key(key->key_id_xxh64_be, edfs_context);
+        if ((key->key_id_xxh64_be) && (old_key) && (old_key->read_only == 0)) {
             log_warn("already loaded key %s", key->signature);
             edfs_key_data_deinit(key);
             free(key);
@@ -7170,6 +7178,30 @@ int edwork_load_key(struct edfs *edfs_context, const char *filename) {
                     key->read_only = 0;
                     break;
             }
+        }
+        if ((old_key) && (old_key->read_only) && (!key->read_only)) {
+            old_key->read_only = 0;
+            old_key->key_loaded = 0;
+            old_key->pub_loaded = 0;
+            old_key->signature_size = key->signature_size;
+            old_key->sign_key_type = key->sign_key_type;
+            old_key->sig_len = key->sig_len;
+            old_key->pub_len = key->pub_len;
+            memcpy(old_key->pubkey, key->pubkey, key->pub_len);
+            memcpy(old_key->sigkey, key->sigkey, key->sig_len);
+            edfs_try_reset_proof(edfs_context, old_key);
+
+            log_info("updated key %s to read/write", key->signature);
+
+            edfs_key_data_deinit(key);
+            free(key);
+            return 2;
+        }
+        if (old_key) {
+            log_warn("already loaded key %s", key->signature);
+            edfs_key_data_deinit(key);
+            free(key);
+            return 0;
         }
     } else {
         log_error("error loading key %s", key->signature);
