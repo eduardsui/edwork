@@ -301,11 +301,12 @@ int edwork_smartcard_iterate(struct edwork_smartcard_context *context) {
                         }
                     }
                     SC_FreeReaders(readers);
-                } else {
-                    SC_Disconnect(context->hContext);
                 }
+                if (context->status == 0)
+                    SC_Disconnect(context->hContext);
             }
             break;
+read_pin:
         case 3:
             if (context->read_pin) {
                 pin_len = sizeof(pin);
@@ -323,9 +324,10 @@ int edwork_smartcard_iterate(struct edwork_smartcard_context *context) {
                         context->status_changed(context);
                 } else {
                     context->status = 20;
-                    if (read_pin)
+                    if (read_pin) {
                         log_error("invalid pin");
-                    else
+                        goto disconnect_smartcard;
+                    } else
                         context->status = -1;
                 }
             } else
@@ -337,24 +339,31 @@ int edwork_smartcard_iterate(struct edwork_smartcard_context *context) {
                 context->status = 22;
                 if (context->status_changed)
                     context->status_changed(context);
+                SC_DisconnectCard(context->hCard);
                 context->public_key_len = 0;
                 memset(context->public_key, 0, sizeof(context->public_key));
                 memset(context->buf_name, 0, sizeof(context->buf_name));
+                goto disconnect_reader;
             }
             break;
+disconnect_smartcard:
         case 20:
             edwork_plugin_deinit_smartcard(context->hCard, context->protocol);
             SC_DisconnectCard(context->hCard);
             context->status = 21;
             context->timestamp = time(NULL);
-            break;
+            // no break here
         case 21:
-            if ((SC_WaitForCardRemoval(context->hContext, context->reader, 0)) || (SC_errno))
+            if ((SC_WaitForCardRemoval(context->hContext, context->reader, 0)) || (SC_errno)) {
                 context->status = 22;
-            else
-            if (time(NULL) - context->timestamp >= 3)
+                goto disconnect_reader;
+            } else
+            if (time(NULL) - context->timestamp >= 3) {
                 context->status = 22;
+                goto disconnect_reader;
+            }
             break;
+disconnect_reader:
         case 22:
             edwork_plugin_deinit_smartcard(context->hCard, context->protocol);
             SC_Disconnect(context->hContext);
