@@ -10,6 +10,11 @@
 #else
     #include <PCSC/winscard.h>
     #include <PCSC/wintypes.h>
+
+    #define SCARD_AUTOALLOCATE (DWORD)(-1)
+    #define SCARD_ATTR_VALUE(Class, Tag) ((((ULONG)(Class)) << 16) | ((ULONG)(Tag)))
+    #define SCARD_PROTOCOL_Tx (SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1)
+    #define SCARD_ATTR_ATR_STRING SCARD_ATTR_VALUE(9, 0x0303)
 #endif
 
 extern LONG SC_errno;

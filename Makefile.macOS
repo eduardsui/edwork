@@ -2,12 +2,12 @@ CC = gcc
 RM = rm
 USRSCTP_CFLAGS = -DHAVE_NETINET_IP_ICMP_H -DHAVE_SA_LEN -DHAVE_SCONN_LEN -DHAVE_SIN6_LEN -DHAVE_SIN_LEN -DHAVE_STDATOMIC_H -DHAVE_SYS_QUEUE_H -DINET -DINET6 -DSCTP_PROCESS_LEVEL_LOCKS -DSCTP_SIMPLE_ALLOCATOR -D__APPLE_USE_RFC_2292 -D__Userspace__ -D__Userspace_os_Darwin -Isrc/usrsctp -Wno-deprecated-declarations
 CFLAGS = -O3 -I/usr/local/include/osxfuse -D_FILE_OFFSET_BITS=64 -DEDFS_DEFAULT_HOST=\"discovery.gyrogears.com:4848\" -DEDFS_MULTITHREADED -DWITH_SCTP -DWITH_USRSCTP $(USRSCTP_CFLAGS)
-LIBS = -L/usr/local/lib -losxfuse -framework Cocoa -framework WebKit
+LIBS = -L/usr/local/lib -losxfuse -framework Cocoa -framework WebKit -framework PCSC
 BUILDFLAGS= -o edfs_mount
 
 UI_SRC = src/ui/macOS/htmlwindow.c src/ui/macOS/resource.m
 USRSCTP_SRC = src/usrsctp/user_environment.c src/usrsctp/user_mbuf.c src/usrsctp/user_recv_thread.c src/usrsctp/user_socket.c src/usrsctp/netinet/sctputil.c src/usrsctp/netinet/sctp_asconf.c src/usrsctp/netinet/sctp_auth.c src/usrsctp/netinet/sctp_bsd_addr.c src/usrsctp/netinet/sctp_callout.c src/usrsctp/netinet/sctp_cc_functions.c src/usrsctp/netinet/sctp_crc32.c src/usrsctp/netinet/sctp_indata.c src/usrsctp/netinet/sctp_input.c src/usrsctp/netinet/sctp_output.c src/usrsctp/netinet/sctp_pcb.c src/usrsctp/netinet/sctp_peeloff.c src/usrsctp/netinet/sctp_sha1.c src/usrsctp/netinet/sctp_ss_functions.c src/usrsctp/netinet/sctp_sysctl.c src/usrsctp/netinet/sctp_timer.c src/usrsctp/netinet/sctp_userspace.c src/usrsctp/netinet/sctp_usrreq.c src/usrsctp/netinet6/sctp6_usrreq.c
-SRC = $(UI_SRC) $(USRSCTP_SRC) src/sha256.c src/xxhash.c src/base64.c src/base32.c src/parson.c src/edd25519.c src/avl.c src/chacha.c src/log.c src/sha3.c src/curve25519.c src/sort.c src/blockchain.c src/edfs_key_data.c src/edwork.c src/edfs_core.c src/edfs_fuse.c
+SRC = $(UI_SRC) $(USRSCTP_SRC) src/sha256.c src/xxhash.c src/base64.c src/base32.c src/parson.c src/edd25519.c src/avl.c src/chacha.c src/log.c src/sha3.c src/curve25519.c src/sort.c src/blockchain.c src/edfs_key_data.c src/edwork.c src/edfs_core.c src/edfs_fuse.c src/smartcard.c src/edwork_smartcard_plugin.c src/edwork_smartcard.c
 OBJS = $(SRC: .c=.o)
 
 edfs: ${OBJS}

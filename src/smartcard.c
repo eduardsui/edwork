@@ -1,4 +1,7 @@
 #include "smartcard.h"
+#ifndef _WIN32
+    #include <unistd.h>
+#endif
 
 LONG SC_errno = 0;
 
@@ -228,7 +231,11 @@ int SC_WaitForCard(SCARDCONTEXT hContext, char *szSelectedReader, int max_time) 
                 SC_errno = lRetValue;
                 return 0;
             }
+#ifdef _WIN32
             Sleep(10);
+#else
+            usleep(10000);
+#endif
             max_time -= 10;
             if ((max_time <= 0) && ((sReaderState.dwEventState & SCARD_STATE_PRESENT) == 0))
                 return 0;
@@ -258,7 +265,11 @@ int SC_WaitForCardRemoval(SCARDCONTEXT hContext, char *szSelectedReader, int max
                 SC_errno = lRetValue;
                 return 0;
             }
+#ifdef _WIN32
             Sleep(10);
+#else
+            usleep(10000);
+#endif
             max_time -= 10;
             if ((max_time <= 0) && ((sReaderState.dwEventState & SCARD_STATE_EMPTY) == 0))
                 return 0;
