@@ -93,7 +93,7 @@
             tmpres  |= ft.dwLowDateTime;
 
             tmpres     -= DELTA_EPOCH_IN_MICROSECS;
-            tmpres     /= 10; 
+            tmpres     /= 10;
 
             tv->tv_sec  = (long)(tmpres / 1000000UL);
             tv->tv_usec = (long)(tmpres % 1000000UL);
@@ -120,7 +120,7 @@
 #else
     #include <sys/time.h>
     extern long timezone;
-    
+
     #define EDFS_MKDIR(dir, mode)   mkdir(dir, mode)
 #endif
 
@@ -728,7 +728,7 @@ void notify_io(struct edfs *edfs_context, struct edfs_key_data *key, const char 
             default:
                 edwork_broadcast_client(edwork, key, type, ioblock->buffer, ioblock->size, ack ? EDWORK_NODES : 0, EDWORK_NODES, ino, use_clientaddr, clientaddr_len);
                 break;
-        }            
+        }
         free(ioblock);
         return;
     }
@@ -1097,7 +1097,7 @@ int sign(struct edfs *edfs_context, struct edfs_key_data *key, const char *str, 
 
 int verify(struct edfs *edfs_context, struct edfs_key_data *key, const char *str, int len, const unsigned char *hash, int hash_size) {
     unsigned char hash2[32];
-      
+
     if (!key->pub_loaded) {
         EDFS_THREAD_LOCK(edfs_context);
         key->pub_len = read_signature(edfs_context, key->signature, key->pubkey, 1, &key->key_type, NULL);
@@ -1621,7 +1621,7 @@ int edfs_schedule(struct edfs *edfs_context, edfs_schedule_callback callback, ui
         updated_event->timestamp = microseconds() - when;
     else
         updated_event->timestamp = microseconds();
-    
+
     if (expires)
         updated_event->timeout = microseconds() + expires;
     else
@@ -1868,8 +1868,24 @@ uint64_t unpacked_ino(const char *data) {
 
 #ifdef WITH_SMARTCARD
 static void smartcard_sign_json(struct edfs *edfs_context, JSON_Object *root_object, const unsigned char *last_hash, int hash_size) {
+    unsigned char temp_buf[64];
     if (edwork_smartcard_valid(&edfs_context->smartcard_context)) {
         unsigned char smartcard_signature[2048];
+        if ((!last_hash) || (!hash_size)) {
+            const char *iohash_mime = json_object_get_string(root_object, "iostamp");
+            if (iohash_mime) {
+                int mime_len = strlen(iohash_mime);
+                if (mime_len > 43)
+                    mime_len = 43;
+                int len = base64_decode_no_padding((const BYTE *)iohash_mime, (BYTE *)temp_buf, 32);
+                if (len < 32)
+                    return;
+                last_hash = temp_buf;
+                hash_size = 32;
+            } else {
+                return;
+            }
+        }
         log_info("smartcard signing for %s", edfs_context->smartcard_context.buf_name);
         int smartcard_signature_size = edwork_smartcard_sign(&edfs_context->smartcard_context, last_hash, hash_size, smartcard_signature, sizeof(smartcard_signature));
         if (smartcard_signature_size > 0) {
@@ -1878,19 +1894,44 @@ static void smartcard_sign_json(struct edfs *edfs_context, JSON_Object *root_obj
             if (signature_json_len < 0)
                 signature_json_len = 0;
             signature_json_buffer[signature_json_len] = 0;
-            json_object_set_string(root_object, "owner", edfs_context->smartcard_context.buf_name);
-            json_object_set_string(root_object, "signature", signature_json_buffer);
+            JSON_Array *signatures = json_object_get_array(root_object, "signatures");
+            if (!signatures) {
+                JSON_Value *value = json_value_init_array();
+                signatures = json_value_get_array(value);
+                json_object_set_value(root_object, "signatures", value);
+            }
+
+            JSON_Value *value = json_value_init_object();
+            json_array_append_value(signatures, value);
+            JSON_Object *root_object2 = json_value_get_object(value);
+            json_object_set_value(root_object, "signatures", value);
+
+            json_object_set_string(root_object2, "stamp", json_object_get_string(root_object, "iostamp"));
+            json_object_set_string(root_object2, "owner", edfs_context->smartcard_context.buf_name);
+            json_object_set_string(root_object2, "signature", signature_json_buffer);
+            json_object_set_number(root_object2, "timestamp", microseconds());
 
             signature_json_len = base64_encode_no_padding((const BYTE *)edfs_context->smartcard_context.public_key, edfs_context->smartcard_context.public_key_len, (BYTE *)signature_json_buffer, sizeof(signature_json_buffer) - 1);
             if (signature_json_len < 0)
                 signature_json_len = 0;
             signature_json_buffer[signature_json_len] = 0;
 
-            json_object_set_string(root_object, "identity", signature_json_buffer);
+            json_object_set_string(root_object2, "identity", signature_json_buffer);
         } else
             log_warn("error signing for identity %s", edfs_context->smartcard_context.buf_name);
+    } else
+    if ((last_hash) && (hash_size == 32)) {
+        const char *iohash_mime = json_object_get_string(root_object, "iostamp");
+        if (iohash_mime) {
+            int mime_len = strlen(iohash_mime);
+            if (mime_len > 43)
+                mime_len = 43;
+            int len = base64_decode_no_padding((const BYTE *)iohash_mime, (BYTE *)temp_buf, 32);
+            if ((len < 32) || (memcmp(last_hash, temp_buf, 32)))
+                json_object_remove(root_object, "signature");
+        } else
+            json_object_remove(root_object, "signature");
     }
-    json_object_remove(root_object, "signature");
 }
 #endif
 
@@ -2001,8 +2042,7 @@ int write_json2(struct edfs *edfs_context, struct edfs_key_data *key, const char
     return written;
 }
 
-#ifdef WITH_SMARTCARD
-char *edfs_smartcard_get_signature(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
+char *edfs_smartcard_get_signature(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, int signature_index) {
     char *buffer = NULL;
     JSON_Value *root_value = read_json(edfs_context, key, key->working_directory, inode);
     if (!root_value) {
@@ -2011,62 +2051,78 @@ char *edfs_smartcard_get_signature(struct edfs *edfs_context, struct edfs_key_da
     }
     JSON_Object *root_object = json_value_get_object(root_value);
 
+    JSON_Array *array_data  = json_object_get_array(root_object, "signatures");
+    size_t array_count      = json_array_get_count(array_data);
     const char *iostamp     = json_object_get_string(root_object, "iostamp");
-    const char *owner       = json_object_get_string(root_object, "owner");
-    const char *signature   = json_object_get_string(root_object, "signature");
-    const char *identity    = json_object_get_string(root_object, "identity");
+    int sig_index           = 0;
+    if (signature_index < 0)
+        signature_index = 0;
+    if ((array_data) && (array_count > 0) && (iostamp)) {
+        size_t i;
+        for (i = 0; i < array_count; i ++) {
+            JSON_Object *signature_root_object   = json_array_get_object(array_data, i);
+            if (signature_root_object) {
+                const char *owner           = json_object_get_string(signature_root_object, "owner");
+                const char *signature       = json_object_get_string(signature_root_object, "signature");
+                const char *identity        = json_object_get_string(signature_root_object, "identity");
+                const char *stamp           = json_object_get_string(signature_root_object, "stamp");
 
-    if ((iostamp) && (signature) && (identity)) {
-        int id_len = strlen(identity);
-        int len = strlen(iostamp) + strlen(signature) + id_len + 4096;
-        if (owner)
-            len += strlen(owner);
-        buffer = (char *)malloc(len);
-        if (buffer) {
-            buffer[0] = 0;
-            if (id_len > 128) {
-                snprintf(buffer, len, 
-                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-                    "<Signature xmlns=\"http://www.w3.org/2000/09/xmldsig#\">\n"
-                    "  <SignedInfo>\n"
-                    "    <CanonicalizationMethod Algorithm=\"http://www.w3.org/TR/2001/REC-xml-c14n-20010315\"/>\n"
-                    "    <SignatureMethod Algorithm=\"http://www.w3.org/2000/09/xmldsig#rsa-sha256\"/>\n"
-                    "    <Reference URI=\"#object\">\n"
-                    "      <DigestMethod Algorithm=\"http://www.w3.org/2000/09/xmldsig#sha256\"/>\n"
-                    "      <DigestValue>%s</DigestValue>\n"
-                    "    </Reference>\n"
-                    "  </SignedInfo>\n"
-                    "  <SignatureValue>%s</SignatureValue>\n"
-                    "  <KeyInfo>\n"
-                    "    <KeyValue>\n"
-                    "      <RSAKeyValue><Modulus>%s</Modulus><Exponent>%s</Exponent></RSAKeyValue>\n"
-                    "    </KeyValue>\n"
-                    "  </KeyInfo>\n"
-                    "  <Object Id=\"object\"><![CDATA[%s]]></Object>\n"
-                    "</Signature>\n"
-                , iostamp, signature, identity, "AQAB", owner);
-            } else {
-                JSON_Value *root_value2 = json_value_init_object();
-                JSON_Object *root_object2 = json_value_get_object(root_value2);
-                json_object_set_string(root_object2, "owner", owner);
-                json_object_set_string(root_object2, "stamp", iostamp);
-                json_object_set_string(root_object2, "signature", signature);
-                json_object_set_string(root_object2, "identity", identity);
-
-                char *serialized_string = json_serialize_to_string_pretty(root_value2);
-                if (serialized_string) {
-                    snprintf(buffer, len, "%s", serialized_string);
-                    json_free_serialized_string(serialized_string);
+                if ((iostamp) && (signature) && (identity) && (stamp) && (!strcmp(iostamp, stamp))) {
+                    if (sig_index == signature_index) {
+                        int id_len = strlen(identity);
+                        int len = strlen(iostamp) + strlen(signature) + id_len + 4096;
+                        if (owner)
+                            len += strlen(owner);
+                        buffer = (char *)malloc(len);
+                        if (buffer) {
+                            buffer[0] = 0;
+                            if (id_len > 128) {
+                                snprintf(buffer, len,
+                                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                                    "<Signature xmlns=\"http://www.w3.org/2000/09/xmldsig#\">\n"
+                                    "  <SignedInfo>\n"
+                                    "    <CanonicalizationMethod Algorithm=\"http://www.w3.org/TR/2001/REC-xml-c14n-20010315\"/>\n"
+                                    "    <SignatureMethod Algorithm=\"http://www.w3.org/2000/09/xmldsig#rsa-sha256\"/>\n"
+                                    "    <Reference URI=\"#object\">\n"
+                                    "      <DigestMethod Algorithm=\"http://www.w3.org/2000/09/xmldsig#sha256\"/>\n"
+                                    "      <DigestValue>%s</DigestValue>\n"
+                                    "    </Reference>\n"
+                                    "  </SignedInfo>\n"
+                                    "  <SignatureValue>%s</SignatureValue>\n"
+                                    "  <KeyInfo>\n"
+                                    "    <KeyValue>\n"
+                                    "      <RSAKeyValue><Modulus>%s</Modulus><Exponent>%s</Exponent></RSAKeyValue>\n"
+                                    "    </KeyValue>\n"
+                                    "  </KeyInfo>\n"
+                                    "  <Object Id=\"object\"><![CDATA[%s]]></Object>\n"
+                                    "</Signature>\n"
+                                , iostamp, signature, identity, "AQAB", owner);
+                            } else {
+                                JSON_Value *root_value2 = json_value_init_object();
+                                JSON_Object *root_object2 = json_value_get_object(root_value2);
+                                json_object_set_string(root_object2, "owner", owner);
+                                json_object_set_string(root_object2, "stamp", iostamp);
+                                json_object_set_string(root_object2, "signature", signature);
+                                json_object_set_string(root_object2, "identity", identity);
+                                json_object_set_number(root_object2, "timestamp", json_object_get_number(signature_root_object, "timestamp"));
+                                char *serialized_string = json_serialize_to_string_pretty(root_value2);
+                                if (serialized_string) {
+                                    snprintf(buffer, len, "%s", serialized_string);
+                                    json_free_serialized_string(serialized_string);
+                                }
+                                json_value_free(root_value2);
+                            }
+                        }
+                        break;
+                    }
+                    sig_index ++;
                 }
-                json_value_free(root_value2);
             }
         }
     }
-
     json_value_free(root_value);
     return buffer;
 }
-#endif
 
 uint64_t edfs_root_inode(struct edfs_key_data *key) {
     uint64_t root = 1;
@@ -2150,8 +2206,8 @@ int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_
             memset(iohash, 0, 32);
     }
     if (has_signature) {
-        const char *signature = json_object_get_string(root_object, "signature");
-        if (signature)
+        JSON_Array *signatures = json_object_get_array(root_object, "signatures");
+        if ((signatures) && (json_array_get_count(signatures) > 0))
             *has_signature = 1;
     }
 
@@ -2180,15 +2236,15 @@ int edfs_update_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
                 len = 0;
             buffer[len] = 0;
             json_object_set_string(root_object, key, buffer);
-#ifdef WITH_SMARTCARD
-            smartcard_sign_json(edfs_context, root_object, (const unsigned char *)value, 32);
-#endif
-        } else
+        } else {
             json_object_set_string(root_object, key, value);
+        }
     } while (*keys_value);
-
     json_object_set_number(root_object, "version", json_object_get_number(root_object, "version") + 1);
     json_object_set_number(root_object, "timestamp", microseconds());
+#ifdef WITH_SMARTCARD
+    smartcard_sign_json(edfs_context, root_object, NULL, 0);
+#endif
     write_json2(edfs_context, key, key->working_directory, inode, root_value);
     json_value_free(root_value);
 
@@ -2316,10 +2372,10 @@ int update_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
 
 int makesyncnode(struct edfs *edfs_context, struct edfs_key_data *key, const char *parentb64name, const char *b64name, const char *name) {
     char fullpath[MAX_PATH_LEN];
-    
+
     // if directory exists, silently ignore it
     // EDFS_MKDIR(adjustpath(edfs_context, fullpath, b64name), 0755);
-        
+
     // silently try to make parent node (if not available)
     EDFS_MKDIR(adjustpath(key, fullpath, parentb64name), 0755);
 
@@ -2367,11 +2423,11 @@ int makenode(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t pa
     char parentb64name[MAX_B64_HASH_LEN];
     unsigned char old_hash[32];
     unsigned char new_hash[32];
-    
+
     uint64_t inode = computeinode(key, parent, name);
     if (inode_ref)
         *inode_ref = inode;
-    
+
     int type = read_file_json(edfs_context, key, parent, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, old_hash, NULL);
     if (!type)
         return -EPERM;
@@ -2389,7 +2445,7 @@ int makenode(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t pa
     read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, &version, NULL, NULL);
 
     write_json(edfs_context, key, key->working_directory, name, 0, inode, parent, attr, NULL, 0, 0, 0, version);
-    
+
     adjustpath(key, fullpath, computename(parent, parentb64name));
 
     // ensure parent directory exists
@@ -2472,25 +2528,27 @@ int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *e
 
     int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, ensure_name ? namebuf : NULL, ensure_name ? sizeof(namebuf) : 0, NULL, NULL, NULL, NULL, &signature);
     if ((type) && (ensure_name) && (strncmp(namebuf, ensure_name, sizeof(namebuf)))) {
-    #ifdef __APPLE__
+#ifdef __APPLE__
         char normalized_filename[MAX_PATH_LEN];
         normalizedname(ensure_name, strlen(ensure_name), normalized_filename, sizeof(normalized_filename));
         // is valid (just needs normalization)
         if (!strncmp(namebuf, normalized_filename, MAX_PATH_LEN))
             return type;
-    #endif
+#endif
         log_error("%s collides with %s", ensure_name, namebuf);
         return 0;
     }
-#ifdef WITH_SMARTCARD
-    if (signature) {
-        char *sig = edfs_smartcard_get_signature(edfs_context, key, inode);
-        if (sig) {
-            log_info("%s has signature\n%s", ensure_name, sig);
-            free(sig);
-        }
+    if ((signature) && (log_get_level() <= LOG_INFO)) {
+        char *sig = NULL;
+        int signature_index = 0;
+        do {
+            sig = edfs_smartcard_get_signature(edfs_context, key, inode, signature_index ++);
+            if (sig) {
+                log_info("%s has signature #%i\n%s", ensure_name, signature_index, sig);
+                free(sig);
+            }
+        } while (sig);
     }
-#endif
     return type;
 }
 
@@ -2531,7 +2589,7 @@ void edfs_warm_cache(struct edfs *edfs_context, const char *working_directory, e
     char b64name[MAX_B64_HASH_LEN];
     char fullpath[MAX_PATH_LEN];
     char name[MAX_PATH_LEN];
-    
+
     computename(ino, b64name);
 
     max_chunks += chunk;
@@ -2643,7 +2701,7 @@ int chunk_exists(const char *path, uint64_t chunk) {
 #else
     snprintf(name, MAX_PATH_LEN, "%s/%" PRIu64, path, (uint64_t)chunk);
 
-    struct stat statbuf;   
+    struct stat statbuf;
     return (stat(name, &statbuf) == 0);
 #endif
 }
@@ -2657,7 +2715,7 @@ int chunk_exists2(struct edfs_key_data *key, uint64_t inode, uint64_t chunk) {
 #else
     adjustpath2(key, fullpath, computename(inode, b64name), chunk);
 
-    struct stat statbuf;   
+    struct stat statbuf;
     return (stat(fullpath, &statbuf) == 0);
 #endif
 }
@@ -2683,7 +2741,7 @@ int request_data(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_
         // at least 2 nodes
         if ((avl_cache) && (avl_cache->len >= 1)) {
             if ((avl_cache->len >= 2) || (edwork_random() % 20 != 0)) {
-                unsigned int to_client; 
+                unsigned int to_client;
                 if (use_cached_addr > 1)
                     to_client = use_cached_addr - 2;
                 else
@@ -2820,7 +2878,7 @@ void edfs_make_key(struct edfs *edfs_context) {
 }
 
 int edfs_file_exists(const char *name) {
-    struct stat statbuf;   
+    struct stat statbuf;
     return (stat(name, &statbuf) == 0);
 }
 
@@ -3431,7 +3489,7 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
                     *(uint64_t *)(additional_data + 8)= htonll(i);
                     notify_io(edfs_context, key, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, edfs_context->edwork, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 }
-                
+
                 if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                     log_error("hash read timed out");
                     if (!hash_error) {
@@ -4141,7 +4199,7 @@ int edfs_lookup_blockchain(struct edfs *edfs_context, struct edfs_key_data *key,
         *timestamp = 0;
     if (generation)
         *generation = 0;
-    
+
     struct block *blockchain = key->chain;
     int i;
     int record_size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32;
@@ -4282,7 +4340,7 @@ int recursive_rmdir(const char *path) {
             if (!strcmp(file.name, ".") || !strcmp(file.name, ".."))
                  continue;
 
-            len = path_len + strlen(file.name) + 2; 
+            len = path_len + strlen(file.name) + 2;
             buf = (char *)malloc(len);
 
             if (buf) {
@@ -4327,7 +4385,7 @@ int recursive_dir_size(const char *path, uint64_t *size, uint64_t *files, uint64
             size_t len;
 
             if ((strcmp(file.name, ".")) && (strcmp(file.name, ".."))) {
-                len = path_len + strlen(file.name) + 2; 
+                len = path_len + strlen(file.name) + 2;
                 buf = (char *)malloc(len);
 
                 if (buf) {
@@ -4489,7 +4547,7 @@ int edfs_mknod(struct edfs *edfs_context, edfs_ino_t parent, const char *name, m
     if ((mode & S_IFREG) == 0)
         return -EACCES;
 
-    
+
     return makenode(edfs_context, key, parent, name, S_IFREG | 0644, inode);
 }
 
@@ -4523,7 +4581,7 @@ int edfs_create_key(struct edfs *edfs_context) {
 
     json_object_set_string(root_object, "alg", "ED25519");
     json_object_set_string(root_object, "kty", "EDD25519");
-    
+
     b64buffer[0] = 0;
     size_t len = base64_encode_no_padding((const BYTE *)private_key, 64, (BYTE *)b64buffer, sizeof(b64buffer) - 1);
     if (len > 0) {
@@ -4594,7 +4652,7 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
 
     json_object_set_string(root_object, "alg", "ED25519");
     json_object_set_string(root_object, "kty", "EDD25519");
-    
+
     if (private_key) {
         json_object_set_string(root_object, "k", private_key);
 
@@ -4605,7 +4663,7 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
                 json_value_free(root_value);
                 return -1;
             }
-            
+
             keydata[0] &= 248;
             keydata[31] &= 63;
             keydata[31] |= 64;
@@ -4835,7 +4893,7 @@ static int edfs_data_dir_remove(struct edfs *edfs_context, struct edfs_key_data 
             size_t len;
 
             if ((strcmp(file.name, ".")) && (strcmp(file.name, "..")) && (file.is_dir)) {
-                len = path_len + strlen(file.name) + 2; 
+                len = path_len + strlen(file.name) + 2;
                 buf = (char *)malloc(len);
 
                 if (buf) {
@@ -5327,7 +5385,7 @@ int edwork_cache_addr(struct edfs *edfs_context, struct edfs_key_data *key, uint
 
         memcpy(&avl_cache->clientaddr[avl_cache->offset++], clientaddr, clientaddrlen);
     }
-    
+
     if (edfs_context->mutex_initialized)
         thread_mutex_unlock(&key->ino_cache_lock);
 
@@ -5782,7 +5840,7 @@ void edfs_new_chain_request_descriptors(struct edfs *edfs_context, struct edfs_k
         return;
 
     uint64_t generation = 0;
-   
+
     int i;
     int record_size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32;
     do {
@@ -6035,7 +6093,7 @@ one_loop:
                         return;
                     }
                     unsigned char shared_secret[32];
-                    
+
                     if (is_bigchunk)
                         curve25519(shared_secret, edfs_context->key.secret, payload + 22 + other_chunks * sizeof(uint64_t));
                     else
@@ -6094,7 +6152,7 @@ one_loop:
             }
         }
         return;
-    } 
+    }
     if (!memcmp(type, "list", 4)) {
         log_info("LIST request received (non-signed) (%s)", edwork_addr_ipv4(clientaddr));
         uint32_t offset = 0;
@@ -6384,7 +6442,7 @@ one_loop:
                 *(uint64_t *)(additional_data + 24) = htonll(size);
 
 
-                unsigned char shared_secret[32];                    
+                unsigned char shared_secret[32];
                 curve25519(shared_secret, edfs_context->key.secret, payload + 20);
 
                 unsigned char buf2[BLOCK_SIZE_MAX];
@@ -6790,7 +6848,7 @@ one_loop:
         if (!peers)
             return;
 
-        int size = BLOCK_SIZE;       
+        int size = BLOCK_SIZE;
         int records = edfs_get_peer_list(peers, buffer, &size);
         if (records > 0) {
             if (edwork_send_to_peer(edwork, key, "add2", buffer, size, clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL * 10) <= 0) {
@@ -6932,7 +6990,7 @@ int string_ends_with(const char * str, const char *suffix, int suffix_len) {
 
 unsigned int edwork_resync(struct edfs *edfs_context, struct edfs_key_data *key, void *clientaddr, int clientaddrlen, int is_sctp, int is_listen_socket) {
     tinydir_dir dir;
-    
+
     if (tinydir_open(&dir, key->working_directory)) {
         log_error("error opening edfs directory %s", key->working_directory);
         return 0;

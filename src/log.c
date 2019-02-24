@@ -99,6 +99,10 @@ void log_set_colors(int enable) {
 #endif
 }
 
+int log_get_level() {
+    return L.level;
+}
+
 void log_log(int level, const char *file, int line, const char *fmt, ...) {
   if (level < L.level) {
     return;
