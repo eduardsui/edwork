@@ -1867,6 +1867,27 @@ uint64_t unpacked_ino(const char *data) {
 }
 
 #ifdef WITH_SMARTCARD
+static void smartcard_remove_signature(JSON_Array *signatures, const char *remove_identity) {
+    if ((!remove_identity) || (!signatures))
+        return;
+
+    size_t array_count      = json_array_get_count(signatures);
+    if (array_count > 0) {
+        size_t i = 0;
+        while (i < array_count) {
+            JSON_Object *signature_root_object = json_array_get_object(signatures, i);
+            if (signature_root_object) {
+                const char *identity = json_object_get_string(signature_root_object, "identity");
+                if ((identity) && (!strcmp(remove_identity, identity)) && (json_array_remove(signatures, i) == JSONSuccess)) {
+                    array_count --;
+                    continue;
+                }
+            }
+            i ++;
+        }
+    }
+}
+
 static void smartcard_sign_json(struct edfs *edfs_context, JSON_Object *root_object, const unsigned char *last_hash, int hash_size) {
     unsigned char temp_buf[64];
     if (edwork_smartcard_valid(&edfs_context->smartcard_context)) {
@@ -1915,6 +1936,9 @@ static void smartcard_sign_json(struct edfs *edfs_context, JSON_Object *root_obj
             if (signature_json_len < 0)
                 signature_json_len = 0;
             signature_json_buffer[signature_json_len] = 0;
+
+            // remove old signatures
+            smartcard_remove_signature(signatures, signature_json_buffer);
 
             json_object_set_string(root_object2, "identity", signature_json_buffer);
         } else
