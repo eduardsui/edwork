@@ -266,44 +266,44 @@ int edwork_smartcard_iterate(struct edwork_smartcard_context *context) {
         return -1;
 
     char pin[0x100];
-    int count;
     int pin_len;
 
     thread_mutex_lock(&context->lock);
     switch (context->status) {
         case 0:
             context->hContext = SC_Connect();
-            if (!SC_errno) {
-                char *readers[16];
-                count = SC_ListReaders(context->hContext, readers, 16);
-                if (count > 0) {
+            if (!SC_errno)
+                context->status = 1;
+            break;
+        case 1:
+            {
+                char **readers = SC_ListReaders(context->hContext);
+                if (readers) {
                     free(context->reader);
                     context->reader = NULL;
-                    for (int i = 0; i < count; i++) {
-                        char *reader = readers[i];
-                        if (reader) {
-                            context->protocol = 0;
-                            if (SC_WaitForCard(context->hContext, reader, 0)) {
-                                context->hCard = SC_ActivateCard(context->hContext, reader, &context->protocol);
-                                if (SC_errno) {
-                                    log_warn("smartcard/reader %s error %x: %s", reader, (int)SC_errno, SC_GetErrorString(SC_errno));
-                                } else
-                                if (edwork_plugin_init_smartcard(context->hCard, context->protocol)) {
-                                    log_info("using smartcard reader %s", reader);
-                                    context->status = 3;
-                                    context->reader = strdup(reader);
-                                    break;
-                                } else {
-                                    SC_DisconnectCard(context->hCard);
-                                    log_trace("unrecognized smartcard (%s)", reader);
-                                }
+                    char **ptr = readers;
+                    while (*ptr) {
+                        char *reader = *ptr;
+                        ptr ++;
+                        context->protocol = 0;
+                        if (SC_WaitForCard(context->hContext, reader, 0)) {
+                            context->hCard = SC_ActivateCard(context->hContext, reader, &context->protocol);
+                            if (SC_errno) {
+                                log_warn("smartcard/reader %s error %x: %s", reader, (int)SC_errno, SC_GetErrorString(SC_errno));
+                            } else
+                            if (edwork_plugin_init_smartcard(context->hCard, context->protocol)) {
+                                log_info("using smartcard reader %s", reader);
+                                context->status = 3;
+                                context->reader = strdup(reader);
+                                break;
+                            } else {
+                                SC_DisconnectCard(context->hCard);
+                                log_trace("unrecognized smartcard (%s)", reader);
                             }
                         }
                     }
                     SC_FreeReaders(readers);
                 }
-                if (context->status == 0)
-                    SC_Disconnect(context->hContext);
             }
             break;
 read_pin:
@@ -327,8 +327,9 @@ read_pin:
                     if (read_pin) {
                         log_error("invalid pin");
                         goto disconnect_smartcard;
-                    } else
-                        context->status = -1;
+                    } else {
+                        context->status = 1;
+                    }
                 }
             } else
                 context->status = 4;
@@ -369,7 +370,7 @@ disconnect_reader:
             SC_Disconnect(context->hContext);
             free(context->reader);
             context->reader = NULL;
-            context->status = 0;
+            context->status = 1;
             break;
     }
     thread_mutex_unlock(&context->lock);

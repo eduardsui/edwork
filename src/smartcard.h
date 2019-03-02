@@ -22,7 +22,7 @@ extern const BYTE SC_GET_DATA_APDU[5];
 extern const BYTE SC_GET_JAVA_CARD_ID_APDU[5];
 
 const char *SC_GetErrorString(LONG lRetValue);
-LONG SC_ListReaders(SCARDCONTEXT hContext, LPTSTR *pszaReaders, int max_readers);
+char **SC_ListReaders(SCARDCONTEXT hContext);
 void SC_FreeReaders(char **readers);
 SCARDCONTEXT SC_Connect();
 int SC_Disconnect(SCARDCONTEXT hContext);
@@ -39,6 +39,5 @@ int SC_Exchange(SCARDHANDLE hCard, DWORD m_dwActiveProtocol, LPCBYTE pbSendBuffe
 int SC_Control(SCARDHANDLE hCard, DWORD dwControlCode, LPCBYTE pbSendBuffer, DWORD cbSendLength, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength);
 int SC_SelectApplet(SCARDHANDLE hCard, DWORD protocol, unsigned char *applet_id, int len_applet_id);
 int SC_Features(SCARDHANDLE hCard, LPBYTE pbRecvBuffer, LPDWORD pcbRecvLength);
-void SC_Free(SCARDCONTEXT hContext, LPBYTE addr);
 
 #endif

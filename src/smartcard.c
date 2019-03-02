@@ -127,63 +127,66 @@ const char *SC_GetErrorString(LONG lRetValue) {
             return "SCard warning cancelled by user";
         case 0x0000007b:
             return "SCard inaccessible boot device";
+        case 0x00000057:
+            return "SCard invalid parameter";
         default:
             return "invalid error code";
     }
 }
 
-LONG SC_ListReaders(SCARDCONTEXT hContext, LPTSTR *pszaReaders, int max_readers) {
+char **SC_ListReaders(SCARDCONTEXT hContext) {
     LONG lRetValue;
     LPTSTR pmszReaders = NULL;
     LPTSTR pszReader;
-    DWORD cch = SCARD_AUTOALLOCATE;
+    DWORD dwReaders_size = 0;
     int iNumberOfReaders;
     int iSelectedReader;
+    char **pszaReaders = NULL;
 
     SC_errno = 0;
 
-    if (pszaReaders)
-        pszaReaders[0] = 0;
-    max_readers --;
-    if (max_readers <= 0)
-    return 0;
-
-    lRetValue = SCardListReaders(hContext, NULL, (LPTSTR)&pmszReaders, &cch);
+    lRetValue = SCardListReaders(hContext, NULL, NULL, &dwReaders_size);
     if (lRetValue != SCARD_S_SUCCESS) {
         SC_errno = lRetValue;
-        return -1;
+        return NULL;
     }
-        
+    if (dwReaders_size <= 0)
+        return NULL;
+
+    pmszReaders = (LPTSTR)malloc(sizeof(char) * (dwReaders_size + 1));
+    if (!pmszReaders) {
+        SC_errno = 0x80100006;
+        return NULL;
+    }
+    lRetValue = SCardListReaders(hContext, NULL, pmszReaders, &dwReaders_size);
+
     iNumberOfReaders = 0;
     pszReader = pmszReaders;
 
-    while ((*pszReader != '\0') && (iNumberOfReaders < max_readers)) {
+    while (*pszReader != '\0') {
+        pszaReaders = (char **)realloc(pszaReaders, sizeof(char *) * (iNumberOfReaders + 2));
+        if (!pszaReaders)
+            break;
         pszaReaders[iNumberOfReaders] = strdup((LPTSTR)pszReader);
         pszReader = pszReader + strlen(pszReader) + 1;
         iNumberOfReaders++;
+        pszaReaders[iNumberOfReaders] = 0;
     }
-    pszaReaders[iNumberOfReaders] = 0;
-    
-    // Releases memory that has been returned from the resource manager 
-    // using the SCARD_AUTOALLOCATE length designator.
-    lRetValue = SCardFreeMemory(hContext, pmszReaders);
-    if (lRetValue != SCARD_S_SUCCESS)
-        SC_errno = lRetValue;
-    return iNumberOfReaders;
-}
+    free(pmszReaders);
 
-void SC_Free(SCARDCONTEXT hContext, LPBYTE addr) {
-    if (addr)
-        SCardFreeMemory(hContext, addr);
+    return pszaReaders;
 }
 
 void SC_FreeReaders(char **readers) {
     SC_errno = 0;
-
-    while (*readers) {
-        free(*readers);
-        readers ++;
+    if (!readers)
+        return;
+    char **ptr = readers;
+    while (*ptr) {
+        free(*ptr);
+        ptr ++;
     }
+    free(readers);
 }
 
 SCARDCONTEXT SC_Connect() {
