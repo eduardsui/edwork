@@ -935,12 +935,19 @@ int main(int argc, char *argv[]) {
                 working_directory = argv[i];
             } else
             if (!strcmp(arg, "-storagekey")) {
+#if defined(_WIN32) || defined(__APPLE__)
+                static char passwd[0x100];
+                int data_entered = ui_input("Enter password", "Storage key", passwd, sizeof(passwd) - 1, 1);
+                if ((data_entered) && (passwd[0]))
+                    storage_key = passwd;
+#else
                 if (i >= argc - 1) {
                     fprintf(stderr, "edfs: key expected after -storagekey parameter. Try -help option.\n");
                     exit(-1);
                 }
                 i ++;
                 storage_key = argv[i];
+#endif
             }
         }
     }
@@ -1055,7 +1062,11 @@ int main(int argc, char *argv[]) {
                 } else
                 if (!strcmp(arg, "storagekey")) {
                     // already parsed this parameter
+#if defined(_WIN32) || defined(__APPLE__)
+                    uri_parameters ++;
+#else
                     i ++;
+#endif
                 } else
                 if (!strcmp(arg, "partition")) {
                     if (i >= argc - 1) {
@@ -1143,7 +1154,11 @@ int main(int argc, char *argv[]) {
                         "    -proxy             enable proxy mode (forward WANT requets)\n"
                         "    -shard id shards   set shard id, as id number of shard, eg.: -shards 1 2\n"
                         "    -dir directory     set the edfs working directory (default is ./edfs)\n"
+#if defined(_WIN32) || defined(__APPLE__)
                         "    -storagekey        set a storage key used for local encryption\n"
+#else
+                        "    -storagekey key    set a storage key used for local encryption\n"
+#endif
                         "    -uri               edfs uri (key)\n"
 #if defined(_WIN32) || defined(__APPLE__)
                         "    -gui               open GUI\n"
