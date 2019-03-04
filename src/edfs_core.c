@@ -7431,6 +7431,9 @@ int edwork_thread(void *userdata) {
         if (!edfs_context->resync)
             key->block_timestamp = startup + 20;
 
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+        edwork_broadcast_discovery_key(edfs_context, key);
+#endif
         key = (struct edfs_key_data *)key->next_key;
     }
 
