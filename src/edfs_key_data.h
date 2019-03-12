@@ -7,6 +7,11 @@
 #include "avl.h"
 #include "blockchain.h"
 
+#ifndef EDFS_NO_JS
+    #include "duktape.h"
+    #include "edfs_js.h"
+#endif
+
 #define MAX_KEY_SIZE                8192
 #define MAX_PROOF_INODES        300
 
@@ -61,11 +66,31 @@ struct edfs_key_data {
 
     int mining_flag;
 
+#ifndef EDFS_NO_JS
+    duk_context *js;
+    char *js_last_error;
+    char *js_working_directory;
+
+    thread_mutex_t js_lock;
+
+    uint64_t app_version;
+    void *edfs_context;
+#endif
+
     void *next_key;
 };
 
 
-int edfs_key_data_init(struct edfs_key_data *key_data, char *use_working_directory);
+int edfs_key_data_init(struct edfs_key_data *key_data, const char *use_working_directory);
 void edfs_key_data_deinit(struct edfs_key_data *key_data);
+#ifndef EDFS_NO_JS
+struct edfs_key_data *edfs_key_data_get_from_js(duk_context *js);
+int edfs_key_data_load_js(struct edfs_key_data *key_data, const char *js_data);
+int edfs_key_data_load_js_file(struct edfs_key_data *key_data, const char *js_filename);
+void edfs_key_data_reset_js(struct edfs_key_data *key_data);
+void edfs_key_data_js_loop(struct edfs_key_data *key_data);
+int edfs_key_js_call(struct edfs_key_data *key_data, const char *jscall, ... );
+const char *edfs_key_data_js_error(struct edfs_key_data *key_data);
+#endif
 
 #endif
