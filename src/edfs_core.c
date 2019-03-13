@@ -7570,6 +7570,10 @@ int edwork_thread(void *userdata) {
                     edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1, force_broadcast_to_all ? time(NULL) - 24 * 3600 : 0);
                     key_buffer_index = 0;
                 }
+#ifndef EDFS_NO_JS
+                if (ping_count == 1)
+                    edfs_reload_app(edfs_context, key);
+#endif
             }
             if (key_buffer_index > 0)
                 edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1, force_broadcast_to_all ? time(NULL) - 24 * 3600 : 0);
@@ -7955,9 +7959,6 @@ int edfs_init(struct edfs *edfs_context) {
             if (blockchain_verify(key->chain, BLOCKCHAIN_COMPLEXITY)) {
                 key->top_broadcast_timestamp = 0;
                 log_info("blockchain verified, head is %" PRIu64 ", UTC: %s", key->chain->index, asctime(tstamp));
-#ifndef EDFS_NO_JS
-                edfs_reload_app(edfs_context, key);
-#endif
             } else {
                 log_error("blockchain is invalid, head is %" PRIu64 ", UTC: %s", key->chain->index, asctime(tstamp));
                 while (key->chain) {
