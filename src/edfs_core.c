@@ -2558,7 +2558,7 @@ int edfs_setattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *attr, int
     return -ENOENT;
 }
 
-static int edfs_getattr_private(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, edfs_stat *stbuf) {
+int edfs_getattr_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, edfs_stat *stbuf) {
     int64_t size = 0;
     uint64_t timestamp = 0;
     time_t modified = 0;
@@ -2592,10 +2592,10 @@ int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf) {
     if ((!edfs_context->mutex_initialized) && (!edfs_context->primary_key))
         usleep(10000000);
 
-    return edfs_getattr_private(edfs_context, edfs_context ? edfs_context->primary_key : NULL, ino, stbuf);
+    return edfs_getattr_key(edfs_context, edfs_context ? edfs_context->primary_key : NULL, ino, stbuf);
 }
 
-static int edfs_lookup_inode_private(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t inode, const char *ensure_name) {
+int edfs_lookup_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t inode, const char *ensure_name) {
     char namebuf[MAX_PATH_LEN];
     int signature = 0;
 
@@ -2639,7 +2639,7 @@ static int edfs_lookup_inode_private(struct edfs *edfs_context, struct edfs_key_
 }
 
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name) {
-    return edfs_lookup_inode_private(edfs_context, edfs_context ? edfs_context->primary_key : NULL, inode, ensure_name);
+    return edfs_lookup_inode_key(edfs_context, edfs_context ? edfs_context->primary_key : NULL, inode, ensure_name);
 }
 
 edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char *name, edfs_stat *stbuf) {
@@ -3510,7 +3510,7 @@ int edfs_request_hash_if_needed(struct edfs *edfs_context, struct edfs_key_data 
     return 1;
 }
 
-static int edfs_open_private(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, int flags, struct filewritebuf **fbuf) {
+int edfs_open_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, int flags, struct filewritebuf **fbuf) {
     int64_t size = 0;
     static unsigned char null_hash[32];
     unsigned char hash[32];
@@ -3640,7 +3640,7 @@ static int edfs_open_private(struct edfs *edfs_context, struct edfs_key_data *ke
 }
 
 int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filewritebuf **fbuf) {
-    return edfs_open_private(edfs_context, edfs_context ? edfs_context->primary_key : NULL, ino, flags, fbuf);
+    return edfs_open_key(edfs_context, edfs_context ? edfs_context->primary_key : NULL, ino, flags, fbuf);
 }
 
 int edfs_create(struct edfs *edfs_context, edfs_ino_t parent, const char *name, mode_t mode, uint64_t *inode, struct filewritebuf **buf) {
@@ -4329,7 +4329,7 @@ int edfs_lookup_blockchain(struct edfs *edfs_context, struct edfs_key_data *key,
     return 0;
 }
 
-struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
+struct dirbuf *edfs_opendir_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino) {
     unsigned char hash[32];
     unsigned char blockchainhash[32];
     static unsigned char null_hash[32];
@@ -4338,7 +4338,6 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
     uint64_t blockchain_limit = 0;
     uint64_t parent = 0;
 
-    struct edfs_key_data *key = edfs_context->primary_key;
     if (!key)
         return NULL;
 
@@ -4418,6 +4417,10 @@ struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
         key->opened_files ++;
     }
     return buf;
+}
+
+struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino) {
+    return edfs_opendir_key(edfs_context, edfs_context ? edfs_context->primary_key : NULL, ino);
 }
 
 int recursive_rmdir(const char *path) {
@@ -7655,7 +7658,7 @@ int edwork_thread(void *userdata) {
     return 0;
 }
 
-static uint64_t edfs_pathtoinode_private(struct edfs_key_data *key, const char *path, uint64_t *parentinode, const char **nameptr) {
+uint64_t edfs_pathtoinode_key(struct edfs_key_data *key, const char *path, uint64_t *parentinode, const char **nameptr) {
     uint64_t inode = key ? edfs_root_inode(key) : 1;
 
     if (parentinode)
@@ -7701,7 +7704,7 @@ static uint64_t edfs_pathtoinode_private(struct edfs_key_data *key, const char *
 }
 
 uint64_t edfs_pathtoinode(struct edfs *edfs_context, const char *path, uint64_t *parentinode, const char **nameptr) {
-    return edfs_pathtoinode_private(edfs_context ? edfs_context->primary_key : NULL, path, parentinode, nameptr);
+    return edfs_pathtoinode_key(edfs_context ? edfs_context->primary_key : NULL, path, parentinode, nameptr);
 }
 
 char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size) {
@@ -7713,8 +7716,8 @@ char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, 
 
     uint64_t parent;
     const char *name = NULL;
-    edfs_ino_t inode = edfs_pathtoinode_private(key, filename, &parent, &name);
-    int type = edfs_lookup_inode_private(edfs_context, key, inode, name);
+    edfs_ino_t inode = edfs_pathtoinode_key(key, filename, &parent, &name);
+    int type = edfs_lookup_inode_key(edfs_context, key, inode, name);
     if ((!type) || (type & S_IFDIR)) {
         if (file_size)
             *file_size = -1;
@@ -7722,7 +7725,7 @@ char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, 
     }
 
     edfs_stat stbuf;
-    int err = edfs_getattr_private(edfs_context, key, inode, &stbuf);
+    int err = edfs_getattr_key(edfs_context, key, inode, &stbuf);
     if (err) {
         if (file_size)
             *file_size = -1;
@@ -7730,7 +7733,7 @@ char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, 
     }
 
     struct filewritebuf *fbuf = NULL;
-    err = edfs_open_private(edfs_context, key, inode, O_RDONLY, &fbuf);
+    err = edfs_open_key(edfs_context, key, inode, O_RDONLY, &fbuf);
     if (err) {
         if (file_size)
             *file_size = -1;
@@ -7746,6 +7749,8 @@ char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, 
         if (data_buffer) {
             int size = edfs_read(edfs_context, inode, stbuf.st_size, 0, data_buffer, fbuf);
             if (size > 0) {
+                if (file_size)
+                    *file_size = size;
                 data_buffer[size] = 0;
             } else {
                 if (file_size)

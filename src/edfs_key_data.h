@@ -75,6 +75,9 @@ struct edfs_key_data {
 
     uint64_t app_version;
     void *edfs_context;
+
+    unsigned char no_js_lock;
+    unsigned char js_exit;
 #endif
 
     void *next_key;

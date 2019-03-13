@@ -1,6 +1,7 @@
 #include "edfs_js.h"
 #include "log.h"
 #include "edfs_key_data.h"
+#include "edfs_core.h"
 
 #if defined(_WIN32) || defined(__APPLE__)
     #define EDFS_UI
@@ -10,10 +11,6 @@
     void edfs_tray_notify(void *menuwindow);
 #endif
 
-struct edfs;
-char *edfs_key_id(void *key, char *buffer);
-char *edfs_public_key(void *key, char *buffer);
-char *edfs_private_key(void *key, char *buffer);
 char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size);
 
 #define JS_REGISTER(js, js_c_function)  edfs_js_register(js, js_c_function, #js_c_function)
@@ -39,7 +36,23 @@ static const char EDFS_JS_API[] = ""
                     "return;\n"
                 "}\n"
                 "return __edfs_private_readfile(filename, encoding ? true : false);\n"
+            "},\n"
+            "\"readDir\": function(path, callback) {\n"
+                "return __edfs_private_readdir(path, callback);"
+            "},\n"
+            "\"readSignature\": function(path, signature_index) {\n"
+                "return __edfs_private_readsignature(path, signature_index);"
             "}\n"
+        "},\n"
+        "\"require\": function(path) {\n"
+            "var obj = this.__edfs_private_modules[path];"
+            "if (obj)"
+                "return obj;"
+            "var data = this.__edfs_private_readfile(path, true);"
+            "if ((data) && (data.length)) {"
+                "obj = eval(data);"
+                "this.__edfs_private_modules[path] = obj;"
+            "}"
         "},\n"
         "\"smartcard\": {\n"
             "\"request\": __edfs_private_request,\n"
@@ -52,6 +65,7 @@ static const char EDFS_JS_API[] = ""
             "this.__edfs_private_pending.push(looper);\n"
         "},\n"
         "\"__edfs_private_pending\": [ ],\n"
+        "\"__edfs_private_modules\": { },\n"
         "\"__edfs_loop\": function() {\n"
             "if (this.__edfs_private_pending.length === 0)\n"
                 "return;\n"
@@ -147,18 +161,28 @@ static void __edfs_private_get_fmt(duk_context *js, char *fmt_buf, int size) {
                 break;
             case DUK_TYPE_OBJECT:
                 if (duk_is_buffer_data(js, i)) {
-                    printsize = snprintf(fmt_buf, size, "[ArrayBuffer]");
+                    printsize = snprintf(fmt_buf, size, "[object ArrayBuffer]");
                 } else
                 if (duk_is_array(js, i)) {
-                    printsize = snprintf(fmt_buf, size, "[Array]");
+                    printsize = snprintf(fmt_buf, size, "[object Array]");
                 } else
                 if (duk_is_function(js, i)) {
-                    printsize = snprintf(fmt_buf, size, "[ArrayBuffer]");
+                    printsize = snprintf(fmt_buf, size, "[object Function]");
                 } else
                 if (duk_is_object(js, i)) {
-                    printsize = snprintf(fmt_buf, size, "[Object object]");
+                    printsize = snprintf(fmt_buf, size, "[object Object]");
                 } else
-                    printsize = snprintf(fmt_buf, size, "[Unknown]");
+                    printsize = snprintf(fmt_buf, size, "[object Unknown]");
+                fmt_buf += printsize;
+                size -= printsize;
+                break;
+            case DUK_TYPE_NULL:
+                printsize = snprintf(fmt_buf, size, "(null)");
+                fmt_buf += printsize;
+                size -= printsize;
+                break;
+            case DUK_TYPE_NONE:
+                printsize = snprintf(fmt_buf, size, "(none)");
                 fmt_buf += printsize;
                 size -= printsize;
                 break;
@@ -233,6 +257,23 @@ static int alert(duk_context *js) {
     return 0;
 }
 
+static int exitApplication(duk_context *js) {
+    alert(js);
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (key)
+        key->js_exit = 1;
+    return 0;
+}
+
+int edfs_js_error(duk_context *js, const char *msg) {
+#ifdef EDFS_UI
+    char title[0x100];
+    __edfs_private_get_key_id(js, title);
+    ui_message(title, msg, 2);
+#endif
+    return 0;
+}
+
 static int input(duk_context *js) {
     char str[8192];
     char input_data[0x100];
@@ -284,8 +325,7 @@ static int __edfs_private_readfile(duk_context *js) {
 
     int n = duk_get_top(js);
     if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
-        duk_size_t printsize = 0;
-        const char *str = duk_get_lstring(js, 0, &printsize);
+        const char *str = duk_get_string(js, 0);
         if (str) {
             int file_size = 0;
             char *buffer = edfs_lazy_read_file((struct edfs *)key->edfs_context, key, str, &file_size);
@@ -311,6 +351,94 @@ static int __edfs_private_readfile(duk_context *js) {
                     duk_push_fixed_buffer(js, 0);
                     return 1;
                 }
+            }
+        }
+    }
+    return 0;
+}
+
+static unsigned int edfs_js_add_directory(const char *name, uint64_t ino, int type, int64_t size, time_t created, time_t modified, time_t timestamp, void *jsptr) {
+    if ((name) && (jsptr)) {
+        duk_context *js = (duk_context *)jsptr;
+
+        duk_dup(js, 1);
+        duk_push_string(js, name);
+        if (type & S_IFDIR)
+            duk_push_true(js);
+        else
+            duk_push_false(js);
+
+        duk_push_int(js, type);
+        duk_push_number(js, (double)size);
+        duk_push_number(js, (double)created);
+        duk_push_number(js, (double)modified);
+        duk_push_number(js, (double)timestamp);
+
+        struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+        unsigned char old_js_lock = key->no_js_lock;
+        key->no_js_lock = 1;
+        duk_call(js, 7);
+        key->no_js_lock = old_js_lock;
+
+        int ret_val = 0;
+        if (duk_get_type(js, -1))
+            ret_val = duk_get_boolean(js, -1);
+
+        duk_pop(js);
+
+        // stop reading directory
+        if (ret_val == 1)
+            return 0x10000000;
+    }
+    return 1;
+}
+
+static int __edfs_private_readdir(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 1) && (duk_get_type(js, 0) == DUK_TYPE_STRING) && (duk_get_type(js, 1) == DUK_TYPE_OBJECT) && (duk_is_function(js, 1))) {
+        const char *path = duk_get_string(js, 0);
+        if (path) {
+            uint64_t inode = edfs_pathtoinode_key(key, path, NULL, NULL);
+            struct dirbuf *dbuf = edfs_opendir_key((struct edfs *)key->edfs_context, key, inode);
+            if (!dbuf)
+                return 0;
+            
+            int err = edfs_readdir((struct edfs *)key->edfs_context, inode, 0xFFFFFFF, 0, dbuf, edfs_js_add_directory, js);
+            if (err)
+                return 0;
+
+            edfs_releasedir(dbuf);
+
+            duk_push_boolean(js, 1);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_readsignature(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n >= 1) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        int sig_index = 0;
+        if ((n > 1) && (duk_get_type(js, 1) == DUK_TYPE_NUMBER))
+            sig_index = (int)duk_get_number(js, 1);
+
+        const char *path = duk_get_string(js, 0);
+        if (path) {
+            uint64_t inode = edfs_pathtoinode_key(key, path, NULL, NULL);
+            char *sig = edfs_smartcard_get_signature((struct edfs *)key->edfs_context, key, inode, sig_index);
+            if (sig) {
+                duk_push_string(js, sig);
+                free(sig);
+                return 1;
             }
         }
     }
@@ -343,8 +471,11 @@ int edfs_js_register_all(duk_context *js) {
     JS_REGISTER(js, input);
     JS_REGISTER(js, confirm); 
     JS_REGISTER(js, __edfs_private_notify);
+    JS_REGISTER(js, exitApplication);
 
     JS_REGISTER(js, __edfs_private_readfile);
+    JS_REGISTER(js, __edfs_private_readdir);
+    JS_REGISTER(js, __edfs_private_readsignature);
 
     char api_buf[8192];
     char key_id[256];
@@ -365,8 +496,7 @@ int edfs_js_register_all(duk_context *js) {
 
     snprintf(api_buf, sizeof(api_buf), EDFS_JS_API, key_id, public_key, private_key);
 
-    duk_eval_string(js, api_buf);
-    duk_pop(js);
+    duk_eval_string_noresult(js, api_buf);
 
     return 0;
 }

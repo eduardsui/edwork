@@ -2,6 +2,8 @@
 #define __EDFS_CORE_H
 
 #include <inttypes.h>
+#include <sys/stat.h>
+
 #include "edwork.h"
 #ifdef WITH_SMARTCARD
     #include "edwork_smartcard.h"
@@ -105,27 +107,33 @@ typedef uint64_t edfs_ino_t;
 struct dirbuf;
 struct filewritebuf;
 struct edfs;
+struct edfs_key_data;
 
 typedef unsigned int (*edfs_add_directory)(const char *name, edfs_ino_t ino, int type, int64_t size, time_t created, time_t modified, time_t timestamp, void *userdata);
 typedef int (*edfs_schedule_callback)(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data);
 
 uint64_t edfs_pathtoinode(struct edfs *edfs_context, const char *path, uint64_t *parentinode, const char **nameptr);
+uint64_t edfs_pathtoinode_key(struct edfs_key_data *key, const char *path, uint64_t *parentinode, const char **nameptr);
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name);
+int edfs_lookup_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t inode, const char *ensure_name);
 edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char *name, edfs_stat *stbuf);
 int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode);
 int edfs_rmdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name);
 int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode);
 int edfs_unlink(struct edfs *edfs_context, edfs_ino_t parent, const char *name);
 int edfs_getattr(struct edfs *edfs_context, edfs_ino_t ino, edfs_stat *stbuf);
+int edfs_getattr_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, edfs_stat *stbuf);
 int edfs_releasedir(struct dirbuf *buf);
 int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf);
 int edfs_set_size(struct edfs *edfs_context, uint64_t inode, int64_t new_size);
 int edfs_mkdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name, mode_t mode);
 int edfs_mknod(struct edfs *edfs_context, edfs_ino_t parent, const char *name, mode_t mode, uint64_t *inode);
 struct dirbuf *edfs_opendir(struct edfs *edfs_context, edfs_ino_t ino);
+struct dirbuf *edfs_opendir_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino);
 int edfs_fsync(struct edfs *edfs_context, int datasync, struct filewritebuf *fbuf);
 int edfs_flush(struct edfs *edfs_context, struct filewritebuf *fbuf);
 int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filewritebuf **fbuf);
+int edfs_open_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, int flags, struct filewritebuf **fbuf);
 int edfs_create(struct edfs *edfs_context, edfs_ino_t parent, const char *name, mode_t mode, uint64_t *inode, struct filewritebuf **buf);
 edfs_ino_t edfs_inode(struct filewritebuf *filebuf);
 int edfs_read(struct edfs *edfs_context, edfs_ino_t ino, size_t size, int64_t off, char *ptr, struct filewritebuf *filebuf);
