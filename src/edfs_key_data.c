@@ -202,8 +202,7 @@ void edfs_key_data_reset_js(struct edfs_key_data *key_data) {
     if (!key_data)
         return;
 
-    if (!key_data->no_js_lock)
-        thread_mutex_lock(&key_data->js_lock);
+    thread_mutex_lock(&key_data->js_lock);
 
     if (key_data->js) {
         duk_destroy_heap(key_data->js);
@@ -212,8 +211,7 @@ void edfs_key_data_reset_js(struct edfs_key_data *key_data) {
     free(key_data->js_last_error);
     key_data->js_last_error = NULL;
 
-    if (!key_data->no_js_lock)
-        thread_mutex_unlock(&key_data->js_lock);
+    thread_mutex_unlock(&key_data->js_lock);
 }
 
 const char *edfs_key_data_js_error(struct edfs_key_data *key_data) {

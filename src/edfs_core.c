@@ -2087,6 +2087,7 @@ static void edfs_reload_app(struct edfs *edfs_context, struct edfs_key_data *key
     if ((!key) || (!key->chain) || (!key->chain->index))
         return;
 
+    key->reload_js = 0;
     char *code_js = edfs_lazy_read_file(edfs_context, key, ".app.js", NULL);
     if (code_js) {
         uint64_t new_hash = XXH64(code_js, strlen(code_js), 0);
@@ -2293,6 +2294,9 @@ int edfs_update_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
 
     JSON_Object *root_object = json_value_get_object(root_value);
 
+#ifndef EDFS_NO_JS
+    int reload_app = 0;
+#endif
     do {
         const char *json_key = *(keys_value++);
         const char *json_value = *(keys_value++);
@@ -2308,7 +2312,7 @@ int edfs_update_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
             // reload .app.js ?
             const char *name = json_object_get_string(root_object, "name");
             if ((name) && (!strcmp(name, ".app.js")))
-                edfs_reload_app(edfs_context, key);
+                reload_app = 1;
 #endif
         } else {
             json_object_set_string(root_object, json_key, json_value);
@@ -2322,6 +2326,10 @@ int edfs_update_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
     write_json2(edfs_context, key, key->working_directory, inode, root_value);
     json_value_free(root_value);
 
+#ifndef EDFS_NO_JS
+    if (reload_app)
+        edfs_reload_app(edfs_context, key);
+#endif
     return 1;
 }
 
@@ -5434,16 +5442,15 @@ int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, co
                 if ((!current_type) && (!deleted)) {
                     makesyncnode(edfs_context, key, parentb64name, b64name, name);
                 }
-#ifndef EDFS_NO_JS
-                // reload .app.js ?
-                if ((name) && (written == 1) && (!strcmp(name, ".app.js")))
-                    edfs_reload_app(edfs_context, key);
-#endif
                 if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id)) {
                     uint64_t file_size = (uint64_t)json_object_get_number(root_object, "size");
                     if (file_size)
                         edfs_queue_ensure_data(edfs_context, key, inode, file_size, 0, 0, generation + 1);
                 }
+#ifndef EDFS_NO_JS
+                if ((name) && (written == 1) && (!strcmp(name, ".app.js")))
+                    key->reload_js = 1;
+#endif
             } else
             if (!deleted) {
                 char path[MAX_PATH_LEN];
@@ -7565,15 +7572,15 @@ int edwork_thread(void *userdata) {
             int force_broadcast_to_all = ((ping_count % 90) == 0);
             while (key) {
                 key_buffer[key_buffer_index ++] = key->key_id_xxh64_be;
-                key = (struct edfs_key_data *)key->next_key;
                 if (key_buffer_index == 1000) {
                     edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1, force_broadcast_to_all ? time(NULL) - 24 * 3600 : 0);
                     key_buffer_index = 0;
                 }
 #ifndef EDFS_NO_JS
-                if (ping_count == 1)
+                if ((ping_count <= 2) || (key->reload_js = 1))
                     edfs_reload_app(edfs_context, key);
 #endif
+                key = (struct edfs_key_data *)key->next_key;
             }
             if (key_buffer_index > 0)
                 edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1, force_broadcast_to_all ? time(NULL) - 24 * 3600 : 0);

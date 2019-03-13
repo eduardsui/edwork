@@ -78,6 +78,7 @@ struct edfs_key_data {
 
     unsigned char no_js_lock;
     unsigned char js_exit;
+    unsigned char reload_js;
 #endif
 
     void *next_key;
