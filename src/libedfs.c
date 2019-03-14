@@ -63,6 +63,10 @@ EDFS_FILE *ed_fopen(struct edfs *edfs_context, const char *filename, const char 
     if (!flags)
         flags = O_RDONLY;
     int err = edfs_open(edfs_context, inode, flags, &fbuf);
+
+    if ((err == -EACCES) && (flags & O_CREAT))
+        err = edfs_create(edfs_context, parent, name, 0664, &inode, &fbuf);
+
     if (err) {
         errno = -err;
         return NULL;

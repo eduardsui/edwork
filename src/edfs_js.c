@@ -1,3 +1,6 @@
+#include <errno.h>
+#include <fcntl.h>
+
 #include "edfs_js.h"
 #include "log.h"
 #include "edfs_key_data.h"
@@ -11,7 +14,7 @@
     void edfs_tray_notify(void *menuwindow);
 #endif
 
-char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size);
+char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size, uint64_t offset, int max_size);
 
 #define JS_REGISTER(js, js_c_function)  edfs_js_register(js, js_c_function, #js_c_function)
 
@@ -38,19 +41,40 @@ static const char EDFS_JS_API[] = ""
             "\"isVisible\": __edfs_private_is_visible\n"
         "},\n"
         "\"fs\": {\n"
-            "\"readFile\": function(filename, encoding, callback) {\n"
+            "\"readFile\": function(filename, encoding, callback, offset, max_size) {\n"
                 "if (callback) {\n"
-                    "var buffer = __edfs_private_readfile(filename, encoding ? true : false);\n"
+                    "var buffer = __edfs_private_readfile(filename, encoding ? true : false, offset, max_size);\n"
                     "callback(buffer);\n"
                     "return;\n"
                 "}\n"
-                "return __edfs_private_readfile(filename, encoding ? true : false);\n"
+                "return __edfs_private_readfile(filename, encoding ? true : false, offset, max_size);\n"
+            "},\n"
+            "\"writeFile\": function(filename, data, offset) {\n"
+                "return __edfs_private_writefile(filename, data, offset);\n"
+            "},\n"
+            "\"truncate\": function(filename, offset) {\n"
+                "return __edfs_private_truncate(filename, offset);\n"
+            "},\n"
+            "\"exists\": function(filename) {\n"
+                "return __edfs_private_exists(filename);\n"
+            "},\n"
+            "\"isDirectory\": function(filename) {\n"
+                "return __edfs_private_is_directory(filename);\n"
             "},\n"
             "\"readDir\": function(path, callback) {\n"
                 "return __edfs_private_readdir(path, callback);"
             "},\n"
             "\"readSignature\": function(path, signature_index) {\n"
                 "return __edfs_private_readsignature(path, signature_index);"
+            "}\n,"
+            "\"mkdir\": function(path) {\n"
+                "return __edfs_private_mkdir(path);\n"
+            "},\n"
+            "\"rmdir\": function(path) {\n"
+                "return __edfs_private_rmdir(path);\n"
+            "},\n"
+            "\"unlink\": function(path) {\n"
+                "return __edfs_private_unlink(path);\n"
             "}\n"
         "},\n"
         "\"require\": function(path) {\n"
@@ -536,7 +560,19 @@ static int __edfs_private_readfile(duk_context *js) {
         const char *str = duk_get_string(js, 0);
         if (str) {
             int file_size = 0;
-            char *buffer = edfs_lazy_read_file((struct edfs *)key->edfs_context, key, str, &file_size);
+            uint64_t offset = 0;
+            int max_size = 0;
+            if ((n > 2) && (duk_get_type(js, 2) == DUK_TYPE_NUMBER)) {
+                double offset_as_double = duk_get_number(js, 2);
+                if (offset_as_double > 0)
+                    offset = (uint64_t)offset_as_double;
+            }
+            if ((n > 3) && (duk_get_type(js, 3) == DUK_TYPE_NUMBER)) {
+                max_size = duk_get_int(js, 3);
+                if (max_size < 0)
+                    max_size = 0;
+            }
+            char *buffer = edfs_lazy_read_file((struct edfs *)key->edfs_context, key, str, &file_size, offset, max_size);
             if ((n > 1) && (duk_get_type(js, 1) == DUK_TYPE_BOOLEAN) && (duk_get_boolean(js, 1))) {
                 if (buffer) {
                     duk_push_string(js, buffer);
@@ -560,6 +596,190 @@ static int __edfs_private_readfile(duk_context *js) {
                     return 1;
                 }
             }
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_writefile(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 1) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if (str) {
+            uint64_t offset = 0;
+            int max_size = 0;
+            uint64_t parentinode = 0;
+            const char *name = NULL;
+            uint64_t inode = edfs_pathtoinode_key(key, str, &parentinode, &name);
+            if ((n > 2) && (duk_get_type(js, 2) == DUK_TYPE_NUMBER)) {
+                double offset_as_double = duk_get_number(js, 2);
+                if (offset_as_double > 0) {
+                    offset = (uint64_t)offset_as_double;
+                } else
+                if (offset_as_double < 0) {
+                    edfs_stat stbuf;
+                    if (!edfs_getattr_key((struct edfs *)key->edfs_context, key, inode, &stbuf))
+                        offset = stbuf.st_size;
+                }
+            }
+
+            int type = duk_get_type(js, 1);
+            if ((type != DUK_TYPE_BUFFER) && (type != DUK_TYPE_STRING))
+                return 0;
+
+            struct filewritebuf *fbuf;
+            int err = edfs_open_key((struct edfs *)key->edfs_context, key, inode, O_RDWR, &fbuf);
+            if (err == -EACCES)
+                err = edfs_create_with_key((struct edfs *)key->edfs_context, key, parentinode, name, 0644, &inode, &fbuf);
+            
+            if (err) {
+                duk_push_int(js, err);
+                return 1;
+            }
+
+            const char *buf = NULL;
+            duk_size_t buf_size = 0;
+
+            if (type == DUK_TYPE_STRING)
+                buf = duk_get_lstring(js, 1, &buf_size);
+            else
+                buf = (const char *)duk_get_buffer_data(js, 1, &buf_size);
+
+            int written = edfs_write((struct edfs *)key->edfs_context, inode, buf, buf_size, (int64_t)offset, fbuf);
+            edfs_close((struct edfs *)key->edfs_context, fbuf);
+
+            duk_push_int(js, written);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_truncate(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if (str) {
+            uint64_t offset = 0;
+            if ((n > 1) && (duk_get_type(js, 1) == DUK_TYPE_NUMBER)) {
+                double offset_as_double = duk_get_number(js, 1);
+                if (offset_as_double > 0)
+                    offset = (uint64_t)offset_as_double;
+            }
+            uint64_t inode = edfs_pathtoinode_key(key, str, NULL, NULL);
+            duk_push_int(js, edfs_set_size_key((struct edfs *)key->edfs_context, key, inode, offset));
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_exists(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if (str) {
+            uint64_t inode = edfs_pathtoinode_key(key, str, NULL, NULL);
+            edfs_stat stbuf;
+            int err = edfs_getattr_key((struct edfs *)key->edfs_context, key, inode, &stbuf);
+            if (!err) {
+                duk_push_true(js);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_is_directory(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if (str) {
+            uint64_t inode = edfs_pathtoinode_key(key, str, NULL, NULL);
+            edfs_stat stbuf;
+            int err = edfs_getattr_key((struct edfs *)key->edfs_context, key, inode, &stbuf);
+            if (!err) {
+                if (stbuf.st_mode & S_IFDIR)
+                    duk_push_true(js);
+                else
+                    duk_push_false(js);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_mkdir(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if (str) {
+            uint64_t parentinode = 0;
+            const char *name = NULL;
+            edfs_pathtoinode_key(key, str, &parentinode, &name);
+            int err = edfs_mkdir_key((struct edfs *)key->edfs_context, key, parentinode, name, 0755);
+            if (err > 0)
+                err = 0;
+            duk_push_int(js, err);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_rmdir(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if (str) {
+            uint64_t parentinode = 0;
+            uint64_t inode = edfs_pathtoinode_key(key, str, &parentinode, NULL);
+            duk_push_int(js, edfs_rmdir_inode_key((struct edfs *)key->edfs_context, key, parentinode, inode));
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_unlink(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if (str) {
+            uint64_t parentinode = 0;
+            uint64_t inode = edfs_pathtoinode_key(key, str, &parentinode, NULL);
+            duk_push_int(js, edfs_unlink_inode_key((struct edfs *)key->edfs_context, key, parentinode, inode));
+            return 1;
         }
     }
     return 0;
@@ -692,6 +912,14 @@ int edfs_js_register_all(duk_context *js) {
     JS_REGISTER(js, exitApplication);
 
     JS_REGISTER(js, __edfs_private_readfile);
+    JS_REGISTER(js, __edfs_private_writefile);
+    JS_REGISTER(js, __edfs_private_truncate);
+    JS_REGISTER(js, __edfs_private_exists);
+    JS_REGISTER(js, __edfs_private_is_directory);
+    JS_REGISTER(js, __edfs_private_mkdir);
+    JS_REGISTER(js, __edfs_private_rmdir);
+    JS_REGISTER(js, __edfs_private_unlink);
+
     JS_REGISTER(js, __edfs_private_readdir);
     JS_REGISTER(js, __edfs_private_readsignature);
 

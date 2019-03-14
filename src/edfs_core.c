@@ -380,7 +380,7 @@ void edfs_request_cache_warming(struct edfs *edfs_context, struct edfs_key_data 
 int edfs_check_descriptors(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data);
 int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data);
 #ifndef EDFS_NO_JS
-char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size);
+char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size, uint64_t offset, int max_size);
 static void edfs_reload_app(struct edfs *edfs_context, struct edfs_key_data *key);
 #endif
 
@@ -2096,7 +2096,7 @@ static void edfs_reload_app(struct edfs *edfs_context, struct edfs_key_data *key
     
     switch (edfs_context->app_mode) {
         case 1:
-            code_js = edfs_lazy_read_file(edfs_context, key, ".app.js", NULL);
+            code_js = edfs_lazy_read_file(edfs_context, key, ".app.js", NULL, 0, 0);
             break;
         case 2:
             {
@@ -3691,11 +3691,10 @@ int edfs_open(struct edfs *edfs_context, edfs_ino_t ino, int flags, struct filew
     return edfs_open_key(edfs_context, edfs_context ? edfs_context->primary_key : NULL, ino, flags, fbuf);
 }
 
-int edfs_create(struct edfs *edfs_context, edfs_ino_t parent, const char *name, mode_t mode, uint64_t *inode, struct filewritebuf **buf) {
+int edfs_create_with_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t parent, const char *name, mode_t mode, uint64_t *inode, struct filewritebuf **buf) {
     if (edfs_context->read_only_fs)
         return -EROFS;
 
-    struct edfs_key_data *key = edfs_context->primary_key;
     if (!key)
         return -EACCES;
 
@@ -3717,6 +3716,10 @@ int edfs_create(struct edfs *edfs_context, edfs_ino_t parent, const char *name, 
         }
     }
     return 0;
+}
+
+int edfs_create(struct edfs *edfs_context, edfs_ino_t parent, const char *name, mode_t mode, uint64_t *inode, struct filewritebuf **buf) {
+    return edfs_create_with_key(edfs_context, edfs_context->primary_key, parent, name, mode, inode, buf);
 }
 
 edfs_ino_t edfs_inode(struct filewritebuf *filebuf) {
@@ -3888,7 +3891,7 @@ int edfs_try_make_hash(struct edfs *edfs_context, struct edfs_key_data *key, con
     return 1;
 }
 
-int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, const char *path, int64_t chunk, const char *buf, size_t size, int64_t offset, int64_t *filesize, struct edfs_hash_buffer *hash_buffer) {
+int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino, const char *path, int64_t chunk, const char *buf, size_t size, int64_t offset, int64_t *filesize, struct edfs_hash_buffer *hash_buffer, int64_t file_offset) {
     int block_written;
     int written_bytes;
 
@@ -3914,6 +3917,17 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
     mz_ulong max_len = sizeof(compressed_buffer);
 
     int read_data = edfs_read_file(edfs_context, key, path, name, old_data, BLOCK_SIZE, NULL, 0, 1, USE_COMPRESSION, NULL, 0, 0, ino, chunk);
+
+    if (read_data > 0) {
+        if (!(*filesize))
+            read_data = 0;
+        else
+        if (*filesize - file_offset < BLOCK_SIZE) {
+            int last_chunk_size = (int)(*filesize % BLOCK_SIZE);
+            if ((last_chunk_size > 0) && (read_data > last_chunk_size))
+                read_data = last_chunk_size;
+        }
+    }
     const unsigned char *ptr;
 
     *(uint64_t *)additional_data = htonll(ino);
@@ -3922,18 +3936,27 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
     *(uint64_t *)(additional_data + 24) = htonll(size);
 
     if (read_data > 0) {
-        if ((read_data >= offset + size) && (!memcmp(old_data + offset, buf, size)))
+        if ((read_data >= offset + size) && (!memcmp(old_data + offset, buf, size))) {
+            // writing the same data into a truncated cunk?
+            if (*filesize < offset + size)
+                *filesize = offset + size;
             return size;
+        }
 
         int to_write = offset + size;
         if (to_write > BLOCK_SIZE)
             to_write = BLOCK_SIZE;
-        if (offset) {
+        if ((offset) || (size < read_data)) {
             // set to 0, to avoid potential information leak
             memset(old_data + read_data, 0, BLOCK_SIZE - read_data);
 
+            if (offset + size > BLOCK_SIZE)
+                size = BLOCK_SIZE - offset;
+
             memcpy(old_data + offset, buf, size);
             ptr = (const unsigned char *)old_data;
+            if (to_write < read_data)
+                to_write = read_data;
         } else
             ptr = (const unsigned char *)buf;
 
@@ -3970,6 +3993,11 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
         memcpy(old_data + offset, buf, size);
 
         written_bytes = edfs_write_file(edfs_context, key, path, name, (const unsigned char *)old_data, (int)offset + size, NULL, 1, compressed_buffer, USE_COMPRESSION ? &max_len : NULL, additional_data + 32, NULL, 0, ino, chunk);
+        if ((written_bytes > 0) && (offset)) {
+            // increment file size by offset (null padded)
+            *filesize += offset;
+            written_bytes -= offset;
+        }
     } else
     if (offset) {
         return -EBUSY;
@@ -4150,7 +4178,7 @@ int edfs_write_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_
 
     int64_t filesize = *initial_filesize;
     while (size > 0) {
-        int written = make_chunk(edfs_context, key, ino, fullpath, chunk, buf, size, offset, &filesize, hash_buffer);
+        int written = make_chunk(edfs_context, key, ino, fullpath, chunk, buf, size, offset, &filesize, hash_buffer, off);
         if (written <= 0) {
             if (filesize != *initial_filesize) {
                 if (set_size)
@@ -4260,7 +4288,6 @@ int edfs_write(struct edfs *edfs_context, edfs_ino_t ino, const char *buf, size_
 
     if (size <= 0)
         return 0;
-
     return edfs_write_cache(edfs_context, ino, buf, size, off, fbuf);
 }
 
@@ -4288,9 +4315,9 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
         }
 #endif
 
-        uint64_t max_size = fbuf->offset + fbuf->size;
         edfs_flush_chunk(edfs_context, fbuf->ino, fbuf);
         if (fbuf->written_data) {
+            uint64_t max_size = fbuf->offset; 
             unsigned char hash[32];
             // flush to disk
             char b64name[MAX_B64_HASH_LEN];
@@ -4303,6 +4330,8 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
                 edfs_update_json(edfs_context, fbuf->key, fbuf->ino, update_data);
             } else
                 log_error("error updating chain");
+            if (max_size < fbuf->file_size)
+                max_size = fbuf->file_size;
             if (max_size > 0)
                 edfs_update_json_number_if_less(edfs_context, fbuf->key, fbuf->ino, "size", max_size);
             edfs_notify_write(edfs_context, fbuf->key, fbuf->ino, 0);
@@ -4325,11 +4354,10 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
     return 0;
 }
 
-int edfs_mkdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name, mode_t mode) {
+int edfs_mkdir_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t parent, const char *name, mode_t mode) {
     if (edfs_context->read_only_fs)
         return -EROFS;
 
-    struct edfs_key_data *key = edfs_context->primary_key;
     if (!key)
         return -EACCES;
 
@@ -4338,6 +4366,10 @@ int edfs_mkdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name, m
 
     uint64_t inode;
     return makenode(edfs_context, key, parent, name, S_IFDIR | 0755, &inode);
+}
+
+int edfs_mkdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name, mode_t mode) {
+    return edfs_mkdir_key(edfs_context, edfs_context->primary_key, parent, name, mode);
 }
 
 int edfs_lookup_blockchain(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char *blockchainhash, uint64_t *generation, uint64_t *timestamp) {
@@ -4626,8 +4658,7 @@ int remove_node(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t
     return 1;
 }
 
-int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode) {
-    struct edfs_key_data *key = edfs_context->primary_key;
+int edfs_rmdir_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t parent, edfs_ino_t inode) {
     if ((!key) || (key->read_only) || (edfs_context->read_only_fs))
         return -EROFS;
 
@@ -4650,12 +4681,19 @@ int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t in
     return -ENOTDIR;
 }
 
-int edfs_rmdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name) {
-    return edfs_rmdir_inode(edfs_context, parent, computeinode(edfs_context->primary_key, parent, name));
+int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode) {
+    return edfs_rmdir_inode_key(edfs_context, edfs_context->primary_key, parent, inode);
 }
 
-int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode) {
-    struct edfs_key_data *key = edfs_context->primary_key;
+int edfs_rmdir_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t parent, const char *name) {
+    return edfs_rmdir_inode_key(edfs_context, key, parent, computeinode(edfs_context->primary_key, parent, name));
+}
+
+int edfs_rmdir(struct edfs *edfs_context, edfs_ino_t parent, const char *name) {
+    return edfs_rmdir_key(edfs_context, edfs_context->primary_key, parent, name);
+}
+
+int edfs_unlink_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t parent, edfs_ino_t inode) {
     if ((!key) || (key->read_only) || (edfs_context->read_only_fs))
         return -EROFS;
 
@@ -4679,8 +4717,16 @@ int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t i
     return 0;
 }
 
+int edfs_unlink_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode) {
+    return edfs_unlink_inode_key(edfs_context, edfs_context->primary_key, parent, inode);
+}
+
+int edfs_unlink_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t parent, const char *name) {
+    return edfs_unlink_inode_key(edfs_context, key, parent, computeinode(edfs_context->primary_key, parent, name));
+}
+
 int edfs_unlink(struct edfs *edfs_context, edfs_ino_t parent, const char *name) {
-    return edfs_unlink_inode(edfs_context, parent, computeinode(edfs_context->primary_key, parent, name));
+    return edfs_unlink_key(edfs_context, edfs_context->primary_key, parent, name);
 }
 
 int edfs_flush(struct edfs *edfs_context, struct filewritebuf *fbuf) {
@@ -7760,7 +7806,7 @@ uint64_t edfs_pathtoinode(struct edfs *edfs_context, const char *path, uint64_t 
     return edfs_pathtoinode_key(edfs_context ? edfs_context->primary_key : NULL, path, parentinode, nameptr);
 }
 
-char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size) {
+char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size, uint64_t offset, int max_size) {
     if (!edfs_context->mutex_initialized)
         usleep(10000000);
 
@@ -7795,12 +7841,15 @@ char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, 
 
     char *data_buffer = NULL;
     if (stbuf.st_size > 0) {
+        if ((max_size > 0) && (stbuf.st_size > max_size))
+            stbuf.st_size = max_size;
+
         data_buffer = ( char *)malloc(stbuf.st_size + 1);
         if (file_size)
             *file_size = stbuf.st_size;
 
         if (data_buffer) {
-            int size = edfs_read(edfs_context, inode, stbuf.st_size, 0, data_buffer, fbuf);
+            int size = edfs_read(edfs_context, inode, stbuf.st_size, offset, data_buffer, fbuf);
             if (size > 0) {
                 if (file_size)
                     *file_size = size;
