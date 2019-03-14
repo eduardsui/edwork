@@ -22,6 +22,9 @@ static NOTIFYICONDATAW tray_icon;
 static int gui_lock = 0;
 static ui_event ui_callbacks[UI_EVENTS];
 static void *ui_data[UI_EVENTS];
+static ui_idle_event scheduled_event[UI_SCHEDULER_SIZE];
+static void *scheduled_data[UI_SCHEDULER_SIZE];
+static int schedule_count = 0;
 
 HRESULT STDMETHODCALLTYPE Storage_QueryInterface(IStorage FAR* This, REFIID riid, LPVOID FAR* ppvObj);
 ULONG STDMETHODCALLTYPE Storage_AddRef(IStorage FAR* This);
@@ -1028,12 +1031,32 @@ void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata) {
         DispatchMessage(&msg);
         if (event_idle)
             event_idle(userdata);
+        if (schedule_count > 0) {
+            int i;
+            for (i = 0; i < UI_SCHEDULER_SIZE; i ++) {
+                if (scheduled_event[i]) {
+                    scheduled_event[i](scheduled_data[i]);
+                    scheduled_event[i] = NULL;
+                    scheduled_data[i] = NULL;
+                } else
+                    break;
+            }
+            schedule_count = 0;
+        }
     }
     KillTimer(NULL, 0);
     ui_app_tray_remove();
 
     if (ui_callbacks[UI_EVENT_LOOP_EXIT])
         ui_callbacks[UI_EVENT_LOOP_EXIT](NULL, ui_data[UI_EVENT_LOOP_EXIT]);
+}
+
+void ui_app_run_schedule_once(ui_idle_event scheduled, void *userdata) {
+    if (schedule_count >= UI_SCHEDULER_SIZE)
+        schedule_count = 0;
+    scheduled_event[schedule_count] = scheduled;
+    scheduled_data[schedule_count] = userdata;
+    schedule_count ++;
 }
 
 void ui_app_run() {

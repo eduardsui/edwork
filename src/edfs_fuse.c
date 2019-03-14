@@ -497,9 +497,13 @@ void edfs_gui_load(void *window) {
 }
 
 void edfs_gui_callback(void *window) {
+#ifndef EDFS_NO_JS
+    // JS UI event
+    if (edfs_verify_window_event(edfs_context, window))
+        return;
+#endif
     char *foo = ui_call(window, "lastevent", NULL);
     char *use;
-
     uint64_t size = 0;
     uint64_t files = 0;
     uint64_t directories = 0;
@@ -590,7 +594,11 @@ void edfs_gui_callback(void *window) {
 }
 
 void edfs_tray_notify(void *menuwindow) {
+#ifdef EDFS_NO_JS
     if (ui_window_count() <= 1) {
+#else
+    if (ui_window_count() <= edfs_app_window_count(edfs_context) + 1) {
+#endif
         gui_window = ui_window("edwork settings", edwork_settings_form);
         edfs_gui_load(gui_window);
     } else
@@ -609,7 +617,11 @@ void edfs_gui_notify(void *userdata) {
         reload_keys = 0;
     }
     if (reopen_window) {
+#ifdef EDFS_NO_JS
         if (ui_window_count() <= 1) {
+#else
+        if (ui_window_count() <= edfs_app_window_count(edfs_context) + 1) {
+#endif
             gui_window = ui_window("edwork settings", edwork_settings_form);
             edfs_gui_load(gui_window);
         } else
@@ -701,6 +713,9 @@ void edfs_quit(void *event_data, void *user_data) {
 void edfs_window_close(void *window, void *user_data) {
     if (window == gui_window)
         gui_window = NULL;
+#ifndef EDFS_NO_JS
+    edfs_notify_window_close(edfs_context, window);
+#endif
 }
 #endif
 
@@ -1137,6 +1152,20 @@ int main(int argc, char *argv[]) {
                         exit(0);
                     }
                 } else
+#ifndef EDFS_NO_JS
+                if (!strcmp(arg, "app")) {
+#if defined(_WIN32) || defined(__APPLE__)
+                    uri_parameters ++;
+#endif
+                    edfs_set_app_mode(edfs_context, 1);
+                } else
+                if (!strcmp(arg, "debugapp")) {
+#if defined(_WIN32) || defined(__APPLE__)
+                    uri_parameters ++;
+#endif
+                    edfs_set_app_mode(edfs_context, 2);
+                } else
+#endif
                 if (!strcmp(arg, "help")) {
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
@@ -1167,6 +1196,10 @@ int main(int argc, char *argv[]) {
                         "    -stop              stop other instances of the application\n"
 #ifdef WITH_SCTP
                         "    -sctp              force SCTP-only mode\n"
+#endif
+#ifndef EDFS_NO_JS
+                        "    -app               run partition application (.app.js)\n"
+                        "    -debugapp          run local application\n"
 #endif
                         , argv[0]);
                     exit(0);

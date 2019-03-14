@@ -268,6 +268,39 @@ int edfs_key_js_call(struct edfs_key_data *key_data, const char *jscall, ... ) {
         thread_mutex_unlock(&key_data->js_lock);
     return ret_val;
 }
+
+int edfs_key_js_call_safe(struct edfs_key_data *key_data, const char *jscall, ... ) {
+    if ((!key_data) || (!key_data->js))
+        return -1;
+
+    thread_mutex_lock(&key_data->js_lock);
+    free(key_data->js_last_error);
+    key_data->js_last_error = NULL;
+
+    duk_push_string(key_data->js, jscall);
+    duk_peval(key_data->js);
+
+    va_list ap;
+    va_start(ap, jscall);
+    int arg_count = 0;
+    while (1) {
+        const char *str = va_arg(ap, const char *);
+        if (!str)
+            break;
+        duk_push_string(key_data->js, str);
+        arg_count ++;
+    }
+    va_end(ap);
+
+    key_data->no_js_lock = 1;
+    duk_pcall(key_data->js, arg_count);
+    key_data->no_js_lock = 0;
+    int ret_val = duk_get_int(key_data->js, -1);
+    duk_pop(key_data->js);
+
+    thread_mutex_unlock(&key_data->js_lock);
+    return ret_val;
+}
 #endif
 
 void edfs_key_data_deinit(struct edfs_key_data *key_data) {

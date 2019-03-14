@@ -199,5 +199,11 @@ char *edfs_smartcard_get_signature(struct edfs *edfs_context, struct edfs_key_da
     void edfs_set_smartcard_pin_callback(struct edfs *edfs_context, edwork_smartcard_read_pin_callback callback);
     struct edwork_smartcard_context *edfs_get_smartcard_context(struct edfs *edfs_context);
 #endif
+#ifndef EDFS_NO_JS
+    void edfs_set_app_mode(struct edfs *edfs_context, unsigned char app_mode);
+    void edfs_notify_window_close(struct edfs *edfs_context, void *window);
+    int edfs_app_window_count(struct edfs *edfs_context);
+    int edfs_verify_window_event(struct edfs *edfs_context, void *window);
+#endif
 
 #endif

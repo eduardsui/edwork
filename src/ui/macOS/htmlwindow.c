@@ -23,6 +23,9 @@ static int content_set = 0;
 static int gui_lock = 0;
 static ui_event ui_callbacks[UI_EVENTS];
 static void *ui_data[UI_EVENTS];
+static ui_idle_event scheduled_event[UI_SCHEDULER_SIZE];
+static void *scheduled_data[UI_SCHEDULER_SIZE];
+static int schedule_count = 0;
 
 enum {
     NSBorderlessWindowMask      = 0,
@@ -178,6 +181,19 @@ void ui_window_top(void *window) {
 BOOL AppDel_applicationDidUpdate(AppDelegate *self, SEL _cmd, id notification) {
     if (idle_event)
         idle_event(idle_userdata);
+
+    if (schedule_count > 0) {
+        int i;
+        for (i = 0; i < UI_SCHEDULER_SIZE; i ++) {
+            if (scheduled_event[i]) {
+                scheduled_event[i](scheduled_data[i]);
+                scheduled_event[i] = NULL;
+                scheduled_data[i] = NULL;
+            } else
+                break;
+        }
+        schedule_count = 0;
+    }
     return YES;
 }
 
@@ -427,6 +443,14 @@ void ui_set_event(int eid, ui_event callback, void *event_userdata) {
     idle_userdata = userdata;
 
     RunApplication();
+}
+
+void ui_app_run_schedule_once(ui_idle_event scheduled, void *userdata) {
+    if (schedule_count >= UI_SCHEDULER_SIZE)
+        schedule_count = 0;
+    scheduled_event[schedule_count] = scheduled;
+    scheduled_data[schedule_count] = userdata;
+    schedule_count ++;
 }
 
 void ui_app_run() {

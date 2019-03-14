@@ -26,7 +26,16 @@ static const char EDFS_JS_API[] = ""
             "\"alert\": alert,\n"
             "\"input\": input,\n"
             "\"confirm\": confirm,\n"
-            "\"notify\": __edfs_private_notify\n"
+            "\"notify\": __edfs_private_notify,\n"
+            "\"window\": __edfs_private_window,\n"
+            "\"close\": __edfs_private_close,\n"
+            "\"restore\": __edfs_private_restore,\n"
+            "\"top\": __edfs_private_top,\n"
+            "\"maximize\": __edfs_private_maximize,\n"
+            "\"minimize\": __edfs_private_minimize,\n"
+            "\"js\": __edfs_private_execute,\n"
+            "\"call\": function(method, arg, callback) { var self = this; this.__windowcallback = function(str) { callback(str); delete self.__windowcallback; }; return __edfs_private_call(method, (typeof arg === \"string\") ? arg : JSON.stringify(arg)); },\n"
+            "\"isVisible\": __edfs_private_is_visible\n"
         "},\n"
         "\"fs\": {\n"
             "\"readFile\": function(filename, encoding, callback) {\n"
@@ -91,6 +100,19 @@ static const char EDFS_JS_API[] = ""
         "\"info\": __edfs_private_info,\n"
         "\"debug\": __edfs_private_debug\n"
     "};\n";
+
+struct edfs_private_ui_data {
+    struct edfs_key_data *key;
+    union {
+        char *buffer;
+        int int_val;
+    } buffer0;
+    union {
+        char *buffer;
+        int int_val;
+    } buffer1;
+    char *argv;
+};
 
 static void __edfs_private_get_key_id(duk_context *js, char *buf) {
     if (buf)
@@ -318,6 +340,192 @@ static int __edfs_private_notify(duk_context *js) {
     return 0;
 }
 
+#ifdef EDFS_UI
+static void __edfs_private_ui_window_create_or_set_content(void *data) {
+    if (!data)
+        return;
+
+    struct edfs_private_ui_data *ui_context = (struct edfs_private_ui_data *)data;
+    if (ui_context->key->js_window)
+        ui_window_set_content(ui_context->key->js_window, ui_context->buffer1.buffer);
+    else
+        ui_context->key->js_window = ui_window(ui_context->buffer0.buffer, ui_context->buffer1.buffer);
+    ui_window_restore(ui_context->key->js_window);
+    ui_window_top(ui_context->key->js_window);
+
+    free(ui_context->buffer0.buffer);
+    free(ui_context->buffer1.buffer);
+    free(ui_context);
+}
+
+static void __edfs_private_ui_window_action(void *data) {
+    if (!data)
+        return;
+
+    struct edfs_private_ui_data *ui_context = (struct edfs_private_ui_data *)data;
+    if (ui_context->key->js_window) {
+        switch (ui_context->buffer0.int_val) {
+            case 1:
+                log_debug("close window");
+                ui_window_close(ui_context->key->js_window);
+                ui_context->key->js_window = NULL;
+                break;
+            case 2:
+                log_debug("restore window");
+                ui_window_restore(ui_context->key->js_window);
+                break;
+            case 3:
+                log_debug("bring window to top");
+                ui_window_top(ui_context->key->js_window);
+                break;
+            case 4:
+                log_debug("maximize window");
+                ui_window_maximize(ui_context->key->js_window);
+                break;
+            case 5:
+                log_debug("minimize window");
+                ui_window_minimize(ui_context->key->js_window);
+                break;
+            case 6:
+                log_debug("executing UI JS code: %s", ui_context->buffer1.buffer);
+                ui_js(ui_context->key->js_window, ui_context->buffer1.buffer);
+                free(ui_context->buffer1.buffer);
+                break;
+            case 7:
+                {
+                    const char *argv[2];
+                    argv[0] = ui_context->argv;
+                    argv[1] = NULL;
+
+                    char *val = ui_call(ui_context->key->js_window, ui_context->buffer1.buffer, argv);
+                    log_debug("UI JS function call: %s = %s(%s)", val, ui_context->buffer1.buffer, argv);
+                    if (ui_context->key->js)
+                        edfs_key_js_call_safe(ui_context->key, "edwork.ui.__windowcallback", val, NULL);
+                    if (val)
+                        ui_free_string(val);
+
+                    free(ui_context->buffer1.buffer);
+                    free(ui_context->argv);
+                }
+                break;
+            default:
+                log_error("unknown command %i", (int)ui_context->buffer0.int_val);
+        }
+    } else
+        log_warn("no window");
+    free(ui_context);
+}
+#endif
+
+static int __edfs_private_window(duk_context *js) {
+    char title[0x100];
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        const char *str_title = NULL;
+        if ((n > 1) && (duk_get_type(js, 1) == DUK_TYPE_STRING))
+            str_title = duk_get_string(js, 1);
+        if ((!str_title) || (!str_title[0])) {
+            __edfs_private_get_key_id(js, title);
+            str_title = title;
+        }
+        log_info("[====== %s ======]:\n%s", str_title, str);
+#ifdef EDFS_UI
+        struct edfs_private_ui_data *ui_context = malloc(sizeof(struct edfs_private_ui_data));
+        if (ui_context) {
+            ui_context->key = key;
+            ui_context->buffer0.buffer = strdup(str_title ? str_title : "");
+            ui_context->buffer1.buffer = strdup(str ? str : "");
+            ui_app_run_schedule_once(__edfs_private_ui_window_create_or_set_content, ui_context);
+            duk_push_boolean(js, 1);
+            return 1;
+        }
+#endif
+    }
+    duk_push_boolean(js, 0);
+    return 1;
+}
+
+static int __edfs_private_action(duk_context *js, int action, const char *buffer, int get_values) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+#ifdef EDFS_UI
+    if (key->js_window) {
+        struct edfs_private_ui_data *ui_context = malloc(sizeof(struct edfs_private_ui_data));
+        if (ui_context) {
+            ui_context->key = key;
+            ui_context->buffer0.int_val = action;
+            ui_context->buffer1.buffer = buffer ? strdup(buffer) : NULL;
+            ui_context->argv = NULL;
+            if (get_values > 0) {
+                int n = duk_get_top(js);
+                if ((n > 1) && (duk_get_type(js, 1) == DUK_TYPE_STRING)) {
+                    const char *str = duk_get_string(js, 1);
+                    ui_context->argv = strdup(str ? str : "");
+                }
+            }
+            ui_app_run_schedule_once(__edfs_private_ui_window_action, ui_context);
+            duk_push_boolean(js, 1);
+            return 1;
+        }
+    }
+#endif
+    duk_push_boolean(js, 0);
+    return 1;
+}
+
+static int __edfs_private_close(duk_context *js) {
+    return __edfs_private_action(js, 1, NULL, 0);
+}
+
+static int __edfs_private_restore(duk_context *js) {
+    return __edfs_private_action(js, 2, NULL, 0);
+}
+
+static int __edfs_private_top(duk_context *js) {
+    return __edfs_private_action(js, 3, NULL, 0);
+}
+
+static int __edfs_private_maximize(duk_context *js) {
+    return __edfs_private_action(js, 4, NULL, 0);
+}
+
+static int __edfs_private_minimize(duk_context *js) {
+    return __edfs_private_action(js, 5, NULL, 0);
+}
+
+static int __edfs_private_execute(duk_context *js) {
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING))
+        return __edfs_private_action(js, 6, duk_get_string(js, 0), 0);
+    return 0;
+}
+
+static int __edfs_private_call(duk_context *js) {
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING))
+        return __edfs_private_action(js, 7, duk_get_string(js, 0), 1);
+    return 0;
+}
+
+static int __edfs_private_is_visible(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+#ifdef EDFS_UI
+    if (key->js_window) {
+        duk_push_boolean(js, 1);
+        return 1;
+    }
+#endif
+    duk_push_boolean(js, 0);
+    return 1;
+}
+
 static int __edfs_private_readfile(duk_context *js) {
     struct edfs_key_data *key = edfs_key_data_get_from_js(js);
     if (!key)
@@ -471,6 +679,16 @@ int edfs_js_register_all(duk_context *js) {
     JS_REGISTER(js, input);
     JS_REGISTER(js, confirm); 
     JS_REGISTER(js, __edfs_private_notify);
+    JS_REGISTER(js, __edfs_private_window);
+    JS_REGISTER(js, __edfs_private_close);
+    JS_REGISTER(js, __edfs_private_restore);
+    JS_REGISTER(js, __edfs_private_top);
+    JS_REGISTER(js, __edfs_private_maximize);
+    JS_REGISTER(js, __edfs_private_minimize);
+    JS_REGISTER(js, __edfs_private_execute);
+    JS_REGISTER(js, __edfs_private_call);
+    JS_REGISTER(js, __edfs_private_is_visible);
+
     JS_REGISTER(js, exitApplication);
 
     JS_REGISTER(js, __edfs_private_readfile);

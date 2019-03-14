@@ -343,6 +343,10 @@ struct edfs {
 #ifdef WITH_SMARTCARD
     struct edwork_smartcard_context smartcard_context;
 #endif
+
+#ifndef EDFS_NO_JS
+    unsigned char app_mode;
+#endif
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -2084,16 +2088,52 @@ int write_json2(struct edfs *edfs_context, struct edfs_key_data *key, const char
 #ifndef EDFS_NO_JS
 static void edfs_reload_app(struct edfs *edfs_context, struct edfs_key_data *key) {
     // do not load app for first block
-    if ((!key) || (!key->chain) || (!key->chain->index))
+    if ((!key) || (!key->chain) || (!key->chain->index) || (!edfs_context) || (!edfs_context->app_mode))
         return;
 
     key->reload_js = 0;
-    char *code_js = edfs_lazy_read_file(edfs_context, key, ".app.js", NULL);
+    char *code_js = NULL;
+    
+    switch (edfs_context->app_mode) {
+        case 1:
+            code_js = edfs_lazy_read_file(edfs_context, key, ".app.js", NULL);
+            break;
+        case 2:
+            {
+                char fullpath[MAX_PATH_LEN];
+                snprintf(fullpath, MAX_PATH_LEN, "%s/%s", key->js_working_directory, ".app.js");
+                FILE *f = fopen(fullpath, "rb");
+                if (f) {
+                    if (!fseek(f, 0L, SEEK_END)) {
+                        int size = ftell(f);
+                        if (size > 0) {
+                            if (!fseek(f, 0L, SEEK_SET)) {
+                                code_js = (char *)malloc(size + 1);
+                                if (fread(code_js, 1, size, f) == size) {
+                                    code_js[size] = 0;
+                                } else {
+                                    free(code_js);
+                                    code_js = NULL;
+                                }
+                            }
+                        }
+                        fclose(f);
+                    }
+                }
+            }
+            break;
+        default:
+            log_error("unknown application mode %i", (int)edfs_context->app_mode);
+            break;
+    }
     if (code_js) {
         uint64_t new_hash = XXH64(code_js, strlen(code_js), 0);
         if (key->app_version != new_hash) {
             key->app_version = new_hash;
-            log_trace("loading partition application");
+            if (edfs_context->app_mode == 1)
+                log_trace("loading partition application");
+            else
+                log_trace("loading local application");
             edfs_key_data_reset_js(key);
             edfs_key_data_load_js(key, code_js);
         }
@@ -5448,8 +5488,10 @@ int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, co
                         edfs_queue_ensure_data(edfs_context, key, inode, file_size, 0, 0, generation + 1);
                 }
 #ifndef EDFS_NO_JS
-                if ((name) && (written == 1) && (!strcmp(name, ".app.js")))
-                    key->reload_js = 1;
+                if (edfs_context->app_mode == 1) {
+                    if ((name) && (written == 1) && (!strcmp(name, ".app.js")))
+                        key->reload_js = 1;
+                }
 #endif
             } else
             if (!deleted) {
@@ -7577,7 +7619,7 @@ int edwork_thread(void *userdata) {
                     key_buffer_index = 0;
                 }
 #ifndef EDFS_NO_JS
-                if ((ping_count <= 2) || (key->reload_js = 1))
+                if ((edfs_context->app_mode) && ((ping_count <= 2) || (key->reload_js = 1)))
                     edfs_reload_app(edfs_context, key);
 #endif
                 key = (struct edfs_key_data *)key->next_key;
@@ -7641,13 +7683,13 @@ int edwork_thread(void *userdata) {
         }
 #endif
 #ifndef EDFS_NO_JS
-        if (js_check <= microseconds()) {
+        if ((edfs_context->app_mode) && (js_check <= microseconds())) {
             key = edfs_context->key_data;
             while (key) {
                 edfs_key_data_js_loop(key);
                 key = (struct edfs_key_data *)key->next_key;
             }
-            js_check = microseconds() + 250000;
+            js_check = microseconds() + 100000;
         }
 #endif
     }
@@ -8317,4 +8359,54 @@ struct edwork_smartcard_context *edfs_get_smartcard_context(struct edfs *edfs_co
         return NULL;
     return &edfs_context->smartcard_context;
 }
+#endif
+
+#ifndef EDFS_NO_JS
+void edfs_set_app_mode(struct edfs *edfs_context, unsigned char app_mode) {
+    if (!edfs_context)
+        return;
+    edfs_context->app_mode = app_mode;
+}
+
+void edfs_notify_window_close(struct edfs *edfs_context, void *window) {
+    if (!edfs_context)
+        return;
+    struct edfs_key_data *key = edfs_context->key_data;
+    while (key) {
+        if (key->js_window == window) {
+            key->js_window = NULL;
+            break;
+        }
+        key = (struct edfs_key_data *)key->next_key;
+    }
+}
+
+int edfs_app_window_count(struct edfs *edfs_context) {
+    if (!edfs_context)
+        return 0;
+    int windows = 0;
+    struct edfs_key_data *key = edfs_context->key_data;
+    while (key) {
+        if (key->js_window)
+            windows ++;
+        key = (struct edfs_key_data *)key->next_key;
+    }
+    return windows;
+}
+
+int edfs_verify_window_event(struct edfs *edfs_context, void *window) {
+    if ((!edfs_context) || (!window))
+        return 0;
+    struct edfs_key_data *key = edfs_context->key_data;
+    while (key) {
+        if (key->js_window == window) {
+            log_trace("JS ui event dispatched");
+            edfs_key_js_call_safe(key, "edwork.events.onuievent", NULL);
+            return 1;
+        }
+        key = (struct edfs_key_data *)key->next_key;
+    }
+    return 0;
+}
+
 #endif

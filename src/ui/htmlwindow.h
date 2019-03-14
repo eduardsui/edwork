@@ -11,10 +11,13 @@ typedef void (*ui_event)(void *event_data, void *userdata);
 #define UI_EVENT_LOOP_EXIT      2
 #define UI_EVENTS               3
 
+#define UI_SCHEDULER_SIZE       100
+
 int ui_app_init(ui_trigger_event event_handler);
 void ui_app_tray_icon(const char *tooltip, const char *notification_title, const char *notification_text, ui_tray_event event_tray);
 void ui_app_tray_remove();
 void ui_app_run_with_notify(ui_idle_event event_idle, void *userdata);
+void ui_app_run_schedule_once(ui_idle_event scheduled, void *userdata);
 void ui_app_run();
 int ui_app_done();
 void ui_app_quit();
