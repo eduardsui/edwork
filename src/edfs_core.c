@@ -1846,8 +1846,9 @@ int edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const c
     if (check_signature) {
         if (verify(edfs_context, key, (const char *)sig_ptr, sig_bytes_read, hash, sizeof(hash))) {
             if (signature_hash) {
-                if (XXH32(hash, sizeof(hash), 0) != signature_hash) {
-                    log_warn("different chunk version received");
+                uint32_t computed_hash = XXH32(hash, sizeof(hash), 0);
+                if (computed_hash != signature_hash) {
+                    log_warn("different chunk version received %x <=> %x", signature_hash, computed_hash);
                     return -EIO;
                 }
             }
@@ -3135,8 +3136,8 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
     if (chunk > last_file_chunk)
         return 0;
 
-    if ((filebuf->check_hash) && ((filebuf->flags & 3) == O_RDONLY) && (edfs_is_write(edfs_context, key, ino)))
-        filebuf->check_hash = 0;
+    // if ((filebuf->check_hash) && ((filebuf->flags & 3) == O_RDONLY) && (edfs_is_write(edfs_context, key, ino)))
+    //     filebuf->check_hash = 0;
 
     if (filebuf->check_hash) {
         if ((filebuf->written_data) && (filebuf->hash_buffer) && (filebuf->hash_buffer->read_size)) {
@@ -3255,6 +3256,12 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 avl_remove(&key->ino_cache, (void *)(uintptr_t)ino);
                 if (edfs_context->mutex_initialized)
                     thread_mutex_unlock(&key->ino_cache_lock);
+
+                // try to ignore signature
+                if ((filebuf->check_hash) && ((filebuf->flags & 3) == O_RDONLY) && (edfs_is_write(edfs_context, key, ino))) {
+                    filebuf->check_hash = 0;
+                    sig_hash = 0;
+                }
             }
             if (((is_sctp) && (microseconds() - proof_timestamp >= 500000)) || ((!is_sctp) && (microseconds() - proof_timestamp >= 200000))) {
                 // new proof every 500ms (SCTP), 200ms (UDP)

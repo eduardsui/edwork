@@ -5,6 +5,7 @@
 #include "log.h"
 #include "edfs_key_data.h"
 #include "edfs_core.h"
+#include "edfs_js_mustache.h"
 
 // max 10Mb of storage
 #define MAX_JS_SESSION_DATA 10 * 1024 * 1024
@@ -160,7 +161,8 @@ static const char EDFS_JS_API[] = ""
         "\"info\": __edfs_private_info,\n"
         "\"debug\": __edfs_private_debug\n"
     "};\n"
-    "edwork.session.init();\n";
+    "edwork.session.init();\n"
+    "%s";
 
 struct edfs_private_ui_data {
     struct edfs_key_data *key;
@@ -1051,7 +1053,7 @@ int edfs_js_register_all(duk_context *js) {
     JS_REGISTER(js, __edfs_private_readdir);
     JS_REGISTER(js, __edfs_private_readsignature);
 
-    char api_buf[8192];
+    char api_buf[0x7FFF];
     char key_id[256];
     char public_key[256];
     char private_key[256];
@@ -1069,7 +1071,7 @@ int edfs_js_register_all(duk_context *js) {
         edfs_private_key(key, private_key);
     }
 
-    snprintf(api_buf, sizeof(api_buf), EDFS_JS_API, key_id, public_key, private_key, edfs_who_i_am((struct edfs *)key->edfs_context, who_i_am, 1));
+    snprintf(api_buf, sizeof(api_buf), EDFS_JS_API, key_id, public_key, private_key, edfs_who_i_am((struct edfs *)key->edfs_context, who_i_am, 1), EDFS_MUSTACHE_JS);
 
     duk_eval_string_noresult(js, api_buf);
 
