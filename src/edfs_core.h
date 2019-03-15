@@ -184,6 +184,8 @@ char *edfs_key_id(void *key, char *buffer);
 char *edfs_public_key(void *key, char *buffer);
 char *edfs_private_key(void *key, char *buffer);
 
+char *edfs_who_i_am(struct edfs *edfs_context, char *buffer, unsigned char as_base64);
+
 int edwork_readonly(struct edfs *edfs_context);
 
 int edfs_proof_of_work(int bits, time_t timestamp, const unsigned char *resource, int resource_len, unsigned char *proof_str, int max_proof_len, unsigned char *proof_of_work);

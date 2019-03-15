@@ -25,6 +25,7 @@ static const char EDFS_JS_API[] = ""
             "\"read\": \"%s\",\n"
             "\"write\": \"%s\"\n"
         "},\n"
+        "\"id\": \"%s\",\n"
         "\"ui\": {\n"
             "\"alert\": alert,\n"
             "\"input\": input,\n"
@@ -937,6 +938,7 @@ int edfs_js_register_all(duk_context *js) {
     char key_id[256];
     char public_key[256];
     char private_key[256];
+    char who_i_am[64];
 
     key_id[0] = 0;
     public_key[0] = 0;
@@ -950,7 +952,7 @@ int edfs_js_register_all(duk_context *js) {
         edfs_private_key(key, private_key);
     }
 
-    snprintf(api_buf, sizeof(api_buf), EDFS_JS_API, key_id, public_key, private_key);
+    snprintf(api_buf, sizeof(api_buf), EDFS_JS_API, key_id, public_key, private_key, edfs_who_i_am((struct edfs *)key->edfs_context, who_i_am, 1));
 
     duk_eval_string_noresult(js, api_buf);
 

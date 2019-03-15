@@ -5254,6 +5254,19 @@ char *edfs_private_key(void *key, char *buffer) {
     return buffer;
 }
 
+char *edfs_who_i_am(struct edfs *edfs_context, char *buffer, unsigned char as_base64) {
+    if ((!edfs_context) || (!buffer))
+        return NULL;
+
+    if (as_base64) {
+        int encode_len = base64_encode_no_padding(edwork_who_i_am(edfs_context->edwork), 32, (unsigned char *)buffer, 64);
+        buffer[encode_len] = 0;
+    } else {
+        memcpy(buffer, edwork_who_i_am(edfs_context->edwork), 32);
+    }
+
+    return buffer;
+}
 
 int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data) {
     struct edfs_key_data *key = (struct edfs_key_data *)data;
