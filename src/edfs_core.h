@@ -208,6 +208,7 @@ char *edfs_smartcard_get_signature(struct edfs *edfs_context, struct edfs_key_da
 #endif
 #ifndef EDFS_NO_JS
     void edfs_set_app_mode(struct edfs *edfs_context, unsigned char app_mode);
+    int edfs_app_mode(struct edfs *edfs_context);
     void edfs_notify_window_close(struct edfs *edfs_context, void *window);
     int edfs_app_window_count(struct edfs *edfs_context);
     int edfs_verify_window_event(struct edfs *edfs_context, void *window);

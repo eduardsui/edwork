@@ -351,6 +351,17 @@ int edfs_register_startup(int autostartup) {
     }
 
     strcat(edfs_path, " -autorun");
+#ifndef EDFS_NO_JS
+    int app_mode = edfs_app_mode(edfs_context);
+    switch (app_mode) {
+        case 1:
+            strcat(edfs_path, " -app");
+            break;
+        case 2:
+            strcat(edfs_path, " -debugapp");
+            break;
+    }
+#endif
     // re-create key (program moved ?)
     if (RegOpenKeyA(HKEY_CURRENT_USER, TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Run"), &key) != ERROR_SUCCESS) {
         log_warn("error setting autorun");

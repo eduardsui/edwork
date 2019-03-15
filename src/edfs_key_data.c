@@ -229,6 +229,10 @@ void edfs_key_data_js_loop(struct edfs_key_data *key_data) {
     free(key_data->js_last_error);
     key_data->js_last_error = NULL;
     duk_eval_string_noresult(key_data->js, "try { edwork.__edfs_loop(); } catch (e) { console.error(e.toString()); }");
+    // duktape documentation:
+    // You may want to call this function twice to ensure even objects with finalizers are collected.
+    duk_gc(key_data->js, 0);
+    duk_gc(key_data->js, 0);
     if (!key_data->no_js_lock)
         thread_mutex_unlock(&key_data->js_lock);
 }

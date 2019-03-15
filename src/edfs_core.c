@@ -7632,7 +7632,7 @@ int edwork_thread(void *userdata) {
     uint64_t smartcard_check = microseconds() + 1000000;
 #endif
 #ifndef EDFS_NO_JS
-    uint64_t js_check = microseconds() + 250000;
+    uint64_t js_check = microseconds() + 50000;
 #endif
     while (!edfs_context->network_done) {
         if ((edfs_context->resync) && (time(NULL) - startup >= EDWORK_INIT_INTERVAL)) {
@@ -7735,7 +7735,7 @@ int edwork_thread(void *userdata) {
                 edfs_key_data_js_loop(key);
                 key = (struct edfs_key_data *)key->next_key;
             }
-            js_check = microseconds() + 100000;
+            js_check = microseconds() + 50000;
         }
 #endif
     }
@@ -8458,4 +8458,9 @@ int edfs_verify_window_event(struct edfs *edfs_context, void *window) {
     return 0;
 }
 
+int edfs_app_mode(struct edfs *edfs_context) {
+    if (!edfs_context)
+        return 0;
+    return (int)edfs_context->app_mode;
+}
 #endif

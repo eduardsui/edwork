@@ -114,6 +114,15 @@ static const char EDFS_JS_API[] = ""
             "}\n"
             "if (__new_edfs_private_pending.length !== this.__edfs_private_pending.length)\n"
                 "this.__edfs_private_pending = __new_edfs_private_pending;\n"
+        "},\n"
+        "\"setTimeout\": function(callback, ms) {\n"
+            "var when = (new Date()).getTime() + ms;\n"
+            "this.queue(function() {\n"
+                "if ((new Date()).getTime() >= when) {\n"
+                    "callback();\n"
+                    "return true;\n"
+                "}\n"
+            "});\n"
         "}\n"
     "};\n"
     "var console = {\n"
@@ -414,6 +423,7 @@ static void __edfs_private_ui_window_action(void *data) {
                 log_debug("executing UI JS code: %s", ui_context->buffer1.buffer);
                 ui_js(ui_context->key->js_window, ui_context->buffer1.buffer);
                 free(ui_context->buffer1.buffer);
+                free(ui_context->argv);
                 break;
             case 7:
                 {
