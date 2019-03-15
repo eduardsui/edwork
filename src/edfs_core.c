@@ -3258,10 +3258,10 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                     thread_mutex_unlock(&key->ino_cache_lock);
 
                 // try to ignore signature
-                if ((filebuf->check_hash) && ((filebuf->flags & 3) == O_RDONLY) && (edfs_is_write(edfs_context, key, ino))) {
-                    filebuf->check_hash = 0;
-                    sig_hash = 0;
-                }
+                // if ((filebuf->check_hash) && ((filebuf->flags & 3) == O_RDONLY) && (edfs_is_write(edfs_context, key, ino))) {
+                //     filebuf->check_hash = 0;
+                //     sig_hash = 0;
+                // }
             }
             if (((is_sctp) && (microseconds() - proof_timestamp >= 500000)) || ((!is_sctp) && (microseconds() - proof_timestamp >= 200000))) {
                 // new proof every 500ms (SCTP), 200ms (UDP)
