@@ -68,59 +68,6 @@ struct edfs_key_data *edfs_key_data_get_from_js(duk_context *js) {
     return (struct edfs_key_data *)funcs.udata;
 }
 
-const char *duk_push_string_file_raw(duk_context *js, const char *path) {
-	FILE *f = NULL;
-	char *buf;
-	long sz;  /* ANSI C typing */
-
-	if (!path) {
-		goto fail;
-	}
-	f = fopen(path, "rb");
-	if (!f) {
-		goto fail;
-	}
-	if (fseek(f, 0, SEEK_END) < 0) {
-		goto fail;
-	}
-	sz = ftell(f);
-	if (sz < 0) {
-		goto fail;
-	}
-	if (fseek(f, 0, SEEK_SET) < 0) {
-		goto fail;
-	}
-	buf = (char *) duk_push_fixed_buffer(js, (duk_size_t) sz);
-	if ((size_t) fread(buf, 1, (size_t) sz, f) != (size_t) sz) {
-		duk_pop(js);
-		goto fail;
-	}
-	(void) fclose(f);  /* ignore fclose() error */
-	return duk_buffer_to_string(js, -1);
-
- fail:
-	if (f) {
-		(void) fclose(f);  /* ignore fclose() error */
-	}
-
-	duk_push_undefined(js);
-	return NULL;
-}
-
-static duk_int_t duk_peval_file(duk_context *js, const char *path) {
-	duk_int_t rc;
-
-	duk_push_string_file_raw(js, path);
-	duk_push_string(js, path);
-	rc = duk_pcompile(js, DUK_COMPILE_EVAL);
-	if (rc != 0)
-		return rc;
-
-	duk_push_global_object(js); 
-	rc = duk_pcall_method(js, 0);
-	return rc;
-}
-
 static void edfs_js_log_error(void *key_data, const char *msg) {
     if ((msg) && (key_data)) {
         free(((struct edfs_key_data *)key_data)->js_last_error);
@@ -135,13 +82,11 @@ static duk_context *edfs_key_data_get_js(struct edfs_key_data *key_data) {
     if (!key_data)
         return NULL;
 
-    thread_mutex_lock(&key_data->js_lock);
     if (!key_data->js) {
         key_data->js = duk_create_heap(NULL, NULL, NULL, key_data, edfs_js_log_error);
         key_data->js_exit = 0;
         edfs_js_register_all(key_data->js);
     }
-    thread_mutex_unlock(&key_data->js_lock);
 
     return key_data->js;
 }
@@ -150,14 +95,14 @@ int edfs_key_data_load_js(struct edfs_key_data *key_data, const char *js_data) {
     if ((!js_data) || (!js_data[0]))
         return 0;
 
-    duk_context *js = edfs_key_data_get_js(key_data);
-    if (!js)
-        return -1;
-
     thread_mutex_lock(&key_data->js_lock);
+    duk_context *js = edfs_key_data_get_js(key_data);
+    if (!js) {
+        thread_mutex_unlock(&key_data->js_lock);
+        return -1;
+    }
     free(key_data->js_last_error);
     key_data->js_last_error = NULL;
-    unsigned char old_js_lock = key_data->no_js_lock;
     key_data->no_js_lock = 1;
     if (duk_peval_string(js, js_data) != 0) {
         key_data->js_last_error = strdup(duk_safe_to_string(js, -1));
@@ -165,36 +110,13 @@ int edfs_key_data_load_js(struct edfs_key_data *key_data, const char *js_data) {
         edfs_js_error(((struct edfs_key_data *)key_data)->js, key_data->js_last_error);
         key_data->js_exit = 1;
     }
-    key_data->no_js_lock = old_js_lock;
+    key_data->no_js_lock = 0;
     duk_pop(js);
     thread_mutex_unlock(&key_data->js_lock);
     if (key_data->js_exit) {
         edfs_key_data_reset_js(key_data);
         key_data->js_exit = 0;
     }
-    return 0;
-}
-
-int edfs_key_data_load_js_file(struct edfs_key_data *key_data, const char *js_filename) {
-    char filename_buf[8192];
-    snprintf(filename_buf, sizeof(filename_buf), "%s/%s", key_data->js_working_directory, js_filename);
-    if (!edfs_file_exists(filename_buf))
-        return -1;
-
-    duk_context *js = edfs_key_data_get_js(key_data);
-    if (!js)
-        return -1;
-
-    thread_mutex_lock(&key_data->js_lock);
-    free(key_data->js_last_error);
-    key_data->js_last_error = NULL;
-    if (duk_peval_file(js, filename_buf)) {
-        thread_mutex_unlock(&key_data->js_lock);
-        return -1;
-    }
-    duk_pop(js);
-    thread_mutex_unlock(&key_data->js_lock);
-
     return 0;
 }
 
@@ -224,17 +146,17 @@ void edfs_key_data_js_loop(struct edfs_key_data *key_data) {
     if ((!key_data) || (!key_data->js))
         return;
 
-    if (!key_data->no_js_lock)
-        thread_mutex_lock(&key_data->js_lock);
+    thread_mutex_lock(&key_data->js_lock);
     free(key_data->js_last_error);
     key_data->js_last_error = NULL;
+    key_data->no_js_lock = 1;
     duk_eval_string_noresult(key_data->js, "try { edwork.__edfs_loop(); } catch (e) { console.error(e.toString()); }");
+    key_data->no_js_lock = 0;
     // duktape documentation:
     // You may want to call this function twice to ensure even objects with finalizers are collected.
     duk_gc(key_data->js, 0);
     duk_gc(key_data->js, 0);
-    if (!key_data->no_js_lock)
-        thread_mutex_unlock(&key_data->js_lock);
+    thread_mutex_unlock(&key_data->js_lock);
 }
 
 int edfs_key_js_call(struct edfs_key_data *key_data, const char *jscall, ... ) {
