@@ -2556,7 +2556,7 @@ int makenode(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t pa
         return -EPERM;
 
 #ifndef EDFS_NO_JS
-    if (edfs_key_js_call_args(key, "edwork.events.oncreate", "_s", parent, name)) {
+    if (edfs_key_js_call_args(key, "edwork.events.oncreate", "_s", parent, name) == 1) {
         log_warn("access denied by JS function");
         return -EPERM;
     }
@@ -3586,7 +3586,7 @@ int edfs_open_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino
         return -EISDIR;
 
 #ifndef EDFS_NO_JS
-    if (edfs_key_js_call_args(key, "edwork.events.onopen", "_bb", ino, (int)(((flags & 3) == O_RDONLY) == 1), (int)0)) {
+    if (edfs_key_js_call_args(key, "edwork.events.onopen", "_bb", ino, (int)(((flags & 3) == O_RDONLY) == 1), (int)0) == 1) {
         log_warn("access denied by JS function");
         return -EACCES;
     }
@@ -4444,7 +4444,7 @@ struct dirbuf *edfs_opendir_key(struct edfs *edfs_context, struct edfs_key_data 
     if ((type & S_IFDIR) == 0)
         return NULL;
 #ifndef EDFS_NO_JS
-    if (edfs_key_js_call_args(key, "edwork.events.onopen", "_bb", ino, (int)1, (int)1)) {
+    if (edfs_key_js_call_args(key, "edwork.events.onopen", "_bb", ino, (int)1, (int)1) == 1) {
         log_warn("access denied by JS function");
         return NULL;
     }
