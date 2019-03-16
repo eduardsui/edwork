@@ -2277,7 +2277,7 @@ int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_
             if ((add_directory) && (type)) {
                 if ((!parent) || (b->ino == *parent)) {
 #ifndef EDFS_NO_JS
-                    if (edfs_key_js_call(key, "edwork.events.onreaddir", name, NULL) != 1)
+                    if (edfs_key_js_call_args(key, "edwork.events.onreaddir", "s__", name, inode, parent ? *parent : (uint64_t)0) != 1)
 #endif
                     b->size += add_directory(name, inode, type, (int64_t)json_object_get_number(root_object, "size"), (time_t)json_object_get_number(root_object, "created"), (time_t)json_object_get_number(root_object, "modified"), (time_t)(json_object_get_number(root_object, "timestamp") / 1000000), b->userdata);
                 }
@@ -2555,6 +2555,13 @@ int makenode(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t pa
     if (!type)
         return -EPERM;
 
+#ifndef EDFS_NO_JS
+    if (edfs_key_js_call_args(key, "edwork.events.oncreate", "_s", parent, name)) {
+        log_warn("access denied by JS function");
+        return -EPERM;
+    }
+#endif
+
     computename(inode, b64name);
 
     if (attr & S_IFDIR)
@@ -2663,23 +2670,13 @@ int edfs_lookup_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, 
         log_error("%s collides with %s", ensure_name, namebuf);
         return 0;
     }
-#ifdef EDFS_NO_JS
     if ((signature) && (log_get_level() <= LOG_INFO)) {
-#else
-    if ((signature) && ((log_get_level() <= LOG_INFO) || (key->js))) {
-#endif
         char *sig = NULL;
         int signature_index = 0;
         do {
             sig = edfs_smartcard_get_signature(edfs_context, key, inode, signature_index ++);
             if (sig) {
                 log_info("%s has signature #%i\n%s", ensure_name, signature_index, sig);
-#ifndef EDFS_NO_JS
-                if (edfs_key_js_call(key, "edwork.events.onverifysignature", sig, NULL) == 1) {
-                    log_warn("invalid signature found");
-                    return 0;
-                }
-#endif
                 free(sig);
             }
         } while (sig);
@@ -2702,16 +2699,17 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
     if (!key)
         return 0;
 
-#ifndef EDFS_NO_JS
-    if (edfs_key_js_call(key, "edwork.events.onlookup", name, NULL) == 1) {
-        log_warn("access denied by JS function");
-        return -EACCES;
-    }
-#endif
     uint64_t inode = computeinode(key, parent, name);
     int type = read_file_json(edfs_context, key, inode, NULL, &size, &timestamp, NULL, NULL, NULL, 0, &created, &modified, NULL, NULL, NULL);
     if (!type)
         return 0;
+
+#ifndef EDFS_NO_JS
+    if (edfs_key_js_call_args(key, "edwork.events.onlookup", "__", inode, parent) == 1) {
+        log_warn("access denied by JS function");
+        return -EACCES;
+    }
+#endif
 
     if (stbuf) {
         memset(stbuf, 0, sizeof(edfs_stat));
@@ -3534,6 +3532,9 @@ int edfs_releasedir(struct dirbuf *buf) {
     if (buf) {
         if (buf->key)
             buf->key->opened_files --;
+#ifndef EDFS_NO_JS
+        edfs_key_js_call_args(buf->key, "edwork.events.onrelease", "_bf", buf->ino, (int)1, (double)0);
+#endif
         free(buf);
     }
     return 0;
@@ -3584,6 +3585,12 @@ int edfs_open_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino
     if (type & S_IFDIR)
         return -EISDIR;
 
+#ifndef EDFS_NO_JS
+    if (edfs_key_js_call_args(key, "edwork.events.onopen", "_bb", ino, (int)(((flags & 3) == O_RDONLY) == 1), (int)0)) {
+        log_warn("access denied by JS function");
+        return -EACCES;
+    }
+#endif
     int found_in_blockchain = edfs_lookup_blockchain(edfs_context, key, ino, blockchain_limit, blockchainhash, &blockchain_generation, &blockchain_timestamp);
 
     if (fbuf) {
@@ -4349,6 +4356,9 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
         if (edfs_context->mutex_initialized)
             thread_mutex_unlock(&fbuf->key->ino_cache_lock);
 
+#ifndef EDFS_NO_JS
+        edfs_key_js_call_args(fbuf->key, "edwork.events.onrelease", "_bf", fbuf->ino, (int)0, (double)fbuf->written_data);
+#endif
         if (fbuf->key)
             fbuf->key->opened_files --;
         free(ino_cache);
@@ -4357,6 +4367,7 @@ int edfs_close(struct edfs *edfs_context, struct filewritebuf *fbuf) {
         free(fbuf->read_hash_buffer);
         free(fbuf->hash_buffer);
         free(fbuf);
+
     }
     return 0;
 }
@@ -4432,7 +4443,12 @@ struct dirbuf *edfs_opendir_key(struct edfs *edfs_context, struct edfs_key_data 
     int found_in_blockchain = edfs_lookup_blockchain(edfs_context, key, ino, blockchain_limit, blockchainhash, &blockchain_generation, &blockchain_timestamp);
     if ((type & S_IFDIR) == 0)
         return NULL;
-
+#ifndef EDFS_NO_JS
+    if (edfs_key_js_call_args(key, "edwork.events.onopen", "_bb", ino, (int)1, (int)1)) {
+        log_warn("access denied by JS function");
+        return NULL;
+    }
+#endif
     struct dirbuf *buf = (struct dirbuf *)malloc(sizeof(struct dirbuf));
     if (buf) {
         char path[MAX_PATH_LEN];
@@ -4675,7 +4691,7 @@ int edfs_rmdir_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, e
         return -ENOENT;
     if (type & S_IFDIR) {
 #ifndef EDFS_NO_JS
-        if (edfs_key_js_call(key, "edwork.events.ondelete", "directory", NULL) == 1) {
+        if (edfs_key_js_call_args(key, "edwork.events.ondelete", "__s", inode, parent, "directory") == 1) {
             log_warn("access denied by JS function");
             return 0;
         }
@@ -4712,7 +4728,7 @@ int edfs_unlink_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, 
         return -EISDIR;
     } else {
 #ifndef EDFS_NO_JS
-        if (edfs_key_js_call(key, "edwork.events.ondelete", "file", NULL) == 1) {
+        if (edfs_key_js_call_args(key, "edwork.events.ondelete", "__s", inode, parent, "file") == 1) {
             log_warn("access denied by JS function");
             return 0;
         }
@@ -4947,9 +4963,9 @@ int edfs_use_key(struct edfs *edfs_context, const char *private_key, const char 
     return 0;
 }
 
-int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
+void *edfs_find_key_opaque(struct edfs *edfs_context, const char *key_id) {
     if ((!edfs_context) || (!key_id))
-        return -1;
+        return NULL;
 
     uint64_t use_key_id = 0;
     if (strlen(key_id) > 32) {
@@ -4972,17 +4988,25 @@ int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
 
     struct edfs_key_data *key = edfs_context->key_data;
     while (key) {
-        if (key->key_id_xxh64_be == use_key_id) {
-            edfs_context->primary_key = key;
-#ifdef EDWORK_PEER_DISCOVERY_SERVICE
-            edwork_broadcast_discovery_key(edfs_context, key);
-#endif
-            edfs_settings_set_number(edfs_context, "edfs.primary_key", XXH32(key->key_id, sizeof(key->key_id), 0));
-            return 0;
-        }
+        if (key->key_id_xxh64_be == use_key_id)
+            return key;
         key = (struct edfs_key_data *)key->next_key;
     }
-    return -1;
+
+    return NULL;
+}
+
+int edfs_chkey(struct edfs *edfs_context, const char *key_id) {
+    struct edfs_key_data *key = (struct edfs_key_data *)edfs_find_key_opaque(edfs_context, key_id);
+    if (!key)
+        return -1;
+
+    edfs_context->primary_key = key;
+#ifdef EDWORK_PEER_DISCOVERY_SERVICE
+    edwork_broadcast_discovery_key(edfs_context, key);
+#endif
+    edfs_settings_set_number(edfs_context, "edfs.primary_key", XXH32(key->key_id, sizeof(key->key_id), 0));
+    return 0;
 }
 
 int edfs_rmkey(struct edfs *edfs_context, const char *key_id) {
@@ -5044,54 +5068,24 @@ int edfs_rmkey(struct edfs *edfs_context, const char *key_id) {
 }
 
 int edfs_storage_info(struct edfs *edfs_context, const char *key_id, uint64_t *size, uint64_t *files, uint64_t *directories, uint64_t *top_block, uint64_t *timestamp) {
-    if ((!edfs_context) || (!key_id))
+    struct edfs_key_data *key = (struct edfs_key_data *)edfs_find_key_opaque(edfs_context, key_id);
+    if (!key)
         return -1;
 
-    if ((!edfs_context) || (!key_id))
-        return -1;
-
-    uint64_t use_key_id = 0;
-    if (strlen(key_id) > 32) {
-        unsigned char public_key[MAX_KEY_SIZE];
-        size_t len = base64_decode_no_padding((const BYTE *)key_id, public_key, MAX_KEY_SIZE);
-        if (len >= 32) {
-            if (len == 64) {
-                public_key[0] &= 248;
-                public_key[31] &= 63;
-                public_key[31] |= 64;
-
-                ed25519_get_pubkey(public_key, public_key);
-            }
-            unsigned char hash[32];
-            sha256(public_key, 32, hash);
-            use_key_id = htonll(XXH64(hash, 32, 0));
-        }
-    } else
-        base32_decode((const BYTE *)key_id, (BYTE *)&use_key_id, sizeof(uint64_t));
-
-    struct edfs_key_data *key = edfs_context->key_data;
-    struct edfs_key_data *prev_key = NULL;
-    while (key) {
-        if (key->key_id_xxh64_be == use_key_id) {
-            char fullpath[MAX_PATH_LEN];
-            fullpath[0] = 0;
-            snprintf(fullpath, MAX_PATH_LEN, "%s/%s", edfs_context->edfs_directory, key_id);
-            if (top_block) {
-                *top_block = 0;
-                if (key->chain)
-                    *top_block = key->chain->index;
-            }
-            if (timestamp) {
-                *timestamp = 0;
-                if (key->chain)
-                    *timestamp = key->chain->timestamp;
-            }
-            return recursive_dir_size(fullpath, size, files, directories);
-        }
-        prev_key = key;
-        key = (struct edfs_key_data *)key->next_key;
+    char fullpath[MAX_PATH_LEN];
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%s", edfs_context->edfs_directory, key_id);
+    if (top_block) {
+        *top_block = 0;
+        if (key->chain)
+            *top_block = key->chain->index;
     }
-    return -1;
+    if (timestamp) {
+        *timestamp = 0;
+        if (key->chain)
+            *timestamp = key->chain->timestamp;
+    }
+    return recursive_dir_size(fullpath, size, files, directories);
 }
 
 static int edfs_data_dir_remove(struct edfs *edfs_context, struct edfs_key_data *key, const char *path) {
@@ -5140,45 +5134,15 @@ static int edfs_data_dir_remove(struct edfs *edfs_context, struct edfs_key_data 
 }
 
 int edfs_remove_data(struct edfs *edfs_context, const char *key_id) {
-    if ((!edfs_context) || (!key_id))
+    struct edfs_key_data *key = (struct edfs_key_data *)edfs_find_key_opaque(edfs_context, key_id);
+    if (!key)
         return -1;
 
-    if ((!edfs_context) || (!key_id))
-        return -1;
+    char fullpath[MAX_PATH_LEN];
+    fullpath[0] = 0;
+    snprintf(fullpath, MAX_PATH_LEN, "%s/%s/inode", edfs_context->edfs_directory, key_id);
 
-    uint64_t use_key_id = 0;
-    if (strlen(key_id) > 32) {
-        unsigned char public_key[MAX_KEY_SIZE];
-        size_t len = base64_decode_no_padding((const BYTE *)key_id, public_key, MAX_KEY_SIZE);
-        if (len >= 32) {
-            if (len == 64) {
-                public_key[0] &= 248;
-                public_key[31] &= 63;
-                public_key[31] |= 64;
-
-                ed25519_get_pubkey(public_key, public_key);
-            }
-            unsigned char hash[32];
-            sha256(public_key, 32, hash);
-            use_key_id = htonll(XXH64(hash, 32, 0));
-        }
-    } else
-        base32_decode((const BYTE *)key_id, (BYTE *)&use_key_id, sizeof(uint64_t));
-
-    struct edfs_key_data *key = edfs_context->key_data;
-    struct edfs_key_data *prev_key = NULL;
-    while (key) {
-        if (key->key_id_xxh64_be == use_key_id) {
-            char fullpath[MAX_PATH_LEN];
-            fullpath[0] = 0;
-            snprintf(fullpath, MAX_PATH_LEN, "%s/%s/inode", edfs_context->edfs_directory, key_id);
-
-            return edfs_data_dir_remove(edfs_context, key, fullpath);
-        }
-        prev_key = key;
-        key = (struct edfs_key_data *)key->next_key;
-    }
-    return -1;
+    return edfs_data_dir_remove(edfs_context, key, fullpath);
 }
 
 int edfs_peers_info(struct edfs *edfs_context, char *buffer, int buffer_size, int html) {
@@ -5796,7 +5760,7 @@ int edwork_delete(struct edfs *edfs_context, struct edfs_key_data *key, const un
     }
 
 #ifndef EDFS_NO_JS
-    if (edfs_key_js_call(key, "edwork.events.ondelete", type & S_IFDIR ? "directory" : "file", NULL) == 1) {
+    if (edfs_key_js_call_args(key, "edwork.events.ondelete", "__s", inode, parent, type & S_IFDIR ? "directory" : "file") == 1) {
         log_warn("access denied by JS function");
         return 0;
     }
@@ -8470,7 +8434,7 @@ int edfs_verify_window_event(struct edfs *edfs_context, void *window) {
     while (key) {
         if (key->js_window == window) {
             log_trace("JS ui event dispatched");
-            edfs_key_js_call_safe(key, "edwork.events.onuievent", NULL);
+            edfs_key_js_call(key, "edwork.events.onuievent", NULL);
             return 1;
         }
         key = (struct edfs_key_data *)key->next_key;

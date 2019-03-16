@@ -478,7 +478,7 @@ void edfs_gui_load(void *window) {
     void *key = edfs_get_key(edfs_context);
     if (key) {
         ui_call(window, "clear_keys", NULL);
-        const char *key_arguments[] = {"", "", "", "", NULL};
+        const char *key_arguments[] = {"", "", "", "", "", NULL};
         while (key) {
             key_arguments[0] = edfs_key_id(key, buffer1);
             key_arguments[1] = edfs_public_key(key, buffer2);
@@ -487,7 +487,12 @@ void edfs_gui_load(void *window) {
                 key_arguments[3] = "true";
             else
                 key_arguments[3] = "";
-
+#ifndef EDFS_NO_JS
+            if (((struct edfs_key_data *)key)->js)
+                key_arguments[4] = "true";
+            else
+                key_arguments[4] = "";
+#endif
             ui_call(window, "add_key", key_arguments);
 
             key = edfs_next_key(key);
@@ -599,6 +604,19 @@ void edfs_gui_callback(void *window) {
                     ui_free_string(use);
                 }
                 break;
+#ifndef EDFS_NO_JS
+            case 'j':
+                {
+                    struct edfs_key_data *key_data = (struct edfs_key_data *)edfs_find_key_opaque(edfs_context, foo + 1);
+                    if (key_data) {
+                        log_trace("launch application");
+                        edfs_key_js_call(key_data, "edwork.events.onlaunch", NULL);
+                    } else {
+                        log_error("error launching application");
+                    }
+                }
+                break;
+#endif
         }
         ui_free_string(foo);
     }

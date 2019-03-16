@@ -1067,37 +1067,73 @@ void ui_app_quit() {
     PostQuitMessage(0);
 }
 
+BSTR MakeBSTR(const char *js) {
+    BSTR bstr;
+#ifndef UNICODE
+    {
+        wchar_t        *buffer;
+        DWORD        size;
+
+        size = MultiByteToWideChar(CP_UTF8, 0, js, -1, 0, 0);
+        if (!(buffer = (wchar_t *)GlobalAlloc(GMEM_FIXED, sizeof(wchar_t) * size)))
+            return NULL;
+        MultiByteToWideChar(CP_UTF8, 0, js, -1, buffer, size);
+        bstr = SysAllocString(buffer);
+        GlobalFree(buffer);
+    }
+#else
+    bstr = SysAllocString(js);
+#endif
+    return bstr;
+}
+
 void ui_message(const char *title, const char *body, int level) {
+    BSTR wtitle = MakeBSTR(title);
+    BSTR wbody = MakeBSTR(body);
+
     switch (level) {
         case 1:
-            MessageBox(0, body, title, MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(0, wbody, wtitle, MB_OK | MB_ICONINFORMATION);
             break;
         case 2:
-            MessageBox(0, body, title, MB_OK | MB_ICONWARNING);
+            MessageBoxW(0, wbody, wtitle, MB_OK | MB_ICONWARNING);
             break;
         case 3:
-            MessageBox(0, body, title, MB_OK | MB_ICONEXCLAMATION);
+            MessageBoxW(0, wbody, wtitle, MB_OK | MB_ICONEXCLAMATION);
             break;
         default:
-            MessageBox(0, body, title, MB_OK);
+            MessageBoxW(0, wbody, wtitle, MB_OK);
     }
+
+    if (wtitle)
+        SysFreeString(wtitle);
+    if (wbody)
+        SysFreeString(wbody);
 }
 
 int ui_question(const char *title, const char *body, int level) {
+    BSTR wtitle = MakeBSTR(title);
+    BSTR wbody = MakeBSTR(body);
     int yes_or_no = 0;
+
     switch (level) {
         case 1:
-            yes_or_no = MessageBox(0, body, title, MB_YESNO | MB_ICONINFORMATION);
+            yes_or_no = MessageBoxW(0, wbody, wtitle, MB_YESNO | MB_ICONINFORMATION);
             break;
         case 2:
-            yes_or_no = MessageBox(0, body, title, MB_YESNO | MB_ICONWARNING);
+            yes_or_no = MessageBoxW(0, wbody, wtitle, MB_YESNO | MB_ICONWARNING);
             break;
         case 3:
-            yes_or_no = MessageBox(0, body, title, MB_YESNO | MB_ICONEXCLAMATION);
+            yes_or_no = MessageBoxW(0, wbody, wtitle, MB_YESNO | MB_ICONEXCLAMATION);
             break;
         default:
-            yes_or_no = MessageBox(0, body, title, MB_YESNO);
+            yes_or_no = MessageBoxW(0, wbody, wtitle, MB_YESNO);
     }
+
+    if (wtitle)
+        SysFreeString(wtitle);
+    if (wbody)
+        SysFreeString(wbody);
 
     if (yes_or_no == IDYES)
         return 1;
@@ -1129,26 +1165,6 @@ int ui_input(const char *title, const char *body, char *val, int val_len, int ma
         return 1;
 
     return 0;
-}
-
-BSTR MakeBSTR(const char *js) {
-    BSTR bstr;
-#ifndef UNICODE
-    {
-        wchar_t        *buffer;
-        DWORD        size;
-
-        size = MultiByteToWideChar(CP_UTF8, 0, js, -1, 0, 0);
-        if (!(buffer = (wchar_t *)GlobalAlloc(GMEM_FIXED, sizeof(wchar_t) * size)))
-            return NULL;
-        MultiByteToWideChar(CP_UTF8, 0, js, -1, buffer, size);
-        bstr = SysAllocString(buffer);
-        GlobalFree(buffer);
-    }
-#else
-    bstr = SysAllocString(js);
-#endif
-    return bstr;
 }
 
 void ui_js(void *wnd, const char *js) {

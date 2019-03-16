@@ -77,7 +77,7 @@ struct edfs_key_data {
     void *edfs_context;
     void *js_window;
 
-    unsigned char no_js_lock;
+    thread_id_t js_thread_lock;
     unsigned char js_exit;
     unsigned char reload_js;
 #endif
@@ -89,12 +89,13 @@ struct edfs_key_data {
 int edfs_key_data_init(struct edfs_key_data *key_data, const char *use_working_directory);
 void edfs_key_data_deinit(struct edfs_key_data *key_data);
 #ifndef EDFS_NO_JS
+void edfs_key_data_js_lock(struct edfs_key_data *key_data, int lock);
 struct edfs_key_data *edfs_key_data_get_from_js(duk_context *js);
 int edfs_key_data_load_js(struct edfs_key_data *key_data, const char *js_data);
 void edfs_key_data_reset_js(struct edfs_key_data *key_data);
 void edfs_key_data_js_loop(struct edfs_key_data *key_data);
 int edfs_key_js_call(struct edfs_key_data *key_data, const char *jscall, ... );
-int edfs_key_js_call_safe(struct edfs_key_data *key_data, const char *jscall, ... );
+int edfs_key_js_call_args(struct edfs_key_data *key_data, const char *jscall, const char *fmt, ... );
 const char *edfs_key_data_js_error(struct edfs_key_data *key_data);
 #endif
 

@@ -6,6 +6,7 @@
 #include "edfs_key_data.h"
 #include "edfs_core.h"
 #include "edfs_js_mustache.h"
+#include "parson.h"
 
 // max 10Mb of storage
 #define MAX_JS_SESSION_DATA 10 * 1024 * 1024
@@ -25,6 +26,10 @@
 char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size, uint64_t offset, int max_size);
 int edfs_write_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *base_path, const char *name, const unsigned char *data, int len, const char *suffix, int do_sign, unsigned char *compressed_buffer, unsigned long *max_len, unsigned char signature[64], int *sig_size, int signature_prefix, uint64_t inode, int64_t chunk);
 int edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *base_path, const char *name, unsigned char *data, int len, const char *suffix, int as_text_file, int check_signature, int compression, int *filesize, uint32_t signature_hash, int signature_prefix, uint64_t inode, int64_t chunk);
+
+const char *computename(uint64_t inode, char *out);
+uint64_t unpacked_ino(const char *data);
+JSON_Value *read_json(struct edfs *edfs_context, struct edfs_key_data *key, const char *base_path, uint64_t inode);
 
 #define JS_REGISTER(js, js_c_function)  edfs_js_register(js, js_c_function, #js_c_function)
 
@@ -86,7 +91,15 @@ static const char EDFS_JS_API[] = ""
             "},\n"
             "\"unlink\": function(path) {\n"
                 "return __edfs_private_unlink(path);\n"
-            "}\n"
+            "},\n"
+            "\"inode\": function(path) {\n"
+                "return __edfs_private_inode(path);\n"
+            "},"
+            "\"attr\": function(inode) {\n"
+                "var str = __edfs_private_attr(inode);\n"
+                "if (str)"
+                    "return JSON.parse(str);"
+            "}"
         "},\n"
         "\"session\": {\n"
             "\"data\": { },\n"
@@ -118,7 +131,7 @@ static const char EDFS_JS_API[] = ""
         "\"smartcard\": {\n"
             "\"request\": __edfs_private_request,\n"
             "\"disconnect\": __edfs_private_disconnect,\n"
-            "\"connected\": __edfs_private_connected\n"
+            "\"isConnected\": __edfs_private_connected\n"
         "},\n"
         "\"events\": {\n"
         "},\n"
@@ -551,7 +564,7 @@ static void __edfs_private_ui_window_action(void *data) {
                     char *val = ui_call(ui_context->key->js_window, ui_context->buffer1.buffer, argv);
                     log_debug("UI JS function call: %s = %s(%s)", val, ui_context->buffer1.buffer, argv);
                     if (ui_context->key->js)
-                        edfs_key_js_call_safe(ui_context->key, "edwork.ui.__windowcallback", val, NULL);
+                        edfs_key_js_call(ui_context->key, "edwork.ui.__windowcallback", val, NULL);
                     if (val)
                         ui_free_string(val);
 
@@ -929,11 +942,7 @@ static unsigned int edfs_js_add_directory(const char *name, uint64_t ino, int ty
         duk_push_number(js, (double)modified);
         duk_push_number(js, (double)timestamp);
 
-        struct edfs_key_data *key = edfs_key_data_get_from_js(js);
-        unsigned char old_js_lock = key->no_js_lock;
-        key->no_js_lock = 1;
         duk_call(js, 7);
-        key->no_js_lock = old_js_lock;
 
         int ret_val = 0;
         if (duk_get_type(js, -1))
@@ -1000,6 +1009,43 @@ static int __edfs_private_readsignature(duk_context *js) {
     return 0;
 }
 
+static int __edfs_private_inode(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *path = duk_get_string(js, 0);
+        char buf[32];
+        uint64_t inode = edfs_pathtoinode_key(key, path ? path : "", NULL, NULL);
+        duk_push_string(js, computename(inode, buf));
+        return 1;
+    }
+    return 0;
+}
+
+static int __edfs_private_attr(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if ((str) && (str[0])) {
+            JSON_Value *root_value = read_json((struct edfs *)key->edfs_context, key, key->working_directory, unpacked_ino(str));
+            if (root_value) {
+                char *serialized_string = json_serialize_to_string_pretty(root_value);
+                duk_push_string(js, serialized_string);
+                json_free_serialized_string(serialized_string);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static void edfs_js_register(duk_context *js, duk_c_function c_js_function, const char *name) {
     duk_push_global_object(js);
     duk_push_c_function(js, c_js_function, DUK_VARARGS);
@@ -1046,12 +1092,13 @@ int edfs_js_register_all(duk_context *js) {
     JS_REGISTER(js, __edfs_private_truncate);
     JS_REGISTER(js, __edfs_private_exists);
     JS_REGISTER(js, __edfs_private_is_directory);
+    JS_REGISTER(js, __edfs_private_readdir);
+    JS_REGISTER(js, __edfs_private_readsignature);
     JS_REGISTER(js, __edfs_private_mkdir);
     JS_REGISTER(js, __edfs_private_rmdir);
     JS_REGISTER(js, __edfs_private_unlink);
-
-    JS_REGISTER(js, __edfs_private_readdir);
-    JS_REGISTER(js, __edfs_private_readsignature);
+    JS_REGISTER(js, __edfs_private_inode);
+    JS_REGISTER(js, __edfs_private_attr);
 
     char api_buf[0x7FFF];
     char key_id[256];
