@@ -34,6 +34,7 @@ struct edfs_key_data {
     avl_tree_t ino_sync_file;
 
     avl_tree_t notify_write;
+    avl_tree_t allow_data;
     thread_mutex_t notify_write_lock;
 
     unsigned char proof_of_time[40];

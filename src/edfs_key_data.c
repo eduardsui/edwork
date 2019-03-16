@@ -47,6 +47,7 @@ int edfs_key_data_init(struct edfs_key_data *key_data, const char *use_working_d
     avl_initialize(&key_data->ino_checksum_mismatch, avl_ino_compare, avl_dummy_key_destructor);
     avl_initialize(&key_data->ino_sync_file, avl_ino_compare, avl_dummy_key_destructor);
     avl_initialize(&key_data->notify_write, avl_ino_compare, avl_dummy_key_destructor);
+    avl_initialize(&key_data->allow_data, avl_ino_compare, avl_dummy_key_destructor);
 
     key_data->working_directory = edfs_add_to_path(use_working_directory, "inode");
     key_data->cache_directory = edfs_add_to_path(use_working_directory, "cache");
@@ -275,6 +276,7 @@ void edfs_key_data_deinit(struct edfs_key_data *key_data) {
         duk_destroy_heap(key_data->js);
     free(key_data->js_last_error);
 #endif
+    avl_destroy(&key_data->allow_data, avl_dummy_destructor);
     avl_destroy(&key_data->notify_write, avl_dummy_destructor);
     avl_destroy(&key_data->ino_cache, avl_key_data_destroy);
     avl_destroy(&key_data->ino_checksum_mismatch, avl_dummy_destructor);

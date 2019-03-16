@@ -638,8 +638,7 @@ int edfs_file_unlock(struct edfs *edfs_context, FILE *f) {
 }
 
 void edfs_notify_write(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, int write) {
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&key->notify_write_lock);
+    thread_mutex_lock(&key->notify_write_lock);
     intptr_t write_count = (intptr_t)avl_remove(&key->notify_write, (void *)(uintptr_t)inode);
     if (write)
         write_count ++;
@@ -647,17 +646,35 @@ void edfs_notify_write(struct edfs *edfs_context, struct edfs_key_data *key, uin
         write_count --;
     if (write_count > 0)
         avl_insert(&key->notify_write, (void *)(uintptr_t)inode, (void *)write_count);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&key->notify_write_lock);
+    thread_mutex_unlock(&key->notify_write_lock);
 }
 
 intptr_t edfs_is_write(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
-    if (edfs_context->mutex_initialized)
-        thread_mutex_lock(&key->notify_write_lock);
+    thread_mutex_lock(&key->notify_write_lock);
     intptr_t write_count = (intptr_t)avl_search(&key->notify_write, (void *)(uintptr_t)inode);
-    if (edfs_context->mutex_initialized)
-        thread_mutex_unlock(&key->notify_write_lock);
+    thread_mutex_unlock(&key->notify_write_lock);
     return write_count;
+}
+
+intptr_t edfs_may_write_block(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
+    thread_mutex_lock(&key->notify_write_lock);
+    intptr_t write_count = (intptr_t)avl_search(&key->notify_write, (void *)(uintptr_t)inode);
+    if (!write_count) {
+        thread_mutex_unlock(&key->notify_write_lock);
+        return 1;
+    }
+    intptr_t allow_data = (intptr_t)avl_search(&key->allow_data, (void *)(uintptr_t)inode);
+    thread_mutex_unlock(&key->notify_write_lock);
+    return allow_data;
+}
+
+void edfs_notify_allow_write_block(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, int allow) {
+    thread_mutex_lock(&key->notify_write_lock);
+    if (allow)
+        avl_insert(&key->allow_data, (void *)(uintptr_t)inode, (void *)1);
+    else
+        avl_remove(&key->allow_data, (void *)(uintptr_t)inode);
+    thread_mutex_unlock(&key->notify_write_lock);
 }
 
 void notify_io(struct edfs *edfs_context, struct edfs_key_data *key, const char type[4], const unsigned char *buffer, int buffer_size, const unsigned char *append_data, int append_len, unsigned char ack, int do_sign, uint64_t ino, struct edwork_data *edwork, int proof_of_work, int loose_encrypt, void *use_clientaddr, int clientaddr_len, unsigned char *proof_of_work_cache, int *proof_of_work_size_cache) {
@@ -3137,6 +3154,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
     // if ((filebuf->check_hash) && ((filebuf->flags & 3) == O_RDONLY) && (edfs_is_write(edfs_context, key, ino)))
     //     filebuf->check_hash = 0;
 
+    int may_notify_write_block = 0;
     if (filebuf->check_hash) {
         if ((filebuf->written_data) && (filebuf->hash_buffer) && (filebuf->hash_buffer->read_size)) {
             char b64name[MAX_B64_HASH_LEN];
@@ -3147,6 +3165,7 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
             filebuf->read_hash_buffer = NULL;
             filebuf->read_hash_buffer_size = 0;
             filebuf->read_hash_cunk = 0;
+            may_notify_write_block = 1;
         }
         sig_hash = edfs_get_hash(edfs_context, key, path, ino, chunk, ((filebuf->flags & 3) == O_RDONLY) ? filebuf : NULL);
     }
@@ -3201,12 +3220,20 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
                 filebuf->read_buffer_size = 0;
             }
             if (read_size < 0) {
-                log_warn("deleting invalid chunk %s/%s", path, name);
+                if (edfs_is_write(edfs_context, key, ino)) {
+                    // make hash buffer expired
+                    filebuf->expires = 0;
+                    if ((filebuf->check_hash) && (sig_hash))
+                        sig_hash = edfs_get_hash(edfs_context, key, path, ino, chunk, ((filebuf->flags & 3) == O_RDONLY) ? filebuf : NULL);
+                    log_warn("invalid chunk %s/%s (file is opened)", path, name);
+                } else {
+                    log_warn("deleting invalid chunk %s/%s", path, name);
 #ifdef EDFS_EMULTATED_STORE
-                store_unlink(path, chunk % STORE_CHUNKS_PER_FILE);
+                    store_unlink(path, chunk % STORE_CHUNKS_PER_FILE);
 #else
-                edfs_unlink_file(edfs_context, path, name);
+                    edfs_unlink_file(edfs_context, path, name);
 #endif
+                }
             }
 #ifdef EDFS_REMOVE_INCOMPLETE_CHUNKS
             if ((read_size > 0) && (read_size < size) && (chunk < filebuf->last_read_chunk)) {
@@ -3223,6 +3250,11 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
 #endif
         }
         if (read_size < 0) {
+            if (may_notify_write_block == 1) {
+                edfs_notify_allow_write_block(edfs_context, key, ino, 1);
+                may_notify_write_block = 2;
+            }
+
             if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
                 log_error("read timed out");
                 if (is_sctp) {
@@ -3273,8 +3305,11 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
             // end of file, no more queries
             // this is made to avoid an unnecessary edwork query
             if ((filebuf) && (filebuf->file_size > 0)) {
-                if (chunk > last_file_chunk)
+                if (chunk > last_file_chunk) {
+                    if (may_notify_write_block == 2)
+                        edfs_notify_allow_write_block(edfs_context, key, ino, 0);
                     return read_size;
+                }
             }
 #ifdef EDFS_USE_READ_QUEUE
             if (!filebuf->read_queued) {
@@ -3354,10 +3389,14 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
 #ifdef WITH_CACHE_WARMUP
             edfs_request_cache_warming(edfs_context, filebuf->key, ino, chunk + 5);
 #endif
+            if (may_notify_write_block == 2)
+                edfs_notify_allow_write_block(edfs_context, key, ino, 0);
             return read_size;
         }
         i++;
     } while (!edfs_context->network_done);
+    if (may_notify_write_block == 2)
+        edfs_notify_allow_write_block(edfs_context, key, ino, 0);
     return -EIO;
 }
 
@@ -3597,6 +3636,8 @@ int edfs_open_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino
         if (((edfs_context->read_only_fs) || (key->read_only)) && ((flags & 3) != O_RDONLY))
             return -EROFS;
 
+        if (((flags & 3) != O_RDONLY) && (edfs_is_write(edfs_context, key, ino)))
+            return -EBUSY;
 #ifdef WITH_CACHE_WARMUP
         edfs_request_cache_warming(edfs_context, key, ino, 0);
 #endif
@@ -4033,6 +4074,21 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
     return written_bytes;
 }
 
+int edfs_check_block_hash(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, int64_t chunk, const unsigned char *data, size_t size) {
+    char b64name[MAX_B64_HASH_LEN];
+    char fullpath[MAX_PATH_LEN];
+
+    if ((!data) || (size < 64))
+        return 0;
+
+    adjustpath(key, fullpath, computename(inode, b64name));
+    uint32_t hash = edfs_get_hash(edfs_context, key, fullpath, inode, chunk, NULL);
+    if ((!hash) || (hash == XXH32(data, 64, 0)))
+        return 1;
+    log_warn("invalid signature hash %x", hash);
+    return 0;
+}
+
 int edfs_write_block(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode, int64_t chunk, const unsigned char *data, size_t size, time_t timestamp) {
     char fullpath[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
@@ -4040,21 +4096,30 @@ int edfs_write_block(struct edfs *edfs_context, struct edfs_key_data *key, uint6
 
 #ifdef EDFS_EMULATED_STORE
     store_adjustpath2(key, fullpath, computename(inode, b64name), chunk / STORE_CHUNKS_PER_FILE);
-    if ((timestamp) && (!store_stat(fullpath, chunk % STORE_CHUNKS_PER_FILE, &attrib))) {
-        // at least 3 seconds after creation
-        if (attrib.st_ctime - attrib.st_mtime >= 3) {
-            if ((attrib.st_mtime > timestamp) && (attrib.st_size >= size)) {
-                log_info("file block %s is newer than received", fullpath);
-                return -1;
-            }
+    if (!store_stat(fullpath, chunk % STORE_CHUNKS_PER_FILE, &attrib)) {
+        if (!edfs_may_write_block(edfs_context, key, inode)) {
+            log_warn("refused to update file block because file is open for write");
+            return -1;
+        }
+        if (timestamp) {
+            // at least 3 seconds after creation
+            if (attrib.st_ctime - attrib.st_mtime >= 3) {
+                if ((attrib.st_mtime > timestamp) && (attrib.st_size >= size)) {
+                    log_info("file block %s is newer than received", fullpath);
+                    return -1;
+                }
 
-            if ((attrib.st_mtime == timestamp) && (attrib.st_size == size)) {
-                log_info("file block %s seems the same (%i bytes)", fullpath, size);
-                return -1;
+                if ((attrib.st_mtime == timestamp) && (attrib.st_size == size)) {
+                    log_info("file block %s seems the same (%i bytes)", fullpath, size);
+                    return -1;
+                }
             }
         }
+        if (!edfs_check_block_hash(edfs_context, key, inode, chunk, data, size)) {
+            log_warn("refused to update file block: hash mismatch");
+            return -1;
+        }
     }
-
     struct store_data *f = store_open(fullpath, 1, chunk % STORE_CHUNKS_PER_FILE);
     if (!f) {
         log_error("error opening block file %s", fullpath);
@@ -4082,19 +4147,28 @@ int edfs_write_block(struct edfs *edfs_context, struct edfs_key_data *key, uint6
     store_close(f);
 #else
     adjustpath2(key, fullpath, computename(inode, b64name), chunk);
+    if (!stat(fullpath, &attrib)) {
+        if (!edfs_may_write_block(edfs_context, key, inode)) {
+            log_warn("refused to update file block because file is open for write");
+            return -1;
+        }
+        if (timestamp) {
+            // at least 3 seconds after creation
+            if (attrib.st_ctime - attrib.st_mtime >= 3) {
+                if ((attrib.st_mtime > timestamp) && (attrib.st_size >= size)) {
+                    log_info("file block %s is newer than received", fullpath);
+                    return -1;
+                }
 
-    if ((timestamp) && (!stat(fullpath, &attrib))) {
-        // at least 3 seconds after creation
-        if (attrib.st_ctime - attrib.st_mtime >= 3) {
-            if ((attrib.st_mtime > timestamp) && (attrib.st_size >= size)) {
-                log_info("file block %s is newer than received", fullpath);
-                return -1;
+                if ((attrib.st_mtime == timestamp) && (attrib.st_size == size)) {
+                    log_info("file block %s seems the same (%i bytes)", fullpath, size);
+                    return -1;
+                }
             }
-
-            if ((attrib.st_mtime == timestamp) && (attrib.st_size == size)) {
-                log_info("file block %s seems the same (%i bytes)", fullpath, size);
-                return -1;
-            }
+        }
+        if (!edfs_check_block_hash(edfs_context, key, inode, chunk, data, size)) {
+            log_warn("refused to update file block: hash mismatch");
+            return -1;
         }
     }
 
@@ -4134,17 +4208,23 @@ int edfs_write_hash_block(struct edfs *edfs_context, struct edfs_key_data *key, 
     adjustpath3(key, fullpath, computename(inode, b64name), chunk);
 
     struct stat attrib;
-    if ((timestamp) && (!stat(fullpath, &attrib))) {
-        // at least 3 seconds after creation
-        if (attrib.st_ctime - attrib.st_mtime >= 3) {
-            if ((attrib.st_mtime > timestamp) && (attrib.st_size >= size)) {
-                log_info("hash block %s is newer than received", fullpath);
-                return -1;
-            }
+    if (!stat(fullpath, &attrib)) {
+        if (!edfs_may_write_block(edfs_context, key, inode)) {
+            log_warn("refused to update hash because file is open for write");
+            return -1;
+        }
+        if (timestamp) {
+            // at least 3 seconds after creation
+            if (attrib.st_ctime - attrib.st_mtime >= 3) {
+                if ((attrib.st_mtime > timestamp) && (attrib.st_size >= size)) {
+                    log_info("hash block %s is newer than received", fullpath);
+                    return -1;
+                }
 
-            if ((attrib.st_mtime == timestamp) && (attrib.st_size == size)) {
-                log_info("hash block %s seems the same (%i bytes)", fullpath, size);
-                return -1;
+                if ((attrib.st_mtime == timestamp) && (attrib.st_size == size)) {
+                    log_info("hash block %s seems the same (%i bytes)", fullpath, size);
+                    return -1;
+                }
             }
         }
     }
@@ -4243,10 +4323,6 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
             p += err;
             size -= err;
             offset += err;
-            if (!fbuf->written_data) {
-                fbuf->written_data = 1;
-                edfs_notify_write(edfs_context, fbuf->key, ino, 1);
-            }
         }
 
         if (offset > initial_filesize) {
@@ -4275,6 +4351,10 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
 
 int edfs_write_cache(struct edfs *edfs_context, edfs_ino_t ino, const char *buf, size_t size, int64_t off, struct filewritebuf *fbuf) {
     if (fbuf) {
+        if (!fbuf->written_data) {
+            fbuf->written_data = 1;
+            edfs_notify_write(edfs_context, fbuf->key, ino, 1);
+        }
         if (fbuf->offset != off) {
             int err = edfs_flush_chunk(edfs_context, ino, fbuf);
             if (err < 0)
@@ -5699,6 +5779,7 @@ int edwork_process_hash(struct edfs *edfs_context, struct edfs_key_data *key, co
         // includes a signature
         if (signature_size)
             datasize += 64;
+
         int written_bytes = edfs_write_hash_block(edfs_context, key, inode, chunk, payload + 32 + signature_size, datasize, timestamp / 1000000);
         edwork_cache_addr(edfs_context, key, inode, clientaddr, clientaddrlen);
         if (written_bytes == datasize) {
