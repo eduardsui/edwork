@@ -1196,7 +1196,7 @@ int main(int argc, char *argv[]) {
                 } else
 #endif
                 if (!strcmp(arg, "help")) {
-                    fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
+                    fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018-2019 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
                         "    -loglevel level    set log level, 0 to 5 or trace,debug,info,warning,error\n"
                         "    -logfile filename  set log filename\n"
@@ -1250,7 +1250,7 @@ int main(int argc, char *argv[]) {
         exit(0);
     }
     if (!mountpoint) {
-        fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nTo list all options, run with -help option\n");
+        fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018-2019 by Eduard Suica\nTo list all options, run with -help option\n");
 #ifdef _WIN32
         mountpoint = "J";
 #else

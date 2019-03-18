@@ -247,13 +247,21 @@ int main(int argc, char *argv[]) {
                     edfs_set_initial_friend(edfs_context, argv[i]);
                     edfs_set_resync(edfs_context, 1);
                 } else
+#ifndef EDFS_NO_JS
+                if (!strcmp(arg, "app")) {
+                    edfs_set_app_mode(edfs_context, 1);
+                } else 
+                if (!strcmp(arg, "debugapp")) {
+                    edfs_set_app_mode(edfs_context, 2);
+                } else 
+#endif
                 if (!strcmp(arg, "resync")) {
                     edfs_set_resync(edfs_context, 1);
                 } else
                 if (!strcmp(arg, "rebroadcast")) {
                     edfs_set_rebroadcast(edfs_context, 1);
                 } else {
-                    fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast] mount_point\n", argv[0]);
+                    fprintf(stderr, "EdFS 1.0BETA, unlicensed 2019 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast][-app|-debugapp] mount_point\n", argv[0]);
                     exit(-1);
                 }
             }
@@ -262,7 +270,7 @@ int main(int argc, char *argv[]) {
 
     log_info("starting edfs on port %i", port);
 
-    fprintf(stdout, "Welcome to edwork 0.1BETA console\nSupported commands are: ls, cd, get, put, rmdir, rm, open, lk, chkey, newkey, addkey, clean [key], exit\n");
+    fprintf(stdout, "Welcome to edwork 1.0BETA console\nSupported commands are: ls, cd, get, put, rmdir, rm, open, lk, chkey, newkey, addkey, clean [key], exit\n");
     char buffer[0x100];
     edfs_edwork_init(edfs_context, port);
     char working_dir[4096];

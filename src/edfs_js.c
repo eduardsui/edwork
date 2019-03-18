@@ -21,6 +21,11 @@
     #include "ui/htmlwindow.h"
 
     void edfs_tray_notify(void *menuwindow);
+#ifdef EDFS_CONSOLE
+    void edfs_tray_notify(void *menuwindow) {
+        // nothing;
+    }
+#endif
 #endif
 
 char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size, uint64_t offset, int max_size);
