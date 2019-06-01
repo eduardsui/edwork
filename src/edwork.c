@@ -1061,6 +1061,29 @@ struct edwork_data *edwork_create(int port, edwork_find_key_callback find_key) {
     return data;
 }
 
+void edwork_reset_id(struct edwork_data *data) {
+    if (!data)
+        return;
+
+    unsigned char random[32];
+    uint64_t rand = edwork_random();
+    memcpy(random, &rand, sizeof(uint64_t));
+    rand = edwork_random();
+    memcpy(random + 8, &rand, sizeof(uint64_t));
+    rand = edwork_random();
+    memcpy(random + 16, &rand, sizeof(uint64_t));
+    rand = edwork_random();
+    memcpy(random + 24, &rand, sizeof(uint64_t));
+
+    sha256(random, 32, data->i_am);
+
+    data->sequence = edwork_random();
+
+    // my version (1.0)
+    data->i_am[0] = 0x01;
+    data->i_am[1] = 0x00;
+}
+
 int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_work, int proof_of_work_size) {
     char *proof = (char *)malloc(proof_of_work_size + 1);
     if (!proof)
@@ -2137,6 +2160,12 @@ unsigned int edwork_magnitude(struct edwork_data *data) {
     thread_mutex_unlock(&data->clients_lock);
 
     return magnitude;
+}
+
+int edwork_udp_socket(struct edwork_data *data) {
+    if (!data)
+        return -1;
+    return data->socket;
 }
 
 #ifdef WITH_SCTP

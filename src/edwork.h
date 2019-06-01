@@ -48,6 +48,7 @@ unsigned int edwork_magnitude(struct edwork_data *data);
 const unsigned char *edwork_who_i_am(struct edwork_data *data);
 int edwork_try_spend(struct edwork_data *data, const unsigned char *proof_of_work, int proof_of_work_size);
 int edwork_unspend(struct edwork_data *data, const unsigned char *proof_of_work, int proof_of_work_size);
+int edwork_udp_socket(struct edwork_data *data);
 #ifdef WITH_SCTP
 int edwork_is_sctp(struct edwork_data *data, const void *clientaddr_ptr);
 void edwork_force_sctp(struct edwork_data *data, int force_sctp);
@@ -57,8 +58,8 @@ const char *edwork_addr_ipv4(const void *clientaddr_ptr);
 void edwork_close(struct edwork_data *data);
 void edwork_destroy(struct edwork_data *data);
 void edwork_callback_lock(struct edwork_data *data, int lock);
+void edwork_reset_id(struct edwork_data *data);
 
 void edwork_done();
 
 #endif // __EDWORK_H
-
