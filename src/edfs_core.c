@@ -7412,6 +7412,11 @@ int edwork_load_key(struct edfs *edfs_context, const char *filename) {
     return 1;
 }
 
+static int edfs_schedule_free(struct doops_loop *loop, void *foreachdata) {
+    free(loop_event_data(loop));
+    return 0;
+}
+
 int edwork_load_keys(struct edfs *edfs_context) {
     tinydir_dir dir;
     if (tinydir_open(&dir, edfs_context->edfs_directory))
@@ -7662,6 +7667,11 @@ int edwork_thread(void *userdata) {
         }
     }, 2000);
     loop_run(&edfs_context->loop);
+
+    loop_foreach_callback(&edfs_context->loop, edfs_schedule_foreach, edfs_schedule_free, NULL);
+    loop_foreach_callback(&edfs_context->loop, edfs_schedule_foreach_data, edfs_schedule_free, NULL);
+
+    loop_deinit(&edfs_context->loop);
 
     log_set_lock(NULL);
     log_set_udata(NULL);
