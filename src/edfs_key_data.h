@@ -15,6 +15,18 @@
 #define MAX_KEY_SIZE                8192
 #define MAX_PROOF_INODES        300
 
+struct edfs_key_vote_item {
+    unsigned char vote_key[0xFF];
+    unsigned int count;
+};
+
+struct edfs_key_vote_data {
+    unsigned char subject[0xFF];
+    struct edfs_key_vote_item *votes;
+    int vote_size;
+    int timeout;
+};
+
 struct edfs_key_data {
     unsigned char pubkey[MAX_KEY_SIZE];
     unsigned char sigkey[MAX_KEY_SIZE];
@@ -32,6 +44,7 @@ struct edfs_key_data {
 
     avl_tree_t ino_checksum_mismatch;
     avl_tree_t ino_sync_file;
+    avl_tree_t vote_list;
 
     avl_tree_t notify_write;
     avl_tree_t allow_data;
@@ -83,11 +96,16 @@ struct edfs_key_data {
     unsigned char reload_js;
 #endif
 
+    struct edfs_key_vote_data *votes;
+    int vote_size;
+
     void *next_key;
 };
 
 
 int edfs_key_data_init(struct edfs_key_data *key_data, const char *use_working_directory);
+int edfs_key_data_vote(struct edfs_key_data *key_data, const unsigned char *subject, int subject_size, const unsigned char *vote, int vote_size, int timeout);
+int edfs_key_data_vote_winner(struct edfs_key_data *key_data, const unsigned char *subject, int subject_size, unsigned char *vote, int vote_size);
 void edfs_key_data_deinit(struct edfs_key_data *key_data);
 #ifndef EDFS_NO_JS
 void edfs_key_data_js_lock(struct edfs_key_data *key_data, int lock);

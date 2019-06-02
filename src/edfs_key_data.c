@@ -267,6 +267,111 @@ int edfs_key_js_call_args(struct edfs_key_data *key_data, const char *jscall, co
 }
 #endif
 
+int edfs_key_data_up_vote(struct edfs_key_vote_data *vote_data, const unsigned char *vote, int vote_size) {
+    if (vote_data->timeout > time(NULL)) {
+        log_warn("voted too late");
+        return -1;
+    }
+    int i;
+    for (i = 0; i < vote_data->vote_size; i ++) {
+        if (!memcmp(vote_data->votes[i].vote_key, vote, vote_size)) {
+            vote_data->votes[i].count ++;
+            return 0;
+        }
+    }
+    
+    struct edfs_key_vote_item *old_votes = vote_data->votes;
+    vote_data->votes = (struct edfs_key_vote_item *)realloc(vote_data->votes, (vote_data->vote_size + 1) * sizeof(struct edfs_key_vote_item));
+    if (!vote_data->votes) {
+        vote_data->votes = old_votes;
+        log_error("error allocating memory");
+        return -1;
+    }
+    memset(&vote_data->votes[vote_data->vote_size], 0, sizeof(struct edfs_key_vote_item));
+    memcmp(vote_data->votes[vote_data->vote_size].vote_key, vote, vote_size);
+    vote_data->votes[vote_data->vote_size].count = 1;
+
+    vote_data->vote_size ++;
+    return 1;
+}
+
+int edfs_key_data_vote(struct edfs_key_data *key_data, const unsigned char *subject, int subject_size, const unsigned char *vote, int vote_size, int timeout) {
+    if ((!key_data) || (subject_size < 0) || (subject_size > 0xFF) || (vote_size <= 0) || (vote_size > 0xFF)) {
+        log_error("invalid vote parameters");
+        return -1;
+    }
+
+    int i;
+    struct edfs_key_vote_data *vote_data;
+
+    for (i = 0; i < key_data->vote_size; i ++) {
+        vote_data = &key_data->votes[i];
+        if (!memcmp(vote_data->subject, subject, subject_size))
+            return edfs_key_data_up_vote(vote_data, vote, vote_size);
+    }
+    struct edfs_key_vote_data *old_votes = key_data->votes;
+    key_data->votes = (struct edfs_key_vote_data *)realloc(key_data->votes, (key_data->vote_size + 1) * sizeof(struct edfs_key_vote_data));
+    if (!key_data->votes) {
+        key_data->votes = old_votes;
+        log_error("error allocating memory");
+        return -1;
+    }
+
+    vote_data = &key_data->votes[key_data->vote_size];
+    memset(vote_data, 0, sizeof(struct edfs_key_vote_data));
+    vote_data->timeout = time(NULL) + timeout + 1;
+    memcpy(vote_data->subject, subject, subject_size);
+
+    key_data->vote_size ++;
+
+    return edfs_key_data_up_vote(vote_data, vote, vote_size);
+}
+
+int edfs_key_data_vote_winner(struct edfs_key_data *key_data, const unsigned char *subject, int subject_size, unsigned char *vote, int vote_size) {
+    if ((!key_data) || (subject_size < 0) || (subject_size > 0xFF) || (!vote) || (vote_size <= 0)) {
+        log_error("invalid vote parameters");
+        return -1;
+    }
+
+    int i;
+    int j;
+
+    for (i = 0; i < key_data->vote_size; i ++) {
+        struct edfs_key_vote_data *vote_data = &key_data->votes[i];
+        if (!memcmp(vote_data->subject, subject, subject_size)) {
+            int max_votes = -1;
+            int index = -1;
+            for (j = 0; i < vote_data->vote_size; j ++) {
+                if (!memcmp(vote_data->votes[j].vote_key, vote, vote_size)) {
+                    if ((vote_data->votes[j].count > max_votes) || ((vote_data->votes[j].count == max_votes) && (memcmp(vote_data->votes[j].vote_key, vote_data->votes[index].vote_key, 0xFF) == 1))) {
+                        max_votes = vote_data->votes[j].count;
+                        index = j;
+                    }
+                }
+            }
+            if (index >= 0)
+                memcpy(vote, vote_data->votes[j].vote_key, vote_size <= 0xFF ? vote_size : 0xFF);
+
+            free(vote_data->votes);
+            vote_data->votes = NULL;
+            vote_data->vote_size = 0;
+
+            key_data->vote_size --;
+            if (key_data->vote_size) {
+                memmove(vote_data, vote_data + 1, (key_data->vote_size - i) * sizeof(struct edfs_key_vote_data));
+            } else {
+                free(key_data->votes);
+                key_data->votes = NULL;
+            }
+            if (index >= 0)
+                return 1;
+            return 0;
+        }
+    }
+
+    return 0;
+}
+
 void edfs_key_data_deinit(struct edfs_key_data *key_data) {
     if (!key_data)
         return;
@@ -282,6 +387,15 @@ void edfs_key_data_deinit(struct edfs_key_data *key_data) {
     avl_destroy(&key_data->ino_checksum_mismatch, avl_dummy_destructor);
     avl_destroy(&key_data->ino_sync_file, avl_dummy_destructor);
     blockchain_free(key_data->chain);
+
+    if (key_data->votes) {
+        int i;
+        for (i = 0; i < key_data->vote_size; i ++)
+            free(key_data->votes[i].votes);
+        free(key_data->votes);
+        key_data->vote_size = 0;
+        key_data->votes = NULL;
+    }
 
     free(key_data->working_directory);
     free(key_data->cache_directory);

@@ -162,6 +162,12 @@ uint64_t switchorder(uint64_t input) {
 
 static char const *default_working_directory = "./edfs";
 
+struct vote_container {
+    struct edfs_key_data *key_data;
+    unsigned char subject[0xFF];
+    int subject_size;
+};
+
 struct dirbuf {
     edfs_ino_t ino;
     void *userdata;
@@ -223,17 +229,6 @@ struct edwork_shard_io {
     uint64_t start_chunk;
     uint64_t json_version;
     struct edfs_key_data *key;
-
-    void *next;
-};
-
-struct edwork_io {
-    uint64_t ino;
-    char type[4];
-    unsigned char buffer[EDWORK_PACKET_SIZE];
-    int size;
-    struct edfs_key_data *key;
-    unsigned char ack;
 
     void *next;
 };
@@ -674,36 +669,30 @@ void edfs_notify_allow_write_block(struct edfs *edfs_context, struct edfs_key_da
     thread_mutex_unlock(&key->notify_write_lock);
 }
 
-void notify_io(struct edfs *edfs_context, struct edfs_key_data *key, const char type[4], const unsigned char *buffer, int buffer_size, const unsigned char *append_data, int append_len, unsigned char ack, int do_sign, uint64_t ino, int proof_of_work, int loose_encrypt, void *use_clientaddr, int clientaddr_len, unsigned char *proof_of_work_cache, int *proof_of_work_size_cache) {
+void edfs_notify_io(struct edfs *edfs_context, struct edfs_key_data *key, const char type[4], const unsigned char *buffer, int buffer_size, const unsigned char *append_data, int append_len, unsigned char ack, int do_sign, uint64_t ino, int proof_of_work, int loose_encrypt, void *use_clientaddr, int clientaddr_len, unsigned char *proof_of_work_cache, int *proof_of_work_size_cache) {
     if (edfs_context->network_done)
         return;
     if (!edfs_context->edwork) {
         log_warn("edwork context not yet initialized");
         return;
     }
-    struct edwork_io *ioblock = (struct edwork_io *)malloc(sizeof(struct edwork_io));
-    if (!ioblock) {
-        log_error("error allocating ioblock");
-        return;
-    }
 
-    ioblock->ino = ino;
-    memcpy(ioblock->type, type, 4);
+    unsigned char ioblock_buffer[EDWORK_PACKET_SIZE];
+    int ioblock_size = 0;
     if ((buffer) && (buffer_size > 0) && (append_len >= 0) && (buffer_size + append_len < EDWORK_PACKET_SIZE)) {
         int offset = 0;
         if (do_sign)
             offset = 64;
 
-        memcpy(ioblock->buffer + offset, buffer, buffer_size);
+        memcpy(ioblock_buffer + offset, buffer, buffer_size);
         if (append_len > 0) {
-            memcpy(ioblock->buffer + offset + buffer_size, append_data, append_len);
+            memcpy(ioblock_buffer + offset + buffer_size, append_data, append_len);
             buffer_size += append_len;
         }
         if (do_sign) {
-            memcpy(ioblock->buffer + offset + buffer_size, type, 4);
-            int signature_size = sign(edfs_context, key, (const char *)ioblock->buffer + offset, buffer_size + 4, ioblock->buffer, NULL);
+            memcpy(ioblock_buffer + offset + buffer_size, type, 4);
+            int signature_size = sign(edfs_context, key, (const char *)ioblock_buffer + offset, buffer_size + 4, ioblock_buffer, NULL);
             if (signature_size < 0) {
-                free(ioblock);
                 log_error("error signing block");
                 return;
             }
@@ -711,51 +700,47 @@ void notify_io(struct edfs *edfs_context, struct edfs_key_data *key, const char 
         }
         if (loose_encrypt) {
             unsigned char buf2[BLOCK_SIZE_MAX];
-            int size2 = edwork_encrypt(edfs_context, key, ioblock->buffer, buffer_size, buf2, NULL, edwork_who_i_am(edfs_context->edwork), NULL);
-            memcpy(ioblock->buffer, buf2, size2);
+            int size2 = edwork_encrypt(edfs_context, key, ioblock_buffer, buffer_size, buf2, NULL, edwork_who_i_am(edfs_context->edwork), NULL);
+            memcpy(ioblock_buffer, buf2, size2);
             buffer_size = size2;
         }
         if (proof_of_work > 0) {
             if ((proof_of_work_cache) && (proof_of_work_size_cache) && (*proof_of_work_size_cache > 0)) {
-                memcpy(ioblock->buffer + buffer_size, proof_of_work_cache, *proof_of_work_size_cache);
+                memcpy(ioblock_buffer + buffer_size, proof_of_work_cache, *proof_of_work_size_cache);
                 buffer_size += *proof_of_work_size_cache;
             } else {
                 sha3_context ctx;
                 unsigned char out[64];
 
                 sha3_Init256(&ctx);
-                sha3_Update(&ctx, ioblock->buffer + offset, buffer_size);
+                sha3_Update(&ctx, ioblock_buffer + offset, buffer_size);
                 sha3_Update(&ctx, edwork_who_i_am(edfs_context->edwork), 32);
                 int encode_len = base64_encode_no_padding((const unsigned char *)sha3_Finalize(&ctx), 32, out, 64);
 
-                int proof_of_work_size = edfs_proof_of_work(proof_of_work, time(NULL), out, encode_len, ioblock->buffer + buffer_size, EDWORK_PACKET_SIZE - buffer_size, NULL);
+                int proof_of_work_size = edfs_proof_of_work(proof_of_work, time(NULL), out, encode_len, ioblock_buffer + buffer_size, EDWORK_PACKET_SIZE - buffer_size, NULL);
                 if ((proof_of_work_cache) && (proof_of_work_size_cache)) {
-                    memcpy(proof_of_work_cache, ioblock->buffer + buffer_size, proof_of_work_size);
+                    memcpy(proof_of_work_cache, ioblock_buffer + buffer_size, proof_of_work_size);
                     *proof_of_work_size_cache = proof_of_work_size;
                 }
                 buffer_size += proof_of_work_size;
             }
         }
-        ioblock->size = buffer_size;
+        ioblock_size = buffer_size;
     } else {
-        ioblock->size = 0;
+        ioblock_size = 0;
     }
-    ioblock->key = key;
-    ioblock->ack = ack;
-    ioblock->next = NULL;
 
     switch (ack) {
         case 3:
-            edwork_broadcast_client(edfs_context->edwork, key, type, ioblock->buffer, ioblock->size, 0, EDWORK_DATA_NODES, ino, use_clientaddr, clientaddr_len);
+            edwork_broadcast_client(edfs_context->edwork, key, type, ioblock_buffer, ioblock_size, 0, EDWORK_DATA_NODES, ino, use_clientaddr, clientaddr_len);
             break;
         case 2:
-            edwork_broadcast_client(edfs_context->edwork, key, type, ioblock->buffer, ioblock->size, 1, EDWORK_NODES, ino, use_clientaddr, clientaddr_len);
+            edwork_broadcast_client(edfs_context->edwork, key, type, ioblock_buffer, ioblock_size, 1, EDWORK_NODES, ino, use_clientaddr, clientaddr_len);
             break;
         default:
-            edwork_broadcast_client(edfs_context->edwork, key, type, ioblock->buffer, ioblock->size, ack ? EDWORK_NODES : 0, EDWORK_NODES, ino, use_clientaddr, clientaddr_len);
+            edwork_broadcast_client(edfs_context->edwork, key, type, ioblock_buffer, ioblock_size, ack ? EDWORK_NODES : 0, EDWORK_NODES, ino, use_clientaddr, clientaddr_len);
             break;
     }
-    free(ioblock);
     return;
 }
 
@@ -810,7 +795,7 @@ void edwork_broadcast_discovery_key(struct edfs *edfs_context, struct edfs_key_d
     if (key) {
         sha256(key->pubkey, key->pub_len, key_hash);
         hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
-        notify_io(edfs_context, NULL, "disc", key_hash, 32, NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        edfs_notify_io(edfs_context, NULL, "disc", key_hash, 32, NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
         edfs_context->disc_timestamp = time(NULL);
     }
 }
@@ -821,7 +806,7 @@ void edwork_broadcast_discovery(struct edfs *edfs_context) {
     while (key) {
         sha256(key->pubkey, key->pub_len, key_hash);
         hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
-        notify_io(edfs_context, NULL, "disc", key_hash, 32, NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        edfs_notify_io(edfs_context, NULL, "disc", key_hash, 32, NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
         key = (struct edfs_key_data *)key->next_key;
     }
 
@@ -1948,7 +1933,7 @@ void write_json(struct edfs *edfs_context, struct edfs_key_data *key, const char
 
     // do not broadcast root object
     if ((parent != 0) && (key)) {
-        notify_io(edfs_context, key, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, 0, 0, NULL, 0, NULL, NULL);
+        edfs_notify_io(edfs_context, key, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, 0, 0, NULL, 0, NULL, NULL);
         edfs_update_proof_inode(key, inode);
     }
 
@@ -1994,7 +1979,7 @@ int write_json2(struct edfs *edfs_context, struct edfs_key_data *key, const char
 
         JSON_Object *root_object = json_value_get_object(root_value);
         if (root_object) {
-            notify_io(edfs_context, key, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, 0, 0, NULL, 0, NULL, NULL);
+            edfs_notify_io(edfs_context, key, "desc", signature, 64, (const unsigned char *)serialized_string, string_len, 1, 0, inode, 0, 0, NULL, 0, NULL, NULL);
             edfs_update_proof_inode(key, inode);
         }
     } else
@@ -2822,13 +2807,13 @@ int request_data(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_
     }
 
     if (encrypted)
-        notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+        edfs_notify_io(edfs_context, key, "wan4", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     else
     // 25% encrypted packages to avoid some problems with firewalls
     if (edwork_random() % 4)
-        notify_io(edfs_context, key, "want", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+        edfs_notify_io(edfs_context, key, "want", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     else
-        notify_io(edfs_context, key, "wan3", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+        edfs_notify_io(edfs_context, key, "wan3", additional_data, sizeof(additional_data), NULL, 0, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
 
     return is_sctp;
 }
@@ -2899,14 +2884,14 @@ loop_out:
                 *proof_size = 0;
             *proof_type = 2;
         }
-        notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+        edfs_notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
         uint64_t start = microseconds();
         uint64_t last_sent = start;
         thread_set_high_priority();
         while ((!chunk_exists(path, chunk)) && (microseconds() - start < timeout)) {
             usleep(1000);
             if (microseconds() - last_sent >= 200000) {
-                notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+                edfs_notify_io(edfs_context, key, "wan5", additional_data, 22 + i * sizeof(uint64_t), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
                 last_sent = microseconds();
             }
             thread_yield();
@@ -2917,10 +2902,10 @@ loop_out:
                 *proof_size = 0;
             *proof_type = 1;
         }
-        notify_io(edfs_context, key, "wan4", additional_data, 20, edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+        edfs_notify_io(edfs_context, key, "wan4", additional_data, 20, edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
     }
 #else
-    notify_io(edfs_context, key, "wan4", additional_data, 20, edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
+    edfs_notify_io(edfs_context, key, "wan4", additional_data, 20, edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, use_clientaddr, clientaddr_size, proof_cache, proof_size);
 #endif
     return is_sctp;
 }
@@ -3501,7 +3486,7 @@ int edfs_request_hash_if_needed(struct edfs *edfs_context, struct edfs_key_data 
     uint64_t i = 0;
     for (i = 0; i < max_chunks; i++) {
         *(uint64_t *)(additional_data + 8)= htonll(i);
-        notify_io(edfs_context, key, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        edfs_notify_io(edfs_context, key, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     }
     return 1;
 }
@@ -3580,12 +3565,12 @@ int edfs_open_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino
                 }
 
                 if (send_want) {
-                    notify_io(edfs_context, key, "wand", additional_data, 8, NULL, 0, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                    edfs_notify_io(edfs_context, key, "wand", additional_data, 8, NULL, 0, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                     send_want = 0;
                 }
                 for (i = 0; i < max_chunks; i++) {
                     *(uint64_t *)(additional_data + 8)= htonll(i);
-                    notify_io(edfs_context, key, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                    edfs_notify_io(edfs_context, key, "hash", additional_data, sizeof(additional_data), edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 }
 
                 if (microseconds() - start >= EDWORK_MAX_RETRY_TIMEOUT * 1000) {
@@ -3931,9 +3916,9 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
             if (to_write == BLOCK_SIZE) {
                 if (USE_COMPRESSION) {
                     *(uint64_t *)(additional_data + 24) = htonll(max_len);
-                    notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
+                    edfs_notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
                 } else
-                    notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)ptr, to_write, 3, 1, ino, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
+                    edfs_notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)ptr, to_write, 3, 1, ino, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
             }
 #endif
             edfs_update_hash(edfs_context, key, path, chunk, additional_data + 32, 64, hash_buffer);
@@ -3965,9 +3950,9 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
         if (written_bytes == BLOCK_SIZE) {
             if (USE_COMPRESSION) {
                 *(uint64_t *)(additional_data + 24) = htonll(max_len);
-                notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
+                edfs_notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)compressed_buffer, max_len, 3, 1, ino, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
             } else
-                notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)buf, size, 3, 1, ino, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
+                edfs_notify_io(edfs_context, key, "data", additional_data, sizeof(additional_data), (const unsigned char *)buf, size, 3, 1, ino, 0, EDFS_DATA_BROADCAST_ENCRYPTED, NULL, 0, NULL, NULL);
         }
 #endif
         edfs_update_hash(edfs_context, key, path, chunk, additional_data + 32, 64, hash_buffer);
@@ -4468,7 +4453,7 @@ struct dirbuf *edfs_opendir_key(struct edfs *edfs_context, struct edfs_key_data 
                         break;
                     }
                 }
-                notify_io(edfs_context, key, "roo2", (const unsigned char *)&network_inode, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, proof_cache, &proof_size);
+                edfs_notify_io(edfs_context, key, "roo2", (const unsigned char *)&network_inode, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, proof_cache, &proof_size);
                 if (hash_error) {
                     log_warn("directory hash still mismatched, using last known version (not waiting for timeout)");
                     break;
@@ -4657,7 +4642,7 @@ int remove_node(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t
     log_info("broadcasting DEL request for %s (generation %" PRIu64 ")", b64name, generation);
     *(uint64_t *)(hash + 16) = htonll(generation);
 
-    notify_io(edfs_context, key, "del\x00", hash, 32, NULL, 0, 1, 1, inode, 0, 0, NULL, 0, NULL, NULL);
+    edfs_notify_io(edfs_context, key, "del\x00", hash, 32, NULL, 0, 1, 1, inode, 0, 0, NULL, 0, NULL, NULL);
 #endif
     return 1;
 }
@@ -5227,11 +5212,11 @@ int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint
     if (key->chain) {
         if ((userdata_b) && (microseconds() - userdata_b <= 1000000)) {
             uint64_t requested_block = 0;
-            notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            edfs_notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
         }
 
         uint64_t requested_block = htonll(key->chain->index + 2 - userdata_a);
-        notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        edfs_notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
         if ((key->block_timestamp) && (time(NULL) - key->block_timestamp >= 20)) {
             key->hblk_scheduled = 0;
@@ -5239,7 +5224,7 @@ int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint
         }
     } else {
         uint64_t requested_block = htonll(1);
-        notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+        edfs_notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     }
     return 0;
 }
@@ -5845,7 +5830,7 @@ void edfs_broadcast_top(struct edfs *edfs_context, struct edfs_key_data *key, vo
     unsigned char buffer[EDWORK_PACKET_SIZE];
     int len = edfs_read_file(edfs_context, key, key->blockchain_directory, computeblockname(key->chain->index, b64name), buffer, EDWORK_PACKET_SIZE, NULL, 0, 0, 0, NULL, 0, 1, 0, 0);
     if (len > 0) {
-        notify_io(edfs_context, key, "topb", (const unsigned char *)buffer, len, NULL, 0, 0, 0, 0, 0, 0, use_clientaddr, clientaddr_len, NULL, NULL);
+        edfs_notify_io(edfs_context, key, "topb", (const unsigned char *)buffer, len, NULL, 0, 0, 0, 0, 0, 0, use_clientaddr, clientaddr_len, NULL, NULL);
         log_info("broadcasting chain block");
         if ((use_clientaddr) && (clientaddr_len))
             key->client_top_broadcast_timestamp = microseconds();
@@ -6041,7 +6026,7 @@ void edfs_new_chain_request_descriptors(struct edfs *edfs_context, struct edfs_k
                 memcpy(&generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
                 generation = ntohll(generation);
                 if ((generation > inode_version) || ((generation == inode_version) && (memcmp(hash, ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), 32))))
-                    notify_io(edfs_context, key, "wand", ptr, 8, NULL, 0, 0, 0, inode, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                    edfs_notify_io(edfs_context, key, "wand", ptr, 8, NULL, 0, 0, 0, inode, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
                 if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id) && (type) && (file_size) && (blockchain->timestamp >= microseconds() - 7ULL * 24ULL * 3600000000ULL))
                     edfs_queue_ensure_data(edfs_context, key, inode, file_size, 1, 0, generation + 1);
@@ -6077,7 +6062,7 @@ void edfs_chain_ensure_descriptors(struct edfs *edfs_context, struct edfs_key_da
                 memcpy(&generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
                 generation = ntohll(generation);
                 if (generation > inode_version)
-                    notify_io(edfs_context, key, "wand", ptr, 8, NULL, 0, 0, 0, inode, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                    edfs_notify_io(edfs_context, key, "wand", ptr, 8, NULL, 0, 0, 0, inode, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
 #ifdef EDFS_RESTART_SHARD
                 if ((edfs_context->shards) && ((inode % edfs_context->shards) == edfs_context->shard_id) && (type) && (file_size)) {
@@ -6104,6 +6089,81 @@ void edfs_chain_ensure_descriptors(struct edfs *edfs_context, struct edfs_key_da
             break;
         blockchain = (struct block *)blockchain->previous_block;
     } while (blockchain);
+}
+
+static int edfs_schedule_vote(struct doops_loop *loop) {
+    struct vote_container *vote = (struct vote_container *)loop_event_data(loop);
+    if (vote) {
+        unsigned char winner[0x100];
+        if (edfs_key_data_vote_winner(vote->key_data, vote->subject, vote->subject_size, winner, sizeof(winner)) == 1) {
+            log_trace("vote finalized");
+        }
+        free(vote);
+    }
+    return 1;
+}
+
+int edwork_vote_received(struct edfs *edfs_context, const unsigned char *payload, int size) {
+    if (size < 96) {
+        log_warn("invalid vote packet");
+        return -1;
+    }
+
+    unsigned char key_hash[32];
+    uint64_t key_checksum = XXH64(payload, 32, 0);
+    struct edfs_key_data *key = edfs_context->key_data;
+    struct edfs_key_data *packet_key = NULL;
+    while (key) {
+        sha256(key->pubkey, key->pub_len, key_hash);
+        hmac_sha256((const BYTE *)"key id", 6, (const BYTE *)key_hash, 32, NULL, 0, (BYTE *)key_hash);
+        if (XXH64(key_hash, 32, 0) == key_checksum) {
+            packet_key = key;
+            break;
+        }
+        key = (struct edfs_key_data *)key->next_key;
+    }
+    if (!packet_key) {
+        log_warn("partition key not in store");
+        return -1;
+    }
+    unsigned char buffer[EDWORK_PACKET_SIZE];
+    memcpy(buffer, payload + 64, size - 64);
+    memcpy(buffer + size - 64, "vote", 4);
+    // 64 - 4
+    int buffer_size = size - 60;
+    if (!verify(edfs_context, packet_key, (const char *)buffer, buffer_size, payload, 64)) {
+        log_warn("vote packet signature verification failed, dropping");
+        return -1;
+    }
+    int subject_size = (int)payload[64];
+    if (subject_size + 66 > size) {
+        log_warn("invalid vote packet");
+        return -1;
+    }
+    const unsigned char *subject = payload + 65;
+    int timeout = (int)payload[65 + subject_size];
+    const unsigned char *vote = payload + 66 + subject_size;
+    int vote_size = size - 66 - subject_size;
+    if (vote_size <= 0) {
+        log_warn("invalid vote");
+        return -1;
+    }
+    if (timeout != EDWORK_VOTE_TIMEOUT) {
+        log_warn("vote timeout mismatch, ignoring vote");
+        return -1;
+    }
+    int vote_err = edfs_key_data_vote(packet_key, subject, subject_size, vote, vote_size, timeout);
+    // schedule new vote
+    if (vote_err == 1) {
+        struct vote_container *vote = malloc(sizeof(struct vote_container));
+        if (vote) {
+            vote->key_data = packet_key;
+            memcpy(vote->subject, subject, subject_size);
+            vote->subject_size = subject_size;
+            loop_add(&edfs_context->loop, edfs_schedule_vote, EDWORK_VOTE_TIMEOUT * 1000, vote);
+        }
+    }
+    return vote_err;
 }
 
 void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t timestamp, const char *type, const unsigned char *payload, unsigned int payload_size, struct edfs_key_data *key, void *clientaddr, int clientaddrlen, const unsigned char *who_am_i, const unsigned char *blockhash, void *userdata, int is_sctp, int is_listen_socket) {
@@ -6154,7 +6214,7 @@ void edwork_callback(struct edwork_data *edwork, uint64_t sequence, uint64_t tim
         int records = edwork_add_node_list(edwork, payload + 4, payload_size - 4);
         if (records > 0) {
             uint32_t offset = htonl(ntohl(*(uint32_t *)payload) + records);
-            notify_io(edfs_context, key, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, clientaddr, clientaddrlen, NULL, NULL);
+            edfs_notify_io(edfs_context, key, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, clientaddr, clientaddrlen, NULL, NULL);
             edfs_context->list_timestamp = time(NULL);
         }
         return;
@@ -6641,7 +6701,7 @@ one_loop:
                     log_info("DATI sent");
             } else
             if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
-                notify_io(edfs_context, key, "hash", payload, 20, edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                edfs_notify_io(edfs_context, key, "hash", payload, 20, edfs_context->key.pk, 32, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 edfs_context->proxy_timestamp = microseconds();
             }
         }
@@ -6678,7 +6738,7 @@ one_loop:
         } else
         if ((edfs_context->proxy) && (microseconds() - edfs_context->proxy_timestamp > 500000)) {
             // EDFS_THREAD_LOCK(edfs_context);
-            notify_io(edfs_context, key, "wand", payload, 8, NULL, 0, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            edfs_notify_io(edfs_context, key, "wand", payload, 8, NULL, 0, 0, 0, ino, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             // EDFS_THREAD_UNLOCK(edfs_context);
             edfs_context->proxy_timestamp = microseconds();
         }
@@ -6769,12 +6829,12 @@ one_loop:
             key->top_broadcast_timestamp = 0;
             edfs_try_reset_proof(edfs_context, key);
             key->block_timestamp = time(NULL);
-            notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            edfs_notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
         } else
         if ((key->chain) && (newblock->index == key->chain->index + 1)) {
             newblock->previous_block = key->chain;
             if (block_verify(newblock, BLOCKCHAIN_COMPLEXITY)) {
-                notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                edfs_notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 edfs_write_file(edfs_context, key, key->blockchain_directory, computeblockname(newblock->index, b64name), payload, payload_size, NULL, 0, NULL, NULL, NULL, NULL, 1, 0, 0);
                 key->chain = newblock;
                 key->mining_flag = 0;
@@ -6994,6 +7054,20 @@ one_loop:
         }
         return;
     }
+    if (!memcmp(type, "vote", 4)) {
+        log_info("VOTE received (%s)", edwork_addr_ipv4(clientaddr));
+        if (payload_size < 32) {
+            log_warn("VOTE packet too small");
+            return;
+        }
+
+        if (!edwork_check_proof_of_work(edwork, payload, payload_size, 32, timestamp, EDWORK_VOTE_WORK_LEVEL, EDWORK_VOTE_WORK_PREFIX, who_am_i)) {
+            log_warn("no valid proof of work");
+            return;
+        }
+        edwork_vote_received(edfs_context, payload, payload_size);
+        return;
+    }
 #ifdef EDWORK_PEER_DISCOVERY_SERVICE
     if (!memcmp(type, "disc", 4)) {
         log_info("DISC received (%s)", edwork_addr_ipv4(clientaddr));
@@ -7090,7 +7164,7 @@ void edwork_save_nodes(struct edfs *edfs_context) {
 int edfs_list_request(struct edfs *edfs_context, uint64_t userdata_a, uint64_t userdata_b, void *data) {
     uint32_t offset = 0;
     struct edfs_key_data *key = (struct edfs_key_data *)data;
-    notify_io(edfs_context, key ? key : edfs_context->primary_key , "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+    edfs_notify_io(edfs_context, key ? key : edfs_context->primary_key , "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
     return 0;
 }
 
@@ -7440,6 +7514,18 @@ int edwork_load_keys(struct edfs *edfs_context) {
     return loaded;
 }
 
+void edfs_vote(struct edfs *edfs_context, struct edfs_key_data *key, const char *subject, int subject_len, const unsigned char *vote_data, int len, int timeout) {
+    unsigned char buffer[EDWORK_PACKET_SIZE];
+    if (subject_len < 0)
+        subject_len = strlen(subject);
+    if (subject_len > 0xFF)
+        subject_len = 0xFF;
+    buffer[0] = (unsigned int)subject_len;
+    memcpy(buffer + 1, subject, subject_len);
+    buffer[subject_len + 1] = (unsigned char)timeout;
+    edfs_notify_io(edfs_context, key ? key : edfs_context->primary_key , "vote", (const unsigned char *)buffer, subject_len + 2, vote_data, len, 0, 1, 0, EDWORK_VOTE_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+}
+
 int edwork_thread(void *userdata) {
     struct edfs *edfs_context = (struct edfs *)userdata;
 
@@ -7544,7 +7630,7 @@ int edwork_thread(void *userdata) {
             uint64_t ack = htonll(1);
             key = edfs_context->key_data;
             while (key) {
-                notify_io(edfs_context, key, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+                edfs_notify_io(edfs_context, key, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 key = (struct edfs_key_data *)key->next_key;
             }
             edfs_context->resync = 0;
@@ -7587,13 +7673,13 @@ int edwork_thread(void *userdata) {
         if (key_buffer_index > 0)
             edwork_broadcast(edwork, NULL, "ping", (unsigned char *)key_buffer, key_buffer_index * sizeof(uint64_t), 0, EDWORK_NODES, 0, 1, force_broadcast_to_all ? time(NULL) - 24 * 3600 : 0);
         ping_count ++;
-    }, EDWORK_PING_INTERVAL * 1000);
+    }, - EDWORK_PING_INTERVAL * 1000);
 
     loop_schedule(&edfs_context->loop, {
         uint32_t offset = htonl(0);
         key = edfs_context->key_data;
         while (key) {
-            notify_io(edfs_context, key, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
+            edfs_notify_io(edfs_context, key, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             key = (struct edfs_key_data *)key->next_key;
         }
         edfs_context->list_timestamp = time(NULL);
@@ -7670,6 +7756,7 @@ int edwork_thread(void *userdata) {
 
     loop_foreach_callback(&edfs_context->loop, edfs_schedule_foreach, edfs_schedule_free, NULL);
     loop_foreach_callback(&edfs_context->loop, edfs_schedule_foreach_data, edfs_schedule_free, NULL);
+    loop_foreach_callback(&edfs_context->loop, edfs_schedule_vote, edfs_schedule_free, NULL);
 
     loop_deinit(&edfs_context->loop);
 
