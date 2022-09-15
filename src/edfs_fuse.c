@@ -6,7 +6,11 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <inttypes.h>
-#include <fuse.h>
+#ifdef WITH_PJFS
+    #include "gyro_fuse.h"
+#else
+    #include <fuse.h>
+#endif
 #ifdef _WIN32
     #include <windows.h>
     #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
@@ -926,8 +930,12 @@ static const char EDFS_BANNER[] =   " _______   ________  ___       __   _______
 
 int main(int argc, char *argv[]) {
 #ifdef _WIN32
-    char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", NULL};
-    struct fuse_args args = FUSE_ARGS_INIT(5, dokan_argv);
+    #ifndef WITH_PJFS
+        char *dokan_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", NULL};
+        struct fuse_args args = FUSE_ARGS_INIT(5, dokan_argv);
+    #else
+        void *args = NULL;
+    #endif
 #else
 #ifdef __APPLE__
     char *osxfuse_argv[] = {"edwork", "-o", "volname=EDWORK Drive", "-o", "fsname=EdFS (edwork file system)", "-o", "local", NULL};
@@ -1250,9 +1258,13 @@ int main(int argc, char *argv[]) {
         exit(0);
     }
     if (!mountpoint) {
-        fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018-2019 by Eduard Suica\nTo list all options, run with -help option\n");
+        fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018-2022 by Eduard Suica\nTo list all options, run with -help option\n");
 #ifdef _WIN32
-        mountpoint = "J";
+        #ifdef WITH_PJFS
+            mountpoint = "edwork";
+        #else
+            mountpoint = "J";
+        #endif
 #else
 #ifdef __APPLE__
         mountpoint = "/Volumes/edwork";
