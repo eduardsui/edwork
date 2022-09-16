@@ -166,6 +166,7 @@ struct fuse* fuse_new(struct fuse_chan * ch, void * args, const struct fuse_oper
 
 struct fuse_chan *fuse_mount(const char *dir, void *args);
 void fuse_unmount(const char *dir, struct fuse_chan *ch);
+int fuse_reload(struct fuse *f);
 
 int fuse_set_signal_handlers(struct fuse *se);
 struct fuse *fuse_get_session(struct fuse *f);

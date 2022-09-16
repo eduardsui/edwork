@@ -831,6 +831,7 @@ static int VirtualFS_stop(struct fuse* this_ref) {
 
     this_ref->running = 0;
     PrjStopVirtualizing(this_ref->instanceHandle);
+    this_ref->instanceHandle = NULL;
 
     DeleteDirectory(this_ref->path_utf8);
     return 0;
@@ -840,6 +841,30 @@ int fuse_enable_service() {
     return system("powershell Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -NoRestart");
 }
 
+
+int fuse_reload(struct fuse *f) {
+    if ((!f) || (!f->ch))
+        return -1;
+
+    PrjStopVirtualizing(f->instanceHandle);
+
+    DeleteDirectory(f->path_utf8);
+
+    CreateDirectoryA(f->path_utf8, NULL);
+
+    GUID instanceId;
+    if (FAILED(CoCreateGuid(&instanceId)))
+        return -1;
+
+    if (FAILED(PrjMarkDirectoryAsPlaceholder(f->ch->path, NULL, NULL, &instanceId)))
+        return -1;
+
+    HRESULT hr = PrjStartVirtualizing(f->ch->path, &f->callbacks, f, &f->options, &f->instanceHandle);
+    if (FAILED(hr))
+        return -1;
+
+    return 0;
+}
 
 struct fuse* fuse_new(struct fuse_chan *ch, void *args, const struct fuse_operations *op, size_t op_size, void *private_data) {
     struct fuse* this_ref = (struct fuse*)malloc(sizeof(struct fuse));

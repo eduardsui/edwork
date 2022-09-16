@@ -397,6 +397,7 @@ int edfs_auto_startup() {
     RegCloseKey(key);
     return 0;
 }
+
 #endif
 
 #ifdef WITH_SMARTCARD
@@ -532,10 +533,17 @@ void edfs_gui_callback(void *window) {
     if (foo) {
         switch (foo[0]) {
             case '@':
-                if (edfs_chkey(edfs_context, foo + 1))
+                if (edfs_chkey(edfs_context, foo + 1)) {
                     ui_message("Error", "Error switching key", 3);
-                else
+                } else {
+#ifdef WITH_PJFS
+                    if (fuse_reload(fuse_session)) {
+                        ui_message("Error", "Current partition is in use, cannot switch.", 3);
+                        exit(-1);
+                    }
+#endif
                     edfs_gui_load(window);
+                }
                 break;
             case '-':
                 if (ui_question("Warning", "Are you sure you want to delete this key?\nAccessing the data will not longer be possible.", 2)) {
@@ -1179,6 +1187,11 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "autorun")) {
                     gui = 2;
                 } else
+#ifdef WITH_PJFS
+                if (!strcmp(arg, "projfs")) {
+                    exit(fuse_enable_service());
+                } else
+#endif
 #endif
                 if (!strcmp(arg, "stop")) {
                     if (!edfs_notify_edwork(arg)) {
@@ -1204,6 +1217,9 @@ int main(int argc, char *argv[]) {
                 } else
 #endif
                 if (!strcmp(arg, "help")) {
+#ifdef _WIN32
+                    edfs_emulate_console();
+#endif
                     fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018-2019 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
                         "    -loglevel level    set log level, 0 to 5 or trace,debug,info,warning,error\n"
@@ -1229,6 +1245,9 @@ int main(int argc, char *argv[]) {
 #if defined(_WIN32) || defined(__APPLE__)
                         "    -gui               open GUI\n"
                         "    -autorun           open in autostart mode\n"
+#ifdef WITH_PJFS
+                        "    -projfs            enable Windows Projected File System\n"
+#endif
 #endif
                         "    -stop              stop other instances of the application\n"
 #ifdef WITH_SCTP
@@ -1274,7 +1293,11 @@ int main(int argc, char *argv[]) {
 #endif
 #endif
     }
-
+    char *default_host = getenv("EDWORK_HOST");
+    if ((default_host) && (default_host[1])) {
+        edfs_set_initial_friend(edfs_context, EDFS_DEFAULT_HOST);
+        initial_friend_set = 1;
+    }
 #ifdef EDFS_DEFAULT_HOST
     if (!initial_friend_set)
         edfs_set_initial_friend(edfs_context, EDFS_DEFAULT_HOST);
@@ -1364,6 +1387,9 @@ int main(int argc, char *argv[]) {
             edfs_edwork_done(edfs_context);
             edfs_destroy_context(edfs_context);
             edfs_context = NULL;
+            ui_message("Error", "Error mounting partition (directory is already mapped to a partition?).", 3);
+            fprintf(stderr, "%s\n", "Error mounting partition (directory is already mapped to a partition?).");
+            err = -1;
         }
 #ifdef __APPLE__
         rmdir(mountpoint);
@@ -1372,6 +1398,10 @@ int main(int argc, char *argv[]) {
         edfs_edwork_done(edfs_context);
         edfs_destroy_context(edfs_context);
         edfs_context = NULL;
+        ui_message("Error", "Error mounting partition (read-only filesystem or mounting point already mapped).", 3);
+        fprintf(stderr, "%s\n", "Error mounting partition (read-only filesystem or mounting point already mapped).");
+
+        err = -1;
     }
     fuse_opt_free_args(&args);
     if (fp)
