@@ -4,6 +4,12 @@
 #include <inttypes.h>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#ifdef _MSC_VER
+    #define ssize_t int64_t
+#endif
+#endif
+
 #include "edwork.h"
 #ifdef WITH_SMARTCARD
     #include "edwork_smartcard.h"
