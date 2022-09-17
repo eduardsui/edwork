@@ -377,7 +377,7 @@ struct block *block_load(const char *path, uint64_t index) {
         newblock->data_len = ntohl(data_len);
         if (newblock->data_len) {
             newblock->data = (unsigned char *)malloc(newblock->data_len + 1);
-            if (data) {
+            if (newblock->data) {
                 newblock->data[newblock->data_len] = 0;
             } else {
                 fclose(f);
