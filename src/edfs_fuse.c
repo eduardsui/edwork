@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #ifdef WITH_PJFS
-    #include "gyro_fuse.h"
+    #include "defuse.h"
 #else
     #include <fuse.h>
 #endif
@@ -1187,11 +1187,11 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "autorun")) {
                     gui = 2;
                 } else
-#ifdef WITH_PJFS
+/*#ifdef WITH_PJFS
                 if (!strcmp(arg, "projfs")) {
                     exit(fuse_enable_service());
                 } else
-#endif
+#endif */
 #endif
                 if (!strcmp(arg, "stop")) {
                     if (!edfs_notify_edwork(arg)) {
@@ -1245,9 +1245,9 @@ int main(int argc, char *argv[]) {
 #if defined(_WIN32) || defined(__APPLE__)
                         "    -gui               open GUI\n"
                         "    -autorun           open in autostart mode\n"
-#ifdef WITH_PJFS
+/* #ifdef WITH_PJFS
                         "    -projfs            enable Windows Projected File System\n"
-#endif
+#endif */
 #endif
                         "    -stop              stop other instances of the application\n"
 #ifdef WITH_SCTP
