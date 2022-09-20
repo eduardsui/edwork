@@ -5214,7 +5214,6 @@ int edfs_blockchain_request(struct edfs *edfs_context, uint64_t userdata_a, uint
             uint64_t requested_block = 0;
             edfs_notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
         }
-
         uint64_t requested_block = htonll(key->chain->index + 2 - userdata_a);
         edfs_notify_io(edfs_context, key, "hblk", (const unsigned char *)&requested_block, sizeof(uint64_t), NULL, 0, 0, 0, 0, EDWORK_WANT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
 
