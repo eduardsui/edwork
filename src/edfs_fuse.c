@@ -1031,8 +1031,12 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "loglevel")) {
                     if (i >= argc - 1) {
                         fprintf(stderr, "edfs: log level expected after -loglevel parameter. Try -help option.\n");
+                        ui_message("Error", "edfs: log level expected after -loglevel parameter. Try -help option.\n", 3);
                         exit(-1);
                     }
+#ifdef _WIN32
+                    edfs_emulate_console();
+#endif
                     i++;
                     if (!strcmp(argv[i], "trace"))
                         log_set_level(0);
@@ -1187,11 +1191,6 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "autorun")) {
                     gui = 2;
                 } else
-/*#ifdef WITH_PJFS
-                if (!strcmp(arg, "projfs")) {
-                    exit(fuse_enable_service());
-                } else
-#endif */
 #endif
                 if (!strcmp(arg, "stop")) {
                     if (!edfs_notify_edwork(arg)) {
@@ -1220,7 +1219,7 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
                     edfs_emulate_console();
 #endif
-                    fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018-2019 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
+                    fprintf(stderr, "EdFS 0.1BETA, unlicensed 2018-2022 by Eduard Suica\nUsage: %s [options] mount_point\n\nAvailable options are:\n"
                         "    -port port_number  listen on given port number\n"
                         "    -loglevel level    set log level, 0 to 5 or trace,debug,info,warning,error\n"
                         "    -logfile filename  set log filename\n"
@@ -1245,9 +1244,6 @@ int main(int argc, char *argv[]) {
 #if defined(_WIN32) || defined(__APPLE__)
                         "    -gui               open GUI\n"
                         "    -autorun           open in autostart mode\n"
-/* #ifdef WITH_PJFS
-                        "    -projfs            enable Windows Projected File System\n"
-#endif */
 #endif
                         "    -stop              stop other instances of the application\n"
 #ifdef WITH_SCTP
@@ -1261,11 +1257,13 @@ int main(int argc, char *argv[]) {
                     exit(0);
                 } else {
                     fprintf(stderr, "edfs: unknown parameter %s\n", arg);
+                    ui_message("Error", "Unknown parameter recieved.\nTry -help to see al the supported parameters.", 3);
                     exit(-1);
                 }
             } else {
                 if (mountpoint) {
                     fprintf(stderr, "edfs: unknown parameter %s. Try -help option.\n", arg);
+                    ui_message("Error", "Unknown parameter recieved.\nTry -help to see al the supported parameters.", 3);
                     exit(-1);
                 }
                 mountpoint = arg;
