@@ -678,7 +678,7 @@ static int fuse_fill_dir(void *buf, const char *name, const struct stat *stbuf, 
             placeholder->FsMetadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_DIRECTORY;
             placeholder->FsMetadata.FileSize.QuadPart = 0;
 
-            if ((!name) || (name[0] != '.') || (name[1] != '.')) {
+            if ((name) && (strcmp(name, ".")) && (strcmp(name, ".."))) {
                 // skip . and ..
                 char *full_sys_path = get_full_path(f->path_utf8, full_path);
                 wchar_t *full_sys_path_w = fromUTF8(full_sys_path);
@@ -977,7 +977,7 @@ int fuse_loop(struct fuse *f) {
         DEBUG_HANDLE("CreateFileA", dir_err);
         return -1;
     }
-    // HANDLE dir_handle = FindFirstChangeNotificationA("xax", TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME);
+
     OVERLAPPED overlapped;
     overlapped.hEvent = CreateEvent(NULL, FALSE, 0, NULL);
 
