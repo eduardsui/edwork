@@ -111,12 +111,19 @@ static void update_placeholder_flags(const wchar_t *NormalizedPath, CF_UPDATE_FL
 static char *get_full_path(const char *path, const char *name) {
     int len_name = name ? (int)strlen(name) : 0;
     int len_path = path ? (int)strlen(path) : 0;
-    char *full_path = (char *)malloc(len_path + len_name + 1);
+
+    int add_slash = 0;
+    if ((len_path > 0) && (len_name > 0) && (path[len_path - 1] != '/') && (path[len_path - 1] != '\\') && (name[0] != '/') && (name[0] != '\\'))
+        add_slash = 1;
+
+    char *full_path = (char *)malloc(len_path + len_name + add_slash + 1);
 
     if (full_path) {
         memcpy(full_path, path, len_path);
-        memcpy(full_path + len_path, name, len_name);
-        full_path[len_path + len_name] = 0;
+        if (add_slash)
+            full_path[len_path] = '/';
+        memcpy(full_path + len_path + add_slash, name, len_name);
+        full_path[len_path + len_name + add_slash] = 0;
     }
     return full_path;
 }
@@ -240,6 +247,7 @@ void CALLBACK OnFetchData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBAC
 
             do {
                 int err = f->op.read(path, buf, read_size, offset, &finfo);
+                DEBUG_ERRNO2("op.read", err);
                 if (err < 0) {
                     DEBUG_ERRNO("op.read", err);
                     opParams.TransferData.CompletionStatus = NTSTATUS_FROM_WIN32(EIO);
@@ -260,6 +268,14 @@ void CALLBACK OnFetchData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBAC
                     DEBUG_HANDLE("CfExecute", hr);
                     if (FAILED(hr)) {
                         // 0x8007018e: The cloud operation was canceled by user.
+                        if (hr != 0x8007018e) {
+                            DEBUG_DUMP("Error in CfExecute => offset %" PRId64 ", len %i", offset, err);
+                            opParams.TransferData.CompletionStatus = NTSTATUS_FROM_WIN32(EIO);
+                            opParams.TransferData.Buffer = buf;
+                            opParams.TransferData.Offset.QuadPart = callbackParameters->FetchData.RequiredFileOffset.QuadPart;
+                            opParams.TransferData.Length.QuadPart = callbackParameters->FetchData.RequiredLength.QuadPart;
+                            hr = CfExecute(&opInfo, &opParams);
+                        }
                         break;
                     }
 
@@ -357,7 +373,7 @@ void CALLBACK OnFileOpen(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBACK
     fuse_unlock(f);
 }
 
-static int fuse_sync_full_sync(struct fuse *f, char *path, char *full_path) {
+static int fuse_sync_full_sync(struct fuse *f, char *path, char *full_path, int try_create) {
     struct fuse_file_info finfo = { 0 };
     DEBUG_DUMP("Sync file %s", path);
     if (!f->op.write) {
@@ -376,27 +392,38 @@ static int fuse_sync_full_sync(struct fuse *f, char *path, char *full_path) {
         return -EACCES;
     }
 
-    if (f->op.truncate) {
-        __int64 fuse_file_size = 0;
-        if ((f->op.getattr) && (!f->op.getattr(path, &st_buf)))
-            fuse_file_size = st_buf.st_size;
-
-        _fseeki64(local_file, 0, SEEK_END);
-        __int64 fsize = _ftelli64(local_file);
-        _fseeki64(local_file, 0, SEEK_SET);
-
-        if (fsize < fuse_file_size)
-            f->op.truncate(path, fsize);
-
-        DEBUG_DUMP("Truncate %s at %i", path, (int)fsize);
+    int created = 0;
+    if (try_create) {
+        if (f->op.create) {
+            err = f->op.create(path, 0666, &finfo);
+            DEBUG_ERRNO("op.create", err);
+            if (!err)
+                created = 1;
+        }
     }
+    if (!created) {
+        if (f->op.truncate) {
+            __int64 fuse_file_size = 0;
+            if ((f->op.getattr) && (!f->op.getattr(path, &st_buf)))
+                fuse_file_size = st_buf.st_size;
 
-    if (f->op.open) {
-        err = f->op.open(path, &finfo);
-        if (err) {
-            fclose(local_file);
-            DEBUG_ERRNO("op.open", err);
-            return err;
+            _fseeki64(local_file, 0, SEEK_END);
+            __int64 fsize = _ftelli64(local_file);
+            _fseeki64(local_file, 0, SEEK_SET);
+
+            if (fsize < fuse_file_size)
+                f->op.truncate(path, fsize);
+
+            DEBUG_DUMP("Truncate %s at %i", path, (int)fsize);
+        }
+
+        if (f->op.open) {
+            err = f->op.open(path, &finfo);
+            if (err) {
+                fclose(local_file);
+                DEBUG_ERRNO("op.open", err);
+                return err;
+            }
         }
     }
 
@@ -472,7 +499,7 @@ void CALLBACK OnFileClose(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBAC
                 if (!fuse_is_read_only(f, path)) {
                     DEBUG_DUMP("Sync %s (%s)", path, full_path);
                     CloseHandle(h);
-                    fuse_sync_full_sync(f, path, full_path);
+                    fuse_sync_full_sync(f, path, full_path, 0);
                     hr = CfOpenFileWithOplock(callbackInfo->NormalizedPath, CF_OPEN_FILE_FLAG_EXCLUSIVE, &h);
                     DEBUG_HANDLE("CfOpenFileWithOplock", hr);
                 }
@@ -845,6 +872,88 @@ struct fuse_chan *fuse_mount(const char *dir, void* args) {
     return ch;
 }
 
+static void recursive_create(struct fuse *f, char *path) {
+    char *full_path = get_full_path(f->path_utf8, path);
+    DEBUG_DUMP("Created %s", full_path);
+    int err = -1;
+    int is_dir = 0;
+    if (GetFileAttributesA(full_path) & FILE_ATTRIBUTE_DIRECTORY) {
+        is_dir = 1;
+        if (f->op.mkdir) {
+            fuse_lock(f);
+            err = f->op.mkdir(path, 0666);
+            fuse_unlock(f);
+            DEBUG_ERRNO("op.mkdir", err);
+        }
+    } else {
+        if (f->op.create) {
+            // try create + sync for drag & drop files
+            err = fuse_sync_full_sync(f, path, full_path, 1);
+            if (err) {
+                // fall back to create
+                struct fuse_file_info finfo = { 0 };
+                fuse_lock(f);
+                err = f->op.create(path, 0666, &finfo);
+                fuse_unlock(f);
+                DEBUG_ERRNO("op.create", errno);
+                if ((f->op.release) && (!err)) {
+                    fuse_lock(f);
+                    f->op.release(path, &finfo);
+                    fuse_unlock(f);
+                }
+            }
+        }
+    }
+    if (!err) {
+        fuse_lock(f);
+        HANDLE h;
+        wchar_t *full_path_w = fromUTF8(full_path);
+        HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
+        free(full_path_w);
+        DEBUG_HANDLE("CfOpenFileWithOplock", hr);
+        if (!FAILED(hr)) {
+            wchar_t *wname = fromUTF8(path);
+            HRESULT hr2 = CfConvertToPlaceholder(h, wname, wcslen(wname) * sizeof(wchar_t), is_dir ? CF_CONVERT_FLAG_ENABLE_ON_DEMAND_POPULATION : CF_CONVERT_FLAG_NONE , NULL, NULL);
+            DEBUG_HANDLE("CfConvertToPlaceholder", hr2);
+            CfCloseHandle(h);
+            free(wname);
+        }
+        fuse_unlock(f);
+
+        if (is_dir) {
+            WIN32_FIND_DATA FindFileData;
+            int path_len = strlen(full_path);
+            char *full_path2 = malloc(path_len + 3);
+            if (full_path2) {
+                strcpy(full_path2, full_path);
+                strcat(full_path2, "\\*");
+                DEBUG_DUMP("Scanning %s", full_path2);
+                HANDLE hFind = FindFirstFile(full_path2, &FindFileData);
+                if (hFind != INVALID_HANDLE_VALUE) {
+                    do {
+                        if ((strcmp(FindFileData.cFileName, ".")) && (strcmp(FindFileData.cFileName, ".."))) {
+                            int len = strlen(FindFileData.cFileName);
+                            char *file_path = (char *)malloc(path_len + len + 2);
+                            if (file_path) {
+                                strcpy(file_path, path);
+                                strcat(file_path, "/");
+                                strcat(file_path, FindFileData.cFileName);
+
+                                recursive_create(f, file_path);
+
+                                free(file_path);
+                            }
+                        }
+                    } while (FindNextFile(hFind, &FindFileData));
+                    FindClose(hFind);
+                }
+                free(full_path2);
+            }
+        }
+    }
+    free(full_path);
+}
+
 int fuse_loop(struct fuse *f) {
     CF_CALLBACK_REGISTRATION callbackTable[] = {
         { CF_CALLBACK_TYPE_FETCH_DATA, OnFetchData },
@@ -898,49 +1007,9 @@ int fuse_loop(struct fuse *f) {
             for (;;) {
                 if (ev->Action == FILE_ACTION_ADDED) {
                     char *path = toUTF8_path(ev->FileName, ev->FileNameLength);
-                    char *full_path = get_full_path(f->path_utf8, path);
-                    DEBUG_DUMP("Created %s", full_path);
-                    int err = -1;
-                    int is_dir = 0;
-                    if (GetFileAttributesA(full_path) & FILE_ATTRIBUTE_DIRECTORY) {
-                        is_dir = 1;
-                        if (f->op.mkdir) {
-                            fuse_lock(f);
-                            err = f->op.mkdir(path, 0666);
-                            fuse_unlock(f);
-                            DEBUG_ERRNO("op.mkdir", err);
-                        }
-                    } else {
-                        if (f->op.create) {
-                            struct fuse_file_info finfo = { 0 };
-                            fuse_lock(f);
-                            err = f->op.create(path, 0666, &finfo);
-                            fuse_unlock(f);
-                            DEBUG_ERRNO("op.create", errno);
-                            if ((f->op.release) && (!err)) {
-                                fuse_lock(f);
-                                f->op.release(path, &finfo);
-                                fuse_unlock(f);
-                            }
-                        }
-                    }
-                    if (!err) {
-                        fuse_lock(f);
-                        HANDLE h;
-                        wchar_t *full_path_w = fromUTF8(full_path);
-                        HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
-                        free(full_path_w);
-                        DEBUG_HANDLE("CfOpenFileWithOplock", hr);
-                        if (!FAILED(hr)) {
-                            wchar_t *wname = fromUTF8(path);
-                            HRESULT hr2 = CfConvertToPlaceholder(h, wname, wcslen(wname) * sizeof(wchar_t), is_dir ? CF_CONVERT_FLAG_ENABLE_ON_DEMAND_POPULATION : CF_CONVERT_FLAG_NONE , NULL, NULL);
-                            DEBUG_HANDLE("CfConvertToPlaceholder", hr2);
-                            CfCloseHandle(h);
-                            free(wname);
-                        }
-                        fuse_unlock(f);
-                    }
-                    free(full_path);
+
+                    recursive_create(f, path);
+
                     free(path);
                     update_policy(f, CF_REGISTER_FLAG_NONE);
                     populate_root = GetTickCount();
@@ -949,9 +1018,6 @@ int fuse_loop(struct fuse *f) {
                     char *path = toUTF8_path(ev->FileName, ev->FileNameLength);
                     char *full_path = get_full_path(f->path_utf8, path);
                     if (!(GetFileAttributesA(full_path) & FILE_ATTRIBUTE_DIRECTORY)) {
-                        DEBUG_DUMP("Modified %s", full_path);
-                        fuse_sync_full_sync(f, path, full_path);
-
                         HANDLE h;
                         wchar_t *full_path_w = fromUTF8(full_path);
 
@@ -969,6 +1035,9 @@ int fuse_loop(struct fuse *f) {
                         }
 
                         fuse_unlock(f);
+
+                        DEBUG_DUMP("Modified %s", full_path);
+                        fuse_sync_full_sync(f, path, full_path, 0);
                     }
                     free(full_path);
                     free(path);
