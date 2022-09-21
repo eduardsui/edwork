@@ -1589,14 +1589,14 @@ int edfs_scheduled_event(struct doops_loop *loop) {
         return 1;
     // expired ?
     if ((updated_event->timeout) && (updated_event->timeout <= microseconds())) {
-        free(updated_event);
         ((struct edfs *)updated_event->edfs_context)->events --;
+        free(updated_event);
         return 1;
     }
 
     if (updated_event->callback((struct edfs *)updated_event->edfs_context, updated_event->userdata_a, updated_event->userdata_b, updated_event->data)) {
-        free(updated_event);
         ((struct edfs *)updated_event->edfs_context)->events --;
+        free(updated_event);
         return 1;
     }
 

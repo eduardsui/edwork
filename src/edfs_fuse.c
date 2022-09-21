@@ -284,6 +284,47 @@ static int edfs_fuse_statfs(const char *path, struct statvfs *stbuf) {
 #endif
 
 #ifdef _WIN32
+BOOL WINAPI edfs_ctrl_console(DWORD fdwCtrlType) {
+    switch (fdwCtrlType) {
+        case CTRL_C_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            fuse_exit(fuse_session);
+            return FALSE;
+        default:
+            return FALSE;
+    }
+}
+
+void edfs_emulate_console() {
+    AllocConsole();
+
+    // Get STDOUT handle
+    HANDLE ConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    int SystemOutput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *COutputHandle = _fdopen(SystemOutput, "w");
+
+    // Get STDERR handle
+    HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
+    int SystemError = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *CErrorHandle = _fdopen(SystemError, "w");
+
+    // Get STDIN handle
+    HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
+    int SystemInput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    FILE *CInputHandle = _fdopen(SystemInput, "r");
+
+    freopen_s(&CInputHandle, "CONIN$", "r", stdin);
+    freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
+    freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
+
+    SetConsoleCtrlHandler(edfs_ctrl_console, TRUE);
+}
+#endif
+
+#ifdef _WIN32
 int edfs_register_uri() {
     HKEY key;
     char edfs_path[MAX_PATH];
@@ -629,6 +670,11 @@ void edfs_gui_callback(void *window) {
                 }
                 break;
 #endif
+            case '/':
+#ifdef _WIN32
+                edfs_emulate_console();
+#endif
+                break;
         }
         ui_free_string(foo);
     }
@@ -716,32 +762,6 @@ thread_ptr_t edfs_fuse_loop(void *arg) {
 thread_ptr_t edfs_gui(int gui_mode) {
     return thread_create(edfs_gui_thread, (void *)(intptr_t)(gui_mode == 2), "edwork gui", 8192 * 1024);
 }
-
-
-#ifdef _WIN32
-void edfs_emulate_console() {
-    AllocConsole();
-
-    // Get STDOUT handle
-    HANDLE ConsoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-    int SystemOutput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
-    FILE *COutputHandle = _fdopen(SystemOutput, "w");
-
-    // Get STDERR handle
-    HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
-    int SystemError = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
-    FILE *CErrorHandle = _fdopen(SystemError, "w");
-
-    // Get STDIN handle
-    HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
-    int SystemInput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
-    FILE *CInputHandle = _fdopen(SystemInput, "r");
-
-    freopen_s(&CInputHandle, "CONIN$", "r", stdin);
-    freopen_s(&COutputHandle, "CONOUT$", "w", stdout);
-    freopen_s(&CErrorHandle, "CONOUT$", "w", stderr);
-}
-#endif
 
 #ifdef __APPLE__
 void edfs_quit(void *event_data, void *user_data) {

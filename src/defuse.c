@@ -1081,7 +1081,7 @@ int fuse_reload(struct fuse *f) {
 void fuse_destroy(struct fuse *f) {
     DEBUG_NOTE("fuse_destroy called");
     if (f) {
-        if (f->op.init)
+        if (f->op.destroy)
             f->op.destroy(f->user_data);
 
         free(f->path_utf8);
