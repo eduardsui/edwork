@@ -160,7 +160,7 @@ static int edfs_console_upload(const char *path, const char *fname) {
         return err;
     }
     char buffer[4096];
-    uint64_t offset;
+    uint64_t offset = 0;
     do {
         int size = fread(buffer, 1, sizeof(buffer), f);
         if (size > 0)

@@ -92,6 +92,7 @@ struct edfs_key_data {
     void *js_window;
 
     thread_id_t js_thread_lock;
+    int js_dry_locks;
     unsigned char js_exit;
     unsigned char reload_js;
 #endif

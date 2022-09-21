@@ -5433,7 +5433,11 @@ int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, co
             if ((current_type) || (current_generation)) {
                 // check all the parameters, not just modified, in case of a setattr(mtime)
                 // also, allows a 0.1s difference
+#ifdef EDFS_SKIP_GENERATION_CHECK
+                if ((current_generation >= generation) && (current_timestamp > timestamp)) {
+#else
                 if ((current_generation > generation) || ((current_generation == generation) && (current_timestamp >= timestamp))) {
+#endif
                     do_write = 0;
                     written = 0;
                     if (current_generation != generation)

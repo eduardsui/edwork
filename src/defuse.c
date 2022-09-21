@@ -76,6 +76,7 @@ struct fuse {
     CF_CONNECTION_KEY s_transferCallbackConnectionKey;
     HANDLE sem;
 
+    unsigned int fetch_op_count;
     DWORD disable_root;
     char running;
 };
@@ -93,6 +94,11 @@ void fuse_unlock(struct fuse *f) {
 static void update_placeholder_flags(const wchar_t *NormalizedPath, CF_UPDATE_FLAGS flags) {
     HANDLE h;
     DEBUG_DUMP("update_placeholder_flags %S", NormalizedPath);
+
+    // no update for root
+    if ((NormalizedPath) && (NormalizedPath[0] == '/') && (!NormalizedPath[1]))
+        return;
+
     HRESULT hr2 = CfOpenFileWithOplock(NormalizedPath, CF_OPEN_FILE_FLAG_NONE, &h);
     DEBUG_ERRNO("CfOpenFileWithOplock", hr2);
     if (!FAILED(hr2)) {
@@ -178,6 +184,9 @@ int fuse_is_read_only(struct fuse *f, const char *path) {
 
 void CALLBACK OnFetchData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBACK_PARAMETERS *callbackParameters) {
     struct fuse *f = (struct fuse *)callbackInfo->CallbackContext;
+    fuse_lock(f);
+    f->fetch_op_count ++;
+    fuse_unlock(f);
 
     CF_OPERATION_INFO opInfo = { 0 };
     CF_OPERATION_PARAMETERS opParams = { 0 };
@@ -217,7 +226,7 @@ void CALLBACK OnFetchData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBAC
         opParams.TransferData.CompletionStatus = STATUS_UNSUCCESSFUL;
 
         hr = CfExecute(&opInfo, &opParams);
-        DEBUG_HANDLE("CfReportProviderProgress", hr);
+        DEBUG_HANDLE("CfExecute", hr);
     } else {
         if (f->op.read) {
             __int64 size = (__int64)callbackParameters->FetchData.RequiredLength.QuadPart;
@@ -249,11 +258,15 @@ void CALLBACK OnFetchData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBAC
                     
                     hr = CfExecute(&opInfo, &opParams);
                     DEBUG_HANDLE("CfExecute", hr);
+                    if (FAILED(hr)) {
+                        // 0x8007018e: The cloud operation was canceled by user.
+                        break;
+                    }
 
                     ProviderProgressCompleted.QuadPart += err;
                     hr = CfReportProviderProgress(callbackInfo->ConnectionKey, callbackInfo->TransferKey, callbackParameters->FetchData.RequiredLength, ProviderProgressCompleted);
                     DEBUG_HANDLE("CfReportProviderProgress", hr);
-
+                    DEBUG_DUMP("  [ %3.2f%% ]", (double)ProviderProgressCompleted.QuadPart / (double)callbackParameters->FetchData.RequiredLength.QuadPart * 100);
 
                     size -= err;
                     offset += err;
@@ -264,19 +277,53 @@ void CALLBACK OnFetchData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBAC
             } while (size > 0);
         }
 
-        if (f->op.release)
+        if (f->op.release) {
+            fuse_lock(f);
             f->op.release(path, &finfo);
+            fuse_unlock(f);
+        }
     }
     free(path);
+    fuse_lock(f);
+    f->fetch_op_count --;
+    fuse_unlock(f);
+}
+
+static int is_modified(struct fuse *f, char *path, char *full_path) {
+    struct stat st_buf = { 0 };
+    struct stat st_buf2 = { 0 };
+
+    if ((f->op.getattr) && (!f->op.getattr(path, &st_buf))) {
+        if (!stat(full_path, &st_buf2)) {
+            if ((st_buf.st_mtime == st_buf2.st_mtime) && (st_buf.st_size == st_buf2.st_size)) {
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+static int is_newer_in_cloud(struct fuse *f, char *path, char *full_path) {
+    struct stat st_buf = { 0 };
+    struct stat st_buf2 = { 0 };
+
+    if ((f->op.getattr) && (!f->op.getattr(path, &st_buf))) {
+        if (!stat(full_path, &st_buf2)) {
+            if (st_buf.st_mtime <= st_buf2.st_mtime) {
+                return 0;
+            }
+        }
+    }
+
+    return 1;
 }
 
 void CALLBACK OnFileOpen(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBACK_PARAMETERS *callbackParameters) {
     struct fuse *f = (struct fuse *)callbackInfo->CallbackContext;
-#ifdef DEBUG
     char *path = toUTF8_path((wchar_t *)callbackInfo->FileIdentity, callbackInfo->FileIdentityLength);
     DEBUG_DUMP("File opened %s", path);
-    free(path);
-#endif
+
     fuse_lock(f);
     wchar_t *placeholder_path = NULL;
     ULONG len = GetFullPathNameW(callbackInfo->NormalizedPath, 0, 0, 0);
@@ -289,49 +336,25 @@ void CALLBACK OnFileOpen(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBACK
                 // get only the path
                 if (filepart)
                     filepart[0] = 0;
+                int len = wcslen(placeholder_path);
+                int i;
+
                 update_placeholder_flags(placeholder_path, CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION);
-                update_policy(f, CF_REGISTER_FLAG_NONE);
+
+                // not to exit the root
+                int limit = len - callbackInfo->FileIdentityLength / 2 + 1;
+                // update all directories
+                for (i = len - 2; i > limit; i --) {
+                    if ((placeholder_path[i] == '/') || (placeholder_path[i] == '\\')) {
+                        placeholder_path[i] = 0;
+                        update_placeholder_flags(placeholder_path, CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION);
+                    }
+                }
             }
             free(placeholder_path);
         }
     }
     fuse_unlock(f);
-}
-
-static int is_modified(struct fuse *f, char *path, char *full_path) {
-    struct stat st_buf = { 0 };
-
-    FILE* local_file = NULL;
-    
-    int err = fopen_s(&local_file, full_path, "rb");
-    if ((err) || (!local_file))
-        return 0;
-
-    __int64 fuse_file_size = 0;
-    int has_stat = 0;
-    if ((f->op.getattr) && (!f->op.getattr(path, &st_buf))) {
-        fuse_file_size = st_buf.st_size;
-        has_stat = 1;
-    }
-
-    _fseeki64(local_file, 0, SEEK_END);
-    __int64 fsize = _ftelli64(local_file);
-    _fseeki64(local_file, 0, SEEK_SET);
-
-    if ((fuse_file_size == fsize) && (has_stat)) {
-        struct stat st_buf2 = { 0 };
-
-        if (!stat(full_path, &st_buf2)) {
-            if (st_buf.st_mtime == st_buf2.st_mtime) {
-                // no change
-                fclose(local_file);
-                return 0;
-            }
-        }
-    }
-
-    fclose(local_file);
-    return 1;
 }
 
 static int fuse_sync_full_sync(struct fuse *f, char *path, char *full_path) {
@@ -410,18 +433,6 @@ static int fuse_sync_full_sync(struct fuse *f, char *path, char *full_path) {
         err = 0;
     fclose(local_file);
 
-    if (f->op.flush) {
-        fuse_lock(f);
-        f->op.flush(path, &finfo);
-        fuse_unlock(f);
-    }
-
-    if (f->op.fsync) {
-        fuse_lock(f);
-        f->op.fsync(path, 0, &finfo);
-        fuse_unlock(f);
-    }
-
     if (f->op.utimens) {
         if (!stat(full_path, &st_buf)) {
             struct timespec tv[2];
@@ -452,57 +463,39 @@ void CALLBACK OnFileClose(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBAC
     HRESULT hr = CfOpenFileWithOplock(callbackInfo->NormalizedPath, CF_OPEN_FILE_FLAG_EXCLUSIVE, &h);
     DEBUG_HANDLE("CfOpenFileWithOplock", hr);
     if (hr == S_OK) {
-        LARGE_INTEGER start;
-        LARGE_INTEGER len;
-        start.QuadPart = 0;
-        len.QuadPart = -1;
         HRESULT hr2;
 
-        hr = CfDehydratePlaceholder(h, start, len, CF_DEHYDRATE_FLAG_NONE, NULL);
-        DEBUG_HANDLE("CfDehydratePlaceholder", hr);
-        // not in sync
-        if (hr == 0x80070179) {
-            char *path = toUTF8_path((wchar_t *)callbackInfo->FileIdentity, callbackInfo->FileIdentityLength);
-            char *full_path = toUTF8(callbackInfo->NormalizedPath);
-            DEBUG_DUMP("Sync %s (%s)", path, full_path);
-            if (!is_modified(f, path, full_path)) {
-                DEBUG_NOTE("not modified");
-                CfCloseHandle(h);
-                hr2 = CfOpenFileWithOplock(callbackInfo->NormalizedPath, CF_OPEN_FILE_FLAG_EXCLUSIVE, &h);
-                DEBUG_HANDLE("CfOpenFileWithOplock", hr2);
-                hr2 = CfSetInSyncState(h, CF_IN_SYNC_STATE_IN_SYNC, CF_SET_IN_SYNC_FLAG_NONE, NULL);
-                DEBUG_HANDLE("CfSetInSyncState", hr2);
-                CfCloseHandle(h);
-                free(path);
-                free(full_path);
-                fuse_unlock(f);
-                return;
-            }
-            hr2 = CfOpenFileWithOplock(callbackInfo->NormalizedPath, CF_OPEN_FILE_FLAG_EXCLUSIVE, &h);
-            DEBUG_HANDLE("CfOpenFileWithOplock", hr2);
-            if (!FAILED(hr2)) {
-                if ((!(callbackParameters->CloseCompletion.Flags & CF_CALLBACK_CLOSE_COMPLETION_FLAG_DELETED)) && (f->op.write)) {
-                    if (!fuse_is_read_only(f, path))
-                        fuse_sync_full_sync(f, path, full_path);
+        char *path = toUTF8_path((wchar_t *)callbackInfo->FileIdentity, callbackInfo->FileIdentityLength);
+        char *full_path = toUTF8(callbackInfo->NormalizedPath);
+        if (is_modified(f, path, full_path)) {
+            if ((!(callbackParameters->CloseCompletion.Flags & CF_CALLBACK_CLOSE_COMPLETION_FLAG_DELETED)) && (f->op.write)) {
+                if (!fuse_is_read_only(f, path)) {
+                    DEBUG_DUMP("Sync %s (%s)", path, full_path);
+                    CloseHandle(h);
+                    fuse_sync_full_sync(f, path, full_path);
+                    hr = CfOpenFileWithOplock(callbackInfo->NormalizedPath, CF_OPEN_FILE_FLAG_EXCLUSIVE, &h);
+                    DEBUG_HANDLE("CfOpenFileWithOplock", hr);
                 }
             }
-            free(full_path);
-            free(path);
+        } else {
+            DEBUG_DUMP("Not modified %s (%s)", path, full_path);
         }
 
-        if (FAILED(hr)) {
-            CfCloseHandle(h);
+        hr2 = CfSetInSyncState(h, CF_IN_SYNC_STATE_IN_SYNC, CF_SET_IN_SYNC_FLAG_NONE, NULL);
+        DEBUG_HANDLE("CfSetInSyncState", hr2);
 
-            // reopen file!
-            hr2 = CfOpenFileWithOplock(callbackInfo->NormalizedPath, CF_OPEN_FILE_FLAG_EXCLUSIVE, &h);
-            DEBUG_HANDLE("CfOpenFileWithOplock", hr2);
-            if (!FAILED(hr2)) {
-                CfSetInSyncState(h, CF_IN_SYNC_STATE_IN_SYNC, CF_SET_IN_SYNC_FLAG_NONE, NULL);
-                DEBUG_HANDLE("CfSetInSyncState", hr2);
-                hr2 = CfDehydratePlaceholder(h, start, len, CF_DEHYDRATE_FLAG_NONE, NULL);
-                DEBUG_HANDLE("CfDehydratePlaceholder", hr2);
-            }
+        if (is_newer_in_cloud(f, path, full_path)) {
+            LARGE_INTEGER start;
+            LARGE_INTEGER len;
+            start.QuadPart = 0;
+            len.QuadPart = -1;
+
+            hr = CfDehydratePlaceholder(h, start, len, CF_DEHYDRATE_FLAG_NONE, NULL);
+            DEBUG_HANDLE("CfDehydratePlaceholder", hr);
         }
+
+        free(path);
+        free(full_path);
 
         CfCloseHandle(h);
     }
@@ -912,19 +905,27 @@ int fuse_loop(struct fuse *f) {
                     if (GetFileAttributesA(full_path) & FILE_ATTRIBUTE_DIRECTORY) {
                         is_dir = 1;
                         if (f->op.mkdir) {
+                            fuse_lock(f);
                             err = f->op.mkdir(path, 0666);
+                            fuse_unlock(f);
                             DEBUG_ERRNO("op.mkdir", err);
                         }
                     } else {
                         if (f->op.create) {
                             struct fuse_file_info finfo = { 0 };
+                            fuse_lock(f);
                             err = f->op.create(path, 0666, &finfo);
+                            fuse_unlock(f);
                             DEBUG_ERRNO("op.create", errno);
-                            if ((f->op.release) && (!err))
+                            if ((f->op.release) && (!err)) {
+                                fuse_lock(f);
                                 f->op.release(path, &finfo);
+                                fuse_unlock(f);
+                            }
                         }
                     }
                     if (!err) {
+                        fuse_lock(f);
                         HANDLE h;
                         wchar_t *full_path_w = fromUTF8(full_path);
                         HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
@@ -937,6 +938,7 @@ int fuse_loop(struct fuse *f) {
                             CfCloseHandle(h);
                             free(wname);
                         }
+                        fuse_unlock(f);
                     }
                     free(full_path);
                     free(path);
@@ -952,6 +954,9 @@ int fuse_loop(struct fuse *f) {
 
                         HANDLE h;
                         wchar_t *full_path_w = fromUTF8(full_path);
+
+                        fuse_lock(f);
+
                         HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
                         free(full_path_w);
                         DEBUG_HANDLE("CfOpenFileWithOplock", hr);
@@ -962,6 +967,8 @@ int fuse_loop(struct fuse *f) {
                             CfCloseHandle(h);
                             free(wname);
                         }
+
+                        fuse_unlock(f);
                     }
                     free(full_path);
                     free(path);
@@ -974,11 +981,13 @@ int fuse_loop(struct fuse *f) {
             }
             ReadDirectoryChangesW(dir_handle, change_buf, 1024, TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, NULL, &overlapped, NULL);
         }
-        if (GetTickCount() - populate_root >= DIRECTORY_POPULATE_TIMEOUT_MS) {
+        fuse_lock(f);
+        if ((!f->fetch_op_count) && (GetTickCount() - populate_root >= DIRECTORY_POPULATE_TIMEOUT_MS)) {
             DEBUG_NOTE("resetting root populate policy");
             update_policy(f, CF_REGISTER_FLAG_NONE);
             populate_root = GetTickCount();
         }
+        fuse_unlock(f);
     }
     CloseHandle(dir_handle);
 

@@ -1051,7 +1051,9 @@ int main(int argc, char *argv[]) {
                 if (!strcmp(arg, "loglevel")) {
                     if (i >= argc - 1) {
                         fprintf(stderr, "edfs: log level expected after -loglevel parameter. Try -help option.\n");
+#if defined(_WIN32) || defined(__APPLE__)
                         ui_message("Error", "edfs: log level expected after -loglevel parameter. Try -help option.\n", 3);
+#endif
                         exit(-1);
                     }
 #ifdef _WIN32
@@ -1277,13 +1279,17 @@ int main(int argc, char *argv[]) {
                     exit(0);
                 } else {
                     fprintf(stderr, "edfs: unknown parameter %s\n", arg);
+#if defined(_WIN32) || defined(__APPLE__)
                     ui_message("Error", "Unknown parameter recieved.\nTry -help to see al the supported parameters.", 3);
+#endif
                     exit(-1);
                 }
             } else {
                 if (mountpoint) {
                     fprintf(stderr, "edfs: unknown parameter %s. Try -help option.\n", arg);
+#if defined(_WIN32) || defined(__APPLE__)
                     ui_message("Error", "Unknown parameter recieved.\nTry -help to see al the supported parameters.", 3);
+#endif
                     exit(-1);
                 }
                 mountpoint = arg;
@@ -1405,7 +1411,9 @@ int main(int argc, char *argv[]) {
             edfs_edwork_done(edfs_context);
             edfs_destroy_context(edfs_context);
             edfs_context = NULL;
+#if defined(_WIN32) || defined(__APPLE__)
             ui_message("Error", "Error mounting partition (directory is already mapped to a partition?).", 3);
+#endif
             fprintf(stderr, "%s\n", "Error mounting partition (directory is already mapped to a partition?).");
             err = -1;
         }
@@ -1416,7 +1424,9 @@ int main(int argc, char *argv[]) {
         edfs_edwork_done(edfs_context);
         edfs_destroy_context(edfs_context);
         edfs_context = NULL;
+#if defined(_WIN32) || defined(__APPLE__)
         ui_message("Error", "Error mounting partition (read-only filesystem or mounting point already mapped).", 3);
+#endif
         fprintf(stderr, "%s\n", "Error mounting partition (read-only filesystem or mounting point already mapped).");
 
         err = -1;

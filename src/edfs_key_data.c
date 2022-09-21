@@ -68,11 +68,17 @@ void edfs_key_data_js_lock(struct edfs_key_data *key_data, int lock) {
         if (key_data->js_thread_lock != thread_current_thread_id()) {
             thread_mutex_lock(&key_data->js_lock);
             key_data->js_thread_lock = thread_current_thread_id();
-        }
+            key_data->js_dry_locks = 0;
+        } else
+            key_data->js_dry_locks ++;
     } else {
         if (key_data->js_thread_lock == thread_current_thread_id()) {
-            key_data->js_thread_lock = NULL;
-            thread_mutex_unlock(&key_data->js_lock);
+            if (key_data->js_dry_locks > 0) {
+                key_data->js_dry_locks --;
+            } else {
+                key_data->js_thread_lock = NULL;
+                thread_mutex_unlock(&key_data->js_lock);
+            }
         }
     }
 }
