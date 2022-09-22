@@ -774,7 +774,6 @@ int edfs_get_peer_list(struct edfs_peer_discovery_data *peers, unsigned char *bu
 
     int records = 0;
     unsigned int i;
-    unsigned int found = 0;
     for (i = 0; i < peers->len; i++) {
         if (*buf_size < 7)
             break;
@@ -2146,8 +2145,8 @@ int read_file_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_
     if (!root_value) {
         if (inode == edfs_root_inode(key)) {
             // first time root
-            char fullpath[MAX_PATH_LEN];
-            char b64name[MAX_B64_HASH_LEN];
+            // char fullpath[MAX_PATH_LEN];
+            // char b64name[MAX_B64_HASH_LEN];
             // EDFS_MKDIR(adjustpath(edfs_context, fullpath, computename(1, b64name)), 0755);
             write_json(edfs_context, key, key->working_directory, ".", 0, inode, 0, S_IFDIR | 0755, NULL, 0, 0, 0, 0);
             root_value = read_json(edfs_context, key, key->working_directory, inode);
@@ -2596,7 +2595,6 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
     uint64_t timestamp = 0;
     time_t modified = 0;
     time_t created = 0;
-    int signature = 0;
 
     struct edfs_key_data *key = edfs_context->primary_key;
     if (!key)
@@ -2633,7 +2631,6 @@ edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char 
 
 void edfs_warm_cache(struct edfs *edfs_context, const char *working_directory, edfs_ino_t ino, uint64_t chunk, uint64_t max_chunks) {
     char b64name[MAX_B64_HASH_LEN];
-    char fullpath[MAX_PATH_LEN];
     char name[MAX_PATH_LEN];
 
     computename(ino, b64name);
@@ -2968,7 +2965,6 @@ uint32_t edfs_get_hash(struct edfs *edfs_context, struct edfs_key_data *key, con
 }
 
 int edfs_get_hash2(struct edfs *edfs_context, struct edfs_key_data *key, const char *path, edfs_ino_t ino, uint64_t chunk, uint32_t *buffer, unsigned int *chunk_offset_ptr) {
-    uint32_t hash = 0;
     char hash_file[0x100];
     hash_file[0] = 0;
 
@@ -3056,7 +3052,6 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
         sig_hash = edfs_get_hash(edfs_context, key, path, ino, chunk, ((filebuf->flags & 3) == O_RDONLY) ? filebuf : NULL);
     }
     int use_addr_cache = 1;
-    int requested = 0;
     int do_forward = 1;
     int is_sctp = 0;
     int reset_cache_tree = 0;
@@ -3743,7 +3738,6 @@ uint64_t get_version_plus_one_json(struct edfs *edfs_context, struct edfs_key_da
 }
 
 int get_deleted_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
-    int64_t size;
 
     int type = read_file_json(edfs_context, key, inode, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL);
     if (!type)
@@ -4393,6 +4387,54 @@ int edfs_lookup_blockchain(struct edfs *edfs_context, struct edfs_key_data *key,
     return 0;
 }
 
+int edfs_history(struct edfs *edfs_context, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char **blockchainhash, uint64_t *generation, uint64_t *timestamp, int history_limit) {
+    if ((!edfs_context) || (!edfs_context->primary_key))
+        return -1;
+
+    struct edfs_key_data *key = edfs_context->primary_key;
+    struct block *blockchain = key->chain;
+    int i;
+    int records = 0;
+    int record_size = sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t) + 32;
+    uint64_t inode_be = htonll(inode);
+    while ((blockchain) && ((blockchain->timestamp + EDFS_BLOCKCHAIN_NEW_BLOCK_TIMEOUT) >= block_timestamp_limit)) {
+        int len = blockchain->data_len - 72;
+        if (len >= record_size) {
+            unsigned char *ptr = blockchain->data;
+            for (i = 0; i < len; i += record_size) {
+                if (*(uint64_t *)ptr == inode_be) {
+                    if (history_limit > 0) {
+                        if (generation) {
+                            memcpy(&generation[records], ptr + sizeof(uint64_t), sizeof(uint64_t));
+                            generation[records] = ntohll(generation[records]);
+                        }
+                        if (timestamp) {
+                            memcpy(&timestamp[records], ptr + sizeof(uint64_t) + sizeof(uint64_t), sizeof(uint64_t));
+                            timestamp[records] = ntohll(timestamp[records]);
+                        }
+                        if (blockchainhash)
+                            memcpy(blockchainhash[records], ptr + sizeof(uint64_t) + sizeof(uint64_t) + sizeof(uint64_t), 32);
+                    }
+                    log_debug("got data from blockchain");
+                    records ++;
+                    if ((history_limit > 0) && (records >= history_limit))
+                        return records;
+                }
+                ptr += record_size;
+            }
+        }
+        blockchain = (struct block *)blockchain->previous_block;
+    }
+    return records;
+}
+
+char *edfs_get_signature(struct edfs *edfs_context, uint64_t inode, int signature_index) {
+    if ((!edfs_context) || (!edfs_context->primary_key))
+        return NULL;
+
+    return edfs_smartcard_get_signature(edfs_context, edfs_context->primary_key, inode, signature_index);
+}
+
 struct dirbuf *edfs_opendir_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t ino) {
     unsigned char hash[32];
     unsigned char blockchainhash[32];
@@ -4544,7 +4586,6 @@ int recursive_dir_size(const char *path, uint64_t *size, uint64_t *files, uint64
 
     if (!tinydir_open(&dir, path)) {
         r = 0;
-        int  i = 0;
         if (directories)
             (*directories) ++;
         while (dir.has_next) {
@@ -4604,7 +4645,6 @@ int remove_node(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t
     char noderef[MAX_PATH_LEN];
     char b64name[MAX_B64_HASH_LEN];
     char parentb64name[MAX_B64_HASH_LEN];
-    int err;
     adjustpath(key, fullpath, computename(inode, b64name));
     if (recursive)
         recursive_rmdir(fullpath);
@@ -5072,7 +5112,6 @@ static int edfs_data_dir_remove(struct edfs *edfs_context, struct edfs_key_data 
                 buf = (char *)malloc(len);
 
                 if (buf) {
-                    struct stat statbuf;
                     snprintf(buf, len, "%s/%s", path, file.name);
                     unsigned char data[MAX_INODE_DESCRIPTOR_SIZE];
                     int edfs_inode_is_dir = 0;
@@ -6061,7 +6100,7 @@ void edfs_chain_ensure_descriptors(struct edfs *edfs_context, struct edfs_key_da
                 uint64_t inode_version = 0;
                 int64_t file_size = 0;
 
-                int type = read_file_json(edfs_context, key, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash, NULL);
+                read_file_json(edfs_context, key, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash, NULL);
                 memcpy(&generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
                 generation = ntohll(generation);
                 if (generation > inode_version)

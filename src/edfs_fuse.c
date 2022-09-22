@@ -308,12 +308,12 @@ void edfs_emulate_console() {
 
     // Get STDERR handle
     HANDLE ConsoleError = GetStdHandle(STD_ERROR_HANDLE);
-    int SystemError = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    int SystemError = _open_osfhandle((intptr_t)ConsoleError, _O_TEXT);
     FILE *CErrorHandle = _fdopen(SystemError, "w");
 
     // Get STDIN handle
     HANDLE ConsoleInput = GetStdHandle(STD_INPUT_HANDLE);
-    int SystemInput = _open_osfhandle((intptr_t)ConsoleOutput, _O_TEXT);
+    int SystemInput = _open_osfhandle((intptr_t)ConsoleInput, _O_TEXT);
     FILE *CInputHandle = _fdopen(SystemInput, "r");
 
     freopen_s(&CInputHandle, "CONIN$", "r", stdin);
@@ -477,6 +477,14 @@ int edfs_auto_startup() {
     #endif
 #endif
 
+int edfs_fuse_history(const char *path, uint64_t timestamp_limit, unsigned char **blockchainhash, uint64_t *generation, uint64_t *timestamp, int history_limit) {
+    return edfs_history(edfs_context, edfs_pathtoinode(edfs_context, path, NULL, NULL), timestamp_limit, blockchainhash, generation, timestamp, history_limit);
+}
+
+char *edfs_fuse_signature(const char *path, int signature_index) {
+    return edfs_get_signature(edfs_context, edfs_pathtoinode(edfs_context, path, NULL, NULL), signature_index);
+}
+
 void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_directory, const char *storage_key) {
     edfs_fuse->getattr      = edfs_fuse_getattr;
     edfs_fuse->readdir      = edfs_fuse_readdir;
@@ -499,6 +507,10 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
     edfs_fuse->chown        = edfs_fuse_chown;
 #ifdef _WIN32
     edfs_fuse->statfs       = edfs_fuse_statfs;
+#ifdef WITH_PJFS
+    edfs_fuse->history      = edfs_fuse_history;
+    edfs_fuse->signature    = edfs_fuse_signature;
+#endif
 
     edfs_register_uri();
 #endif

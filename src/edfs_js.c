@@ -100,6 +100,9 @@ static const char EDFS_JS_API[] = ""
             "\"inode\": function(path) {\n"
                 "return __edfs_private_inode(path);\n"
             "},"
+            "\"history\": function(inode) {\n"
+                "return __edfs_private_history(inode);\n"
+            "},"
             "\"attr\": function(inode) {\n"
                 "var str = __edfs_private_attr(inode);\n"
                 "if (str)"
@@ -1039,12 +1042,70 @@ static int __edfs_private_attr(duk_context *js) {
     if ((n > 0) && (duk_get_type(js, 0) == DUK_TYPE_STRING)) {
         const char *str = duk_get_string(js, 0);
         if ((str) && (str[0])) {
-            JSON_Value *root_value = read_json((struct edfs *)key->edfs_context, key, key->working_directory, unpacked_ino(str));
+            uint64_t inode = unpacked_ino(str);
+            if (!inode)
+                inode = edfs_pathtoinode_key(key, str, NULL, NULL);
+
+            JSON_Value *root_value = read_json((struct edfs *)key->edfs_context, key, key->working_directory, inode);
             if (root_value) {
                 char *serialized_string = json_serialize_to_string_pretty(root_value);
                 duk_push_string(js, serialized_string);
                 json_free_serialized_string(serialized_string);
                 return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int __edfs_private_history(duk_context *js) {
+    struct edfs_key_data *key = edfs_key_data_get_from_js(js);
+    if (!key)
+        return 0;
+
+    int n = duk_get_top(js);
+    int type = duk_get_type(js, 0);
+    if ((n > 0) && (type == DUK_TYPE_STRING)) {
+        const char *str = duk_get_string(js, 0);
+        if ((str) && (str[0])) {
+            uint64_t inode = unpacked_ino(str);
+            if (!inode)
+                inode = edfs_pathtoinode_key(key, str, NULL, NULL);
+
+            int values = edfs_history(key->edfs_context, inode, 0, NULL, NULL, NULL, 0);
+            if (values > 0) {
+                unsigned char **blockchainhash;
+                uint64_t *generation = (uint64_t *)malloc(sizeof(uint64_t) * values);
+                if (!generation)
+                    return 0;
+                uint64_t *timestamp = (uint64_t *)malloc(sizeof(uint64_t) * values);
+                if (!timestamp) {
+                    free(generation);
+                    return 0;
+                }
+
+                values = edfs_history(key->edfs_context, inode, 0, NULL, generation, timestamp, values);
+                if (values) {
+                    duk_idx_t arr_idx = duk_push_array(js);
+
+                    for (int i = 0; i < values; i ++) {
+                        duk_idx_t objid = duk_push_object(js);
+
+                        duk_push_number(js, generation[i]);
+                        duk_put_prop_string(js, objid, "generation");
+
+                        duk_push_number(js, timestamp[i]);
+                        duk_put_prop_string(js, objid, "timestamp");
+
+                        duk_put_prop_index(js, arr_idx, i);
+                    }
+
+                    free(generation);
+                    free(timestamp);
+                    return 1;
+                }
+                free(generation);
+                free(timestamp);
             }
         }
     }
@@ -1104,6 +1165,7 @@ int edfs_js_register_all(duk_context *js) {
     JS_REGISTER(js, __edfs_private_unlink);
     JS_REGISTER(js, __edfs_private_inode);
     JS_REGISTER(js, __edfs_private_attr);
+    JS_REGISTER(js, __edfs_private_history);
 
     char api_buf[0x7FFF];
     char key_id[256];

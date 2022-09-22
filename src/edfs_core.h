@@ -128,6 +128,8 @@ uint64_t edfs_pathtoinode(struct edfs *edfs_context, const char *path, uint64_t 
 uint64_t edfs_pathtoinode_key(struct edfs_key_data *key, const char *path, uint64_t *parentinode, const char **nameptr);
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name);
 int edfs_lookup_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t inode, const char *ensure_name);
+int edfs_history(struct edfs *edfs_context, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char **blockchainhash, uint64_t *generation, uint64_t *timestamp, int history_limit);
+char *edfs_get_signature(struct edfs *edfs_context, uint64_t inode, int signature_index);
 edfs_ino_t edfs_lookup(struct edfs *edfs_context, edfs_ino_t parent, const char *name, edfs_stat *stbuf);
 int edfs_rmdir_inode(struct edfs *edfs_context, edfs_ino_t parent, edfs_ino_t inode);
 int edfs_rmdir_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t parent, edfs_ino_t inode);

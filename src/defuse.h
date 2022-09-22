@@ -152,6 +152,9 @@ struct fuse_operations {
     int (*flock) (const char *, struct fuse_file_info *, int op);
     int (*fallocate) (const char *, int, off_t, off_t, struct fuse_file_info *);
     off_t (*lseek) (const char *, off_t off, int whence, struct fuse_file_info *);
+    // defuse specific
+    int (*history) (const char *, uint64_t timestamp_limit, unsigned char **hash, uint64_t *generation, uint64_t *timestamp, int history_limit);
+    char * (*signature)(const char *, int signature_index);
 };
 
 struct fuse_context {

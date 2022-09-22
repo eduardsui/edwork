@@ -825,7 +825,6 @@ static void loop_run(struct doops_loop *loop) {
 }
 
 static void loop_deinit(struct doops_loop *loop) {
-    struct doops_event *next_ev;
     if (loop) {
 #if defined(WITH_EPOLL) || defined(WITH_KQUEUE)
         if (loop->poll_fd > 0) {
