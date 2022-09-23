@@ -7649,9 +7649,6 @@ int edwork_thread(void *userdata) {
 
     edwork_load_nodes(edfs_context);
     time_t startup = time(NULL);
-#ifdef WITH_SCTP
-    time_t seen_scan = time(NULL);
-#endif
     int broadcast_offset = 0;
 
     struct edfs_key_data *key = edfs_context->key_data;
@@ -7733,16 +7730,16 @@ int edwork_thread(void *userdata) {
         if (!edfs_context->ping_received)
             edwork_broadcast_discovery(edfs_context);
 #endif
-#ifdef WITH_SCTP
-        if (time(NULL) - seen_scan > EDWORK_LAST_SEEN_TIMEOUT) {
-            log_trace("trying to reconnect SCTP sockets");
-            int reconnected_count = edwork_reconnect(edwork, EDWORK_LAST_SEEN_TIMEOUT);
-            if (reconnected_count)
-                log_trace("tried to reconnect %i SCTP sockets", reconnected_count);
-            seen_scan = time(NULL);
-        }
-#endif
     }, - (EDWORK_LIST_INTERVAL * 1000));
+
+#ifdef WITH_SCTP
+    loop_schedule(&edfs_context->loop, {
+        log_trace("trying to reconnect SCTP sockets");
+        int reconnected_count = edwork_reconnect(edwork, EDWORK_LAST_SEEN_TIMEOUT);
+        if (reconnected_count)
+            log_trace("tried to reconnect %i SCTP sockets", reconnected_count);
+    }, EDWORK_LAST_SEEN_TIMEOUT * 1000);
+#endif
 
     loop_schedule(&edfs_context->loop, {
         edwork_save_nodes(edfs_context);
