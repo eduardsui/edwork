@@ -309,7 +309,7 @@ int main(int argc, char *argv[]) {
                         exit(-1);
                     }
                 } else {
-                    fprintf(stderr, "EdFS 1.0BETA, unlicensed 2018-2022 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast][-app|-debugapp][-chunks n][-proxy][-shard 1..n n][partition][key] mount_point\n", argv[0]);
+                    fprintf(stderr, "EdFS 1.0BETA, unlicensed 2018-2022 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast][-app|-debugapp][-chunks n][-proxy][-shard 1..n n][-partition][-key] mount_point\n", argv[0]);
                     exit(-1);
                 }
             }
