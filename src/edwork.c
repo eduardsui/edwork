@@ -47,6 +47,8 @@
         #include <usrsctp.h>
 
         #define SCTP_SOCKET_TYPE    struct socket *
+        #define SCTP_NULL_SOCKET    NULL
+
         #define SCTP_socket(domain, type, protocol)                     usrsctp_socket(domain, type, protocol, edwork_sctp_receive, NULL, 0, data)
         #define SCTP_setsockopt(socket, level, optname, optval, optlen) usrsctp_setsockopt(socket, level, optname, optval, optlen)
         #define SCTP_getsockopt(socket, level, optname, optval, optlen) usrsctp_getsockopt(socket, level, optname, optval, optlen)
@@ -63,6 +65,7 @@
         #define SCTP_shutdown(socket, how)                              usrsctp_shutdown(socket, how)
         #define SCTP_close(socket)                                      usrsctp_close(socket)
     #else
+        #include <sys/sysctl.h>
         #include <netinet/sctp.h>
 
         sctp_assoc_t sctp_getassocid(int sock, const struct sockaddr *sa) {
@@ -87,8 +90,11 @@
         } 
 
         #define SCTP_SOCKET_TYPE    int
+        #define SCTP_NULL_SOCKET    0
+
         #define SCTP_socket(domain, type, protocol)                     socket(domain, type, protocol)
         #define SCTP_setsockopt(socket, level, optname, optval, optlen) setsockopt(socket, level, optname, optval, optlen)
+        #define SCTP_getsockopt(socket, level, optname, optval, optlen) getsockopt(socket, level, optname, optval, optlen)
         #define SCTP_bind(socket, addr, addrlen)                        bind(socket, addr, addrlen)
         #define SCTP_listen(socket, backlog)                            listen(socket, backlog)
         #define SCTP_accept(socket, addr, addrlen)                      accept(socket, addr, addrlen)
@@ -285,32 +291,34 @@ void edwork_init() {
 #else
     signal(SIGPIPE, SIG_IGN);
 #endif
-#if defined(WITH_SCTP) && defined(WITH_USRSCTP)
-    #ifdef SCTP_UDP_ENCAPSULATION
-        usrsctp_init(EDWORK_SCTP_UDP_TUNNELING_PORT, NULL, NULL);
-    #else
-        usrsctp_init(0, NULL, NULL);
+#ifdef WITH_SCTP
+    #ifdef WITH_USRSCTP
+        #ifdef SCTP_UDP_ENCAPSULATION
+            usrsctp_init(EDWORK_SCTP_UDP_TUNNELING_PORT, NULL, NULL);
+        #else
+            usrsctp_init(0, NULL, NULL);
+        #endif
+        usrsctp_sysctl_set_sctp_sendspace(0x2000000);
+        usrsctp_sysctl_set_sctp_recvspace(0x2000000);
+        // usrsctp_sysctl_set_sctp_rto_max_default(1000);
+        usrsctp_sysctl_set_sctp_rto_min_default(500);
+        // usrsctp_sysctl_set_sctp_rto_initial_default(50);
+        usrsctp_sysctl_set_sctp_init_rto_max_default(30000);
+        usrsctp_sysctl_set_sctp_sack_freq_default(1);
+        usrsctp_sysctl_set_sctp_delayed_sack_time_default(50);
+        usrsctp_sysctl_set_sctp_max_burst_default(1);
+        // usrsctp_sysctl_set_sctp_enable_sack_immediately(1);
+        usrsctp_sysctl_set_sctp_nat_friendly(1);
+        usrsctp_sysctl_set_sctp_inits_include_nat_friendly(1);
+        usrsctp_sysctl_set_sctp_mobility_base(1);
+        usrsctp_sysctl_set_sctp_mobility_fasthandoff(1);
+        usrsctp_sysctl_set_sctp_blackhole(2);
+        usrsctp_sysctl_set_sctp_default_frag_interleave(2);
+        usrsctp_sysctl_set_sctp_ecn_enable(1);
+        usrsctp_sysctl_set_sctp_min_split_point(1452);
+        // usrsctp_sysctl_set_sctp_min_residual(1000);
+        usrsctp_sysctl_set_sctp_max_chunks_on_queue(1024);
     #endif
-    usrsctp_sysctl_set_sctp_sendspace(0x2000000);
-    usrsctp_sysctl_set_sctp_recvspace(0x2000000);
-    // usrsctp_sysctl_set_sctp_rto_max_default(1000);
-    usrsctp_sysctl_set_sctp_rto_min_default(500);
-    // usrsctp_sysctl_set_sctp_rto_initial_default(50);
-    usrsctp_sysctl_set_sctp_init_rto_max_default(30000);
-    usrsctp_sysctl_set_sctp_sack_freq_default(1);
-    usrsctp_sysctl_set_sctp_delayed_sack_time_default(50);
-    usrsctp_sysctl_set_sctp_max_burst_default(1);
-    // usrsctp_sysctl_set_sctp_enable_sack_immediately(1);
-    usrsctp_sysctl_set_sctp_nat_friendly(1);
-    usrsctp_sysctl_set_sctp_inits_include_nat_friendly(1);
-    usrsctp_sysctl_set_sctp_mobility_base(1);
-    usrsctp_sysctl_set_sctp_mobility_fasthandoff(1);
-    usrsctp_sysctl_set_sctp_blackhole(2);
-    usrsctp_sysctl_set_sctp_default_frag_interleave(2);
-    usrsctp_sysctl_set_sctp_ecn_enable(1);
-    usrsctp_sysctl_set_sctp_min_split_point(1452);
-    // usrsctp_sysctl_set_sctp_min_residual(1000);
-    usrsctp_sysctl_set_sctp_max_chunks_on_queue(1024);
 #endif
 }
 
@@ -606,29 +614,6 @@ static void edwork_sctp_notification(struct edwork_data *edwork, struct socket *
     }
 }
 
-int edwork_reconnect(struct edwork_data *data, int seconds) {
-    int i;
-    time_t now = time(NULL);
-    int reconnected_sockets = 0;
-    thread_mutex_lock(&data->clients_lock);
-    for (i = 0; i < data->clients_count; i++) {
-        if ((data->clients[i].sctp_socket & 1) && (data->clients[i].sctp_timestamp < now - seconds) && (!data->clients[i].is_listen_socket) && (data->clients[i].sctp_reconnect_timestamp < now - seconds)) {
-            SCTP_SOCKET_TYPE old_socket = data->clients[i].socket;
-            if (old_socket) {
-                // ensure the socket is not found, to avoid double-close
-                data->clients[i].socket = NULL;
-                SCTP_close(old_socket);
-            }
-            data->clients[i].socket = edwork_sctp_connect(data, (const struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, data->clients[i].encapsulation_port);
-            data->clients[i].sctp_reconnect_timestamp = time(NULL);
-            reconnected_sockets ++;
-        }
-
-    }
-    thread_mutex_unlock(&data->clients_lock);
-    return reconnected_sockets;
-}
-
 static int edwork_sctp_receive(struct socket *sock, union sctp_sockstore addr, void *data, size_t datalen, struct sctp_rcvinfo rcvinfo, int flags, void *ulp_info) {
     struct edwork_data *edwork = (struct edwork_data *)ulp_info;
     if ((flags & MSG_NOTIFICATION) || (!data) || (!edwork)) {
@@ -688,7 +673,12 @@ static void edwork_remove_poll_socket(struct edwork_data *data, int offset) {
 #endif
 
 static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const struct sockaddr *addr, int addr_len, unsigned short encapsulation_port) {
+#ifdef WITH_USRSCTP
     SCTP_SOCKET_TYPE peer_socket = SCTP_socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
+#else
+    SCTP_SOCKET_TYPE peer_socket = SCTP_socket(AF_INET, SOCK_SEQPACKET | SOCK_NONBLOCK, IPPROTO_SCTP);
+#endif
+
     if (!peer_socket)
         return 0;
 
@@ -744,6 +734,29 @@ static SCTP_SOCKET_TYPE edwork_sctp_connect(struct edwork_data *data, const stru
 
     SCTP_close(peer_socket);
     return 0;
+}
+
+int edwork_reconnect(struct edwork_data *data, int seconds) {
+    int i;
+    time_t now = time(NULL);
+    int reconnected_sockets = 0;
+    thread_mutex_lock(&data->clients_lock);
+    for (i = 0; i < data->clients_count; i++) {
+        if ((data->clients[i].sctp_socket & 1) && (data->clients[i].sctp_timestamp < now - seconds) && (!data->clients[i].is_listen_socket) && (data->clients[i].sctp_reconnect_timestamp < now - seconds)) {
+            SCTP_SOCKET_TYPE old_socket = data->clients[i].socket;
+            if (old_socket) {
+                // ensure the socket is not found, to avoid double-close
+                data->clients[i].socket = SCTP_NULL_SOCKET;
+                SCTP_close(old_socket);
+            }
+            data->clients[i].socket = edwork_sctp_connect(data, (const struct sockaddr *)&data->clients[i].clientaddr, data->clients[i].clientlen, data->clients[i].encapsulation_port);
+            data->clients[i].sctp_reconnect_timestamp = time(NULL);
+            reconnected_sockets ++;
+        }
+
+    }
+    thread_mutex_unlock(&data->clients_lock);
+    return reconnected_sockets;
 }
 
 static SCTP_SOCKET_TYPE edwork_sctp_connect_hostname(struct edwork_data *data, const char *hostname, int port) {
@@ -1365,7 +1378,11 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             data->clients[data->clients_count].sctp_reconnect_timestamp = 0;
     } else
     if ((is_sctp) && (is_listen_socket) && (!encapsulation_port))
+#ifdef WITH_USRSCTP
         encapsulation_port = edword_sctp_get_remote_encapsulation_port(data->sctp_socket, NULL, (struct sockaddr *)sin);
+#else
+        encapsulation_port = EDWORK_SCTP_UDP_TUNNELING_PORT;
+#endif
 
     if ((data->force_sctp) && (data->clients_count))
         data->clients[data->clients_count].is_sctp = 1;
@@ -1402,7 +1419,11 @@ void *add_node(struct edwork_data *data, struct sockaddr_in *sin, int client_len
             ((struct sockaddr_in6 *)&addr2)->sin6_port = htons(data->default_port);
 
         if (!encapsulation_port)
+#ifdef WITH_USRSCTP
             encapsulation_port = edword_sctp_get_remote_encapsulation_port(data->sctp_socket, NULL, (struct sockaddr *)sin);
+#else
+            encapsulation_port = EDWORK_SCTP_UDP_TUNNELING_PORT;
+#endif
 
         add_node(data, (struct sockaddr_in *)&addr2, sizeof(struct sockaddr_in), 0, 0, is_sctp, 0, encapsulation_port, 0, timestamp ? timestamp : 0);
     }
@@ -1541,7 +1562,7 @@ int edwork_private_broadcast(struct edwork_data *data, struct edfs_key_data *key
                         } else
                         if (errno != 11)
 #endif
-                            data->clients[i].last_seen = threshold - EDWROK_LAST_SEEN_TIMEOUT;
+                            data->clients[i].last_seen = threshold - EDWORK_LAST_SEEN_TIMEOUT;
                     } else {
                         send_to ++;
 #ifdef WITH_SCTP

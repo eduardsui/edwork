@@ -5151,7 +5151,7 @@ int edfs_remove_data(struct edfs *edfs_context, const char *key_id) {
 }
 
 int edfs_peers_info(struct edfs *edfs_context, char *buffer, int buffer_size, int html) {
-    return edwork_debug_node_list(edfs_context->edwork, buffer, buffer_size, (unsigned int)0, time(NULL) - EDWROK_LAST_SEEN_TIMEOUT, html);
+    return edwork_debug_node_list(edfs_context->edwork, buffer, buffer_size, (unsigned int)0, time(NULL) - EDWORK_LAST_SEEN_TIMEOUT, html);
 }
 
 int edfs_list_keys(struct edfs *edfs_context, char *buffer, int buffer_size) {
@@ -6461,7 +6461,7 @@ one_loop:
         // add offset
         int size = BLOCK_SIZE - 4;
         memcpy(buffer, payload, 4);
-        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - EDWROK_LAST_SEEN_TIMEOUT, 0);
+        int records = edwork_get_node_list(edwork, buffer + 4, &size, (unsigned int)offset, time(NULL) - EDWORK_LAST_SEEN_TIMEOUT, 0);
         log_info("%i records found (offset: %i)", records, offset);
         if (records > 0) {
             size += 4;
@@ -7649,6 +7649,9 @@ int edwork_thread(void *userdata) {
 
     edwork_load_nodes(edfs_context);
     time_t startup = time(NULL);
+#ifdef WITH_SCTP
+    time_t seen_scan = time(NULL);
+#endif
     int broadcast_offset = 0;
 
     struct edfs_key_data *key = edfs_context->key_data;
@@ -7731,10 +7734,12 @@ int edwork_thread(void *userdata) {
             edwork_broadcast_discovery(edfs_context);
 #endif
 #ifdef WITH_SCTP
-        if (time(NULL) - startup > EDWROK_LAST_SEEN_TIMEOUT) {
-            int reconnected_count = edwork_reconnect(edwork, EDWROK_LAST_SEEN_TIMEOUT);
+        if (time(NULL) - seen_scan > EDWORK_LAST_SEEN_TIMEOUT) {
+            log_trace("trying to reconnect SCTP sockets");
+            int reconnected_count = edwork_reconnect(edwork, EDWORK_LAST_SEEN_TIMEOUT);
             if (reconnected_count)
                 log_trace("tried to reconnect %i SCTP sockets", reconnected_count);
+            seen_scan = time(NULL);
         }
 #endif
     }, - (EDWORK_LIST_INTERVAL * 1000));
