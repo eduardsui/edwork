@@ -260,8 +260,56 @@ int main(int argc, char *argv[]) {
                 } else
                 if (!strcmp(arg, "rebroadcast")) {
                     edfs_set_rebroadcast(edfs_context, 1);
+                } else
+                if (!strcmp(arg, "chunks")) {
+                    if (i >= argc - 1) {
+                        fprintf(stderr, "edfs: number of chunks expected after -chunks parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
+                    edfs_set_forward_chunks(edfs_context, atoi(argv[i]));
+                } else
+                if (!strcmp(arg, "proxy")) {
+                    edfs_set_proxy(edfs_context, 1);
+                } else
+                if (!strcmp(arg, "shard")) {
+                    if (i >= argc - 2) {
+                        fprintf(stderr, "edfs: shard id and number of shards expected after -shard parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    edfs_set_shard(edfs_context, atoi(argv[i + 1]), atoi(argv[i + 2]));
+                    i += 2;
+                } else
+#ifdef WITH_SCTP
+                if (!strcmp(arg, "sctp")) {
+                    edfs_set_force_sctp(edfs_context, 1);
+                } else
+#endif
+                if (!strcmp(arg, "partition")) {
+                    if (i >= argc - 1) {
+                        fprintf(stderr, "edfs: partition id expected after -partition parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
+                    edfs_set_partition_key(edfs_context, argv[i]);
+                } else
+                if (!strcmp(arg, "key")) {
+                    if (i >= argc - 1) {
+                        fprintf(stderr, "edfs: url-friendly, base64 encoding expected after -key parameter. Try -help option.\n");
+                        exit(-1);
+                    }
+                    i++;
+                    int err;
+                    if (strlen(argv[i]) > 64)
+                        err = edfs_use_key(edfs_context, argv[i], NULL);
+                    else
+                        err = edfs_use_key(edfs_context, NULL, argv[i]);
+                    if (err) {
+                        fprintf(stderr, "edfs: invalid key: %s\n", argv[i]);
+                        exit(-1);
+                    }
                 } else {
-                    fprintf(stderr, "EdFS 1.0BETA, unlicensed 2019 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast][-app|-debugapp] mount_point\n", argv[0]);
+                    fprintf(stderr, "EdFS 1.0BETA, unlicensed 2018-2022 by Eduard Suica\nUsage: %s [-port port_number][-loglevel 0 - 5][-readonly][-newkey][-use host[:port]][-resync][-rebroadcast][-app|-debugapp][-chunks n][-proxy][-shard 1..n n][partition][key] mount_point\n", argv[0]);
                     exit(-1);
                 }
             }
@@ -279,7 +327,7 @@ int main(int argc, char *argv[]) {
     edfs_stat stbuf;
     char full_path[4096];
     const char *name = NULL;
-    char key_buffer[0x100] = "$" ;
+    char key_buffer[0x100] = "$";
 
     do {
         fprintf(stdout, "\x1b[32m%s\x1b[0m %s> ", key_buffer, working_dir);
