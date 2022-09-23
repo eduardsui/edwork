@@ -37,7 +37,7 @@
         dev_t         st_dev;
         uint64_t      st_ino;
         mode_t        st_mode;
-        short          st_nlink;
+        short         st_nlink;
         unsigned int  st_uid;
         unsigned int  st_gid;
         dev_t st_rdev;
@@ -105,6 +105,11 @@
 // not lest than 10 seconds
 #define EDFS_BLOCKCHAIN_MIN_TIMEOUT         10000000UL
 
+enum edfs_descriptor_event {
+    EDFS_EVENT_NONE = 0,
+    EDFS_EVENT_DESCRIPTOR = 1,
+    EDFS_EVENT_DELETE = 2
+};
 
 #define EDFS_SET_ATTR_MODE	(1 << 0)
 #define EDFS_SET_ATTR_UID	(1 << 1)
@@ -126,6 +131,7 @@ typedef int (*edfs_schedule_callback)(struct edfs *edfs_context, uint64_t userda
 
 uint64_t edfs_pathtoinode(struct edfs *edfs_context, const char *path, uint64_t *parentinode, const char **nameptr);
 uint64_t edfs_pathtoinode_key(struct edfs_key_data *key, const char *path, uint64_t *parentinode, const char **nameptr);
+int edfs_inodetopath_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t inode, char *buf, int buf_size);
 int edfs_lookup_inode(struct edfs *edfs_context, edfs_ino_t inode, const char *ensure_name);
 int edfs_lookup_inode_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t inode, const char *ensure_name);
 int edfs_history(struct edfs *edfs_context, edfs_ino_t inode, uint64_t block_timestamp_limit, unsigned char **blockchainhash, uint64_t *generation, uint64_t *timestamp, int history_limit);
@@ -213,6 +219,8 @@ int edfs_settings_set(const struct edfs *edfs_context, const char *key, const ch
 int edfs_settings_set_number(const struct edfs *edfs_context, const char *key, double value);
 int edfs_settings_get(const struct edfs *edfs_context, const char *key, char *value, int value_len);
 double edfs_settings_get_number(const struct edfs *edfs_context, const char *key);
+
+int edfs_set_callback(struct edfs *edfs_context, void (*notify_event)(struct edfs *edfs_context, struct edfs_key_data *key_data, enum edfs_descriptor_event event_id, edfs_ino_t ino));
 
 struct edfs *edfs_create_context(const char *use_working_directory);
 void edfs_destroy_context(struct edfs *edfs_context);

@@ -77,11 +77,66 @@ struct fuse {
     HANDLE sem;
 
     unsigned int fetch_op_count;
-    DWORD disable_root;
+    DWORD populate_root;
     char running;
 };
 
 static int update_policy(struct fuse *f, CF_REGISTER_FLAGS policy);
+
+static int DeleteDirectory(const wchar_t *sPath) {
+    HANDLE hFind;
+    WIN32_FIND_DATAW FindFileData;
+
+    wchar_t DirPath[4096];
+    wchar_t FileName[4096];
+
+    wcscpy(DirPath, sPath);
+    wcscat(DirPath, L"\\*");
+    wcscpy(FileName, sPath);
+    wcscat(FileName, L"\\");
+
+    hFind = FindFirstFileW(DirPath, &FindFileData);
+    if (hFind == INVALID_HANDLE_VALUE)
+        return 0;
+
+    wcscpy(DirPath, FileName);
+
+    int bSearch = 1;
+    while (bSearch) {
+        if (FindNextFileW(hFind, &FindFileData)) {
+            if ((!wcscmp(FindFileData.cFileName, L".")) || (!wcscmp(FindFileData.cFileName, L"..")))
+                continue;
+            wcscat(FileName, FindFileData.cFileName);
+            if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                DeleteDirectory(FileName);
+                RemoveDirectoryW(FileName);
+                wcscpy(FileName, DirPath);
+            } else {
+                if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
+                    _wchmod(FileName, _S_IWRITE);
+
+                // overwrite files before deleting
+                FILE *file = NULL;
+                if (!_wfopen_s(&file, FileName, L"w"))
+                    fclose(file);
+
+                DeleteFileW(FileName);
+                wcscpy(FileName, DirPath);
+            }
+        } else {
+            if (GetLastError() == ERROR_NO_MORE_FILES) {
+                bSearch = 0;
+            } else {
+                FindClose(hFind);
+                return 0;
+            }
+
+        }
+    }
+    FindClose(hFind);
+
+    return RemoveDirectoryW(sPath);
+}
 
 void fuse_lock(struct fuse *f) {
     WaitForSingleObject(f->sem, INFINITE);
@@ -100,10 +155,10 @@ static void update_placeholder_flags(const wchar_t *NormalizedPath, CF_UPDATE_FL
         return;
 
     HRESULT hr2 = CfOpenFileWithOplock(NormalizedPath, CF_OPEN_FILE_FLAG_NONE, &h);
-    DEBUG_ERRNO("CfOpenFileWithOplock", hr2);
+    DEBUG_HANDLE("CfOpenFileWithOplock", hr2);
     if (!FAILED(hr2)) {
         hr2 = CfUpdatePlaceholder(h, NULL, NULL, 0, NULL, 0, flags, NULL, NULL);
-        DEBUG_ERRNO("CfUpdatePlaceholder", hr2);
+        DEBUG_HANDLE("CfUpdatePlaceholder", hr2);
         CfCloseHandle(h);
     }
 }
@@ -311,7 +366,7 @@ static int is_modified(struct fuse *f, char *path, char *full_path) {
 
     if ((f->op.getattr) && (!f->op.getattr(path, &st_buf))) {
         if (!stat(full_path, &st_buf2)) {
-            if ((st_buf.st_mtime == st_buf2.st_mtime) && (st_buf.st_size == st_buf2.st_size)) {
+            if ((st_buf.st_mtime >= st_buf2.st_mtime) && (st_buf.st_size == st_buf2.st_size)) {
                 return 0;
             }
         }
@@ -336,41 +391,11 @@ static int is_newer_in_cloud(struct fuse *f, char *path, char *full_path) {
 }
 
 void CALLBACK OnFileOpen(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBACK_PARAMETERS *callbackParameters) {
-    struct fuse *f = (struct fuse *)callbackInfo->CallbackContext;
+#ifdef DEBUG
     char *path = toUTF8_path((wchar_t *)callbackInfo->FileIdentity, callbackInfo->FileIdentityLength);
     DEBUG_DUMP("File opened %s", path);
-
-    fuse_lock(f);
-    wchar_t *placeholder_path = NULL;
-    ULONG len = GetFullPathNameW(callbackInfo->NormalizedPath, 0, 0, 0);
-    DEBUG_DUMP("GetFullPathNameW returned %i", (int)len);
-    if (len > 0) {
-        placeholder_path = (wchar_t *)malloc((len + 1) * sizeof(wchar_t));
-        if (placeholder_path) {
-            wchar_t *filepart = NULL;
-            if (GetFullPathNameW(callbackInfo->NormalizedPath, len, placeholder_path, &filepart) > 0) {
-                // get only the path
-                if (filepart)
-                    filepart[0] = 0;
-                int len = wcslen(placeholder_path);
-                int i;
-
-                update_placeholder_flags(placeholder_path, CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION);
-
-                // not to exit the root
-                int limit = len - callbackInfo->FileIdentityLength / 2 + 1;
-                // update all directories
-                for (i = len - 2; i > limit; i --) {
-                    if ((placeholder_path[i] == '/') || (placeholder_path[i] == '\\')) {
-                        placeholder_path[i] = 0;
-                        update_placeholder_flags(placeholder_path, CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION);
-                    }
-                }
-            }
-            free(placeholder_path);
-        }
-    }
-    fuse_unlock(f);
+    free(path);
+#endif
 }
 
 static int fuse_sync_full_sync(struct fuse *f, char *path, char *full_path, int try_create) {
@@ -677,15 +702,6 @@ static int fuse_fill_dir(void *buf, const char *name, const struct stat *stbuf, 
         if (S_ISDIR(stbuf->st_mode)) {
             placeholder->FsMetadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_DIRECTORY;
             placeholder->FsMetadata.FileSize.QuadPart = 0;
-
-            if ((name) && (strcmp(name, ".")) && (strcmp(name, ".."))) {
-                // skip . and ..
-                char *full_sys_path = get_full_path(f->path_utf8, full_path);
-                wchar_t *full_sys_path_w = fromUTF8(full_sys_path);
-                update_placeholder_flags(full_sys_path_w, CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION);
-                free(full_sys_path_w);
-                free(full_sys_path);
-            }
         } else {
             placeholder->FsMetadata.FileSize.QuadPart = stbuf->st_size;
         }
@@ -758,7 +774,7 @@ void CALLBACK OnFetchPlaceholders(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF
                 if (err)
                     opParams.TransferPlaceholders.CompletionStatus = STATUS_UNSUCCESSFUL;
 
-                opParams.TransferPlaceholders.Flags = CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_NONE;//CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION;
+                opParams.TransferPlaceholders.Flags = CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_NONE;
                 opParams.TransferPlaceholders.PlaceholderTotalCount.QuadPart = placeholders_count;
                 opParams.TransferPlaceholders.PlaceholderCount = placeholders_count;
                 opParams.TransferPlaceholders.PlaceholderArray = placeholders;
@@ -806,6 +822,8 @@ static int update_policy(struct fuse *f, CF_REGISTER_FLAGS policy) {
     if ((!f) || (!f->ch))
         return -1;
 
+    f->populate_root = 0;
+
     CF_SYNC_REGISTRATION CfSyncRegistration = { 0 };
     CfSyncRegistration.StructSize = sizeof(CF_SYNC_REGISTRATION);
     CfSyncRegistration.ProviderName = L"edwork";
@@ -827,6 +845,77 @@ static int update_policy(struct fuse *f, CF_REGISTER_FLAGS policy) {
     if (FAILED(hr))
         return -1;
     return 0;
+}
+
+void fuse_notify_refresh(struct fuse *f, const char *path) {
+    DEBUG_DUMP("Needs refresh %s", path);
+    if ((!f) || (!f->ch))
+        return;
+
+    struct stat st_buf = { 0 };
+
+    if ((f->op.getattr) && (!f->op.getattr(path, &st_buf))) {
+        if (S_ISDIR(st_buf.st_mode)) {
+            if ((!path) || (!path[0]) || (((path[0] == '/') || (path[0] == '\\')) && (!path[1]))) {
+                f->populate_root = 1;
+            } else {
+                char *full_path = get_full_path(f->path_utf8, path);
+
+                wchar_t *wname = fromUTF8(full_path);
+                update_placeholder_flags(wname, CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION);
+                free(wname);
+
+                free(full_path);
+            }
+        } else {
+            int i;
+            int len = strlen(path);
+            for (i = len - 1; i >= 0; i --) {
+                if ((path[i] == '/') || (path[i] == '\\')) {
+                    if (i) {
+                        char *path2 = strdup(path);
+                        if (path2) {
+                            path2[i] = 0;
+                            fuse_notify_refresh(f, path2);
+                            free(path2);
+                        }
+                    } else
+                        f->populate_root = 1;
+                    break;
+                }
+            }
+        }
+    } else
+        f->populate_root = 1;
+}
+
+void fuse_notify_delete(struct fuse *f, const char *path) {
+    DEBUG_DUMP("Deleted %s", path);
+    if ((!f) || (!f->ch))
+        return;
+
+    if ((!path) || (!path[0]) || (!strcmp(path, "/")) || (!strcmp(path, ".")))
+        return;
+
+    char *full_path = get_full_path(f->path_utf8, path);
+
+    wchar_t *full_path_w = fromUTF8(full_path);
+    HANDLE h;
+    HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
+    DEBUG_HANDLE("CfOpenFileWithOplock", hr);
+
+    if (!FAILED(hr)) {
+        HRESULT hr2 = CfRevertPlaceholder(h, CF_REVERT_FLAG_NONE, NULL);
+        DEBUG_HANDLE("CfRevertPlaceholder", hr2);
+        CfCloseHandle(h);
+    }
+
+    // op.getattr may return error, so run both rmdir and unlink
+    rmdir(full_path);
+    _unlink(full_path);
+
+    free(full_path_w);
+    free(full_path);
 }
 
 struct fuse_chan *fuse_mount(const char *dir, void* args) {
@@ -909,8 +998,8 @@ static void recursive_create(struct fuse *f, char *path) {
         HANDLE h;
         wchar_t *full_path_w = fromUTF8(full_path);
         HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
-        free(full_path_w);
         DEBUG_HANDLE("CfOpenFileWithOplock", hr);
+        free(full_path_w);
         if (!FAILED(hr)) {
             wchar_t *wname = fromUTF8(path);
             HRESULT hr2 = CfConvertToPlaceholder(h, wname, wcslen(wname) * sizeof(wchar_t), is_dir ? CF_CONVERT_FLAG_ENABLE_ON_DEMAND_POPULATION : CF_CONVERT_FLAG_NONE , NULL, NULL);
@@ -992,7 +1081,6 @@ int fuse_loop(struct fuse *f) {
     else
         f->running = 1;
 
-    DWORD populate_root = 0;
     while (f->running == 1) {
         DWORD wait_status = WaitForSingleObject(overlapped.hEvent, 100); 
 
@@ -1011,8 +1099,6 @@ int fuse_loop(struct fuse *f) {
                     recursive_create(f, path);
 
                     free(path);
-                    update_policy(f, CF_REGISTER_FLAG_NONE);
-                    populate_root = GetTickCount();
                 } else
                 if (ev->Action == FILE_ACTION_MODIFIED) {
                     char *path = toUTF8_path(ev->FileName, ev->FileNameLength);
@@ -1050,13 +1136,9 @@ int fuse_loop(struct fuse *f) {
             }
             ReadDirectoryChangesW(dir_handle, change_buf, 1024, TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, NULL, &overlapped, NULL);
         }
-        fuse_lock(f);
-        if ((!f->fetch_op_count) && (GetTickCount() - populate_root >= DIRECTORY_POPULATE_TIMEOUT_MS)) {
-            DEBUG_NOTE("resetting root populate policy");
+
+        if (f->populate_root)
             update_policy(f, CF_REGISTER_FLAG_NONE);
-            populate_root = GetTickCount();
-        }
-        fuse_unlock(f);
     }
     CloseHandle(dir_handle);
 
@@ -1066,61 +1148,6 @@ int fuse_loop(struct fuse *f) {
 
 int fuse_loop_mt(struct fuse *f) {
     return fuse_loop(f);
-}
-
-static int DeleteDirectory(const wchar_t *sPath) {
-    HANDLE hFind;
-    WIN32_FIND_DATAW FindFileData;
-
-    wchar_t DirPath[4096];
-    wchar_t FileName[4096];
-
-    wcscpy(DirPath, sPath);
-    wcscat(DirPath, L"\\*");
-    wcscpy(FileName, sPath);
-    wcscat(FileName, L"\\");
-
-    hFind = FindFirstFileW(DirPath, &FindFileData);
-    if (hFind == INVALID_HANDLE_VALUE)
-        return 0;
-
-    wcscpy(DirPath, FileName);
-
-    int bSearch = 1;
-    while (bSearch) {
-        if (FindNextFileW(hFind, &FindFileData)) {
-            if ((!wcscmp(FindFileData.cFileName, L".")) || (!wcscmp(FindFileData.cFileName, L"..")))
-                continue;
-            wcscat(FileName, FindFileData.cFileName);
-            if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                DeleteDirectory(FileName);
-                RemoveDirectoryW(FileName);
-                wcscpy(FileName, DirPath);
-            } else {
-                if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
-                    _wchmod(FileName, _S_IWRITE);
-
-                // overwrite files before deleting
-                FILE *file = NULL;
-                if (!_wfopen_s(&file, FileName, L"w"))
-                    fclose(file);
-
-                DeleteFileW(FileName);
-                wcscpy(FileName, DirPath);
-            }
-        } else {
-            if (GetLastError() == ERROR_NO_MORE_FILES) {
-                bSearch = 0;
-            } else {
-                FindClose(hFind);
-                return 0;
-            }
-
-        }
-    }
-    FindClose(hFind);
-
-    return RemoveDirectoryW(sPath);
 }
 
 struct fuse *fuse_new(struct fuse_chan *ch, void *args, const struct fuse_operations *op, size_t op_size, void* private_data) {

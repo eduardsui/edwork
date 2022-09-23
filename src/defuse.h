@@ -158,7 +158,7 @@ struct fuse_operations {
 };
 
 struct fuse_context {
-    struct fuse* fuse;
+    struct fuse *fuse;
     void * private_data;
     mode_t umask;
 };
@@ -166,7 +166,7 @@ struct fuse_context {
 // not implemented
 #define fuse_opt_free_args(x)
 
-struct fuse* fuse_new(struct fuse_chan * ch, void * args, const struct fuse_operations* op, size_t op_size, void * private_data);
+struct fuse *fuse_new(struct fuse_chan * ch, void * args, const struct fuse_operations* op, size_t op_size, void * private_data);
 
 struct fuse_chan *fuse_mount(const char *dir, void *args);
 void fuse_unmount(const char *dir, struct fuse_chan *ch);
@@ -176,13 +176,14 @@ int fuse_set_signal_handlers(struct fuse *se);
 struct fuse *fuse_get_session(struct fuse *f);
 void fuse_remove_signal_handlers(struct fuse *se);
 
-int fuse_loop(struct fuse* f);
-int fuse_loop_mt(struct fuse* f);
-void fuse_exit(struct fuse* f);
-void fuse_destroy(struct fuse* f);
+int fuse_loop(struct fuse *f);
+int fuse_loop_mt(struct fuse *f);
+void fuse_exit(struct fuse *f);
+void fuse_destroy(struct fuse *f);
 
-// enable windows projected virtual file system
-int fuse_enable_service();
+// defuse specific
+void fuse_notify_delete(struct fuse *f, const char *path);
+void fuse_notify_refresh(struct fuse *f, const char *path);
 
 #ifdef __cplusplus
 }

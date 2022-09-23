@@ -339,6 +339,8 @@ struct edfs {
 #ifndef EDFS_NO_JS
     unsigned char app_mode;
 #endif
+
+    void (*notify_event)(struct edfs *edfs_context, struct edfs_key_data *key_data, enum edfs_descriptor_event event_id, edfs_ino_t ino);
 };
 
 #ifdef EDFS_MULTITHREADED
@@ -5414,7 +5416,7 @@ void edfs_queue_ensure_data(struct edfs *edfs_context, struct edfs_key_data *key
     thread_mutex_unlock(&edfs_context->shard_lock);
 }
 
-int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, const unsigned char *payload, int size, uint64_t *ino) {
+int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, const unsigned char *payload, int size, uint64_t *ino, int *is_free) {
     if (size <= 64)
         return -1;
 
@@ -5446,6 +5448,8 @@ int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, co
         uint64_t timestamp = (uint64_t)json_object_get_number(root_object, "timestamp");
         uint64_t generation = (uint64_t)json_object_get_number(root_object, "version");
         int deleted = (int)json_object_get_number(root_object, "deleted");
+        if (is_free)
+            *is_free = deleted;
         uint64_t current_generation = 0;
         uint64_t current_timestamp = 0;
         if ((parent == 0) && (inode == edfs_root_inode(key)) && (!deleted) && (b64name)) {
@@ -6476,11 +6480,15 @@ one_loop:
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         // json payload
         uint64_t ino;
-        int err = edwork_process_json(edfs_context, key, payload, payload_size, &ino);
+        int is_free;
+        int err = edwork_process_json(edfs_context, key, payload, payload_size, &ino, &is_free);
         *(uint64_t *)buffer = htonll(ino);
         if (err > 0) {
             edfs_update_proof_hash(key, sequence, timestamp, type, payload, payload_size, who_am_i, ino);
             edfs_update_proof_inode(key, ino);
+            if (edfs_context->notify_event)
+                edfs_context->notify_event(edfs_context, key, is_free ? EDFS_EVENT_DELETE : EDFS_EVENT_DESCRIPTOR, ino);
+
             if (edwork_send_to_peer(edwork, key, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL) <= 0) {
                 log_error("error sending ACK");
                 return;
@@ -6599,6 +6607,8 @@ one_loop:
         edwork_ensure_node_in_list(edwork, clientaddr, clientaddrlen, is_sctp, is_listen_socket);
         if (edwork_delete(edfs_context, key, payload, payload_size, &ino)) {
             *(uint64_t *)buffer = htonll(sequence);
+            if (edfs_context->notify_event)
+                edfs_context->notify_event(edfs_context, key, EDFS_EVENT_DELETE, ino);
             if (edwork_send_to_peer(edwork, key, "ack\x00", buffer, sizeof(uint64_t), clientaddr, clientaddrlen, is_sctp, is_listen_socket, EDWORK_SCTP_TTL) <= 0) {
                 log_error("error sending ACK");
                 return;
@@ -7869,6 +7879,36 @@ uint64_t edfs_pathtoinode(struct edfs *edfs_context, const char *path, uint64_t 
     return edfs_pathtoinode_key(edfs_context ? edfs_context->primary_key : NULL, path, parentinode, nameptr);
 }
 
+int edfs_inodetopath_key(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t inode, char *buf, int buf_size) {
+    edfs_ino_t parent;
+    if ((!buf) || (buf_size <= 0))
+        return 0;
+
+    buf[0] = 0;
+
+    while (inode) {
+        char namebuf[4096];
+
+        parent = 0;
+        namebuf[0] = 0;
+        
+        // ignore return (type), because for deleted files is also zero
+        read_file_json(edfs_context, key, inode, &parent, NULL, NULL, NULL, NULL, namebuf, sizeof(namebuf), NULL, NULL, NULL, NULL, NULL);
+        if (namebuf[0]) {
+            if ((namebuf[0] == '.') && (!namebuf[1])) {
+                // root directory
+                break;
+            }
+            char *buf2 = strdup(buf);
+            snprintf(buf, buf_size, "/%s%s", namebuf, buf2);
+            free(buf2);
+            inode = parent;
+        } else
+            break;
+    }
+    return 1;
+}
+
 char *edfs_lazy_read_file(struct edfs *edfs_context, struct edfs_key_data *key, const char *filename, int *file_size, uint64_t offset, int max_size) {
     if (!edfs_context->mutex_initialized)
         usleep(10000000);
@@ -8438,6 +8478,14 @@ double edfs_settings_get_number(const struct edfs *edfs_context, const char *key
     double json_value = json_object_dotget_number(root_object, key ? key : "");
     json_value_free(root_value);
     return json_value;
+}
+
+int edfs_set_callback(struct edfs *edfs_context, void (*notify_event)(struct edfs *edfs_context, struct edfs_key_data *key_data, enum edfs_descriptor_event event_id, edfs_ino_t ino)) {
+    if (!edfs_context)
+        return 0;
+
+    edfs_context->notify_event = notify_event;
+    return 1;
 }
 
 #ifdef WITH_SMARTCARD

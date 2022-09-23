@@ -485,6 +485,26 @@ char *edfs_fuse_signature(const char *path, int signature_index) {
     return edfs_get_signature(edfs_context, edfs_pathtoinode(edfs_context, path, NULL, NULL), signature_index);
 }
 
+#ifdef WITH_PJFS
+void edfs_fuse_notify(struct edfs *edfs_context, struct edfs_key_data *key_data, enum edfs_descriptor_event event_id, edfs_ino_t ino) {
+    if (key_data != edfs_get_primary_key(edfs_context))
+        return;
+
+    char path[8192];
+
+    if (edfs_inodetopath_key(edfs_context, key_data, ino, path, sizeof(path))) {
+        switch (event_id) {
+            case EDFS_EVENT_DESCRIPTOR:
+                fuse_notify_refresh(fuse_session, path);                
+                break;
+            case EDFS_EVENT_DELETE:
+                fuse_notify_delete(fuse_session, path);
+                break;
+        }
+    }
+}
+#endif
+
 void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_directory, const char *storage_key) {
     edfs_fuse->getattr      = edfs_fuse_getattr;
     edfs_fuse->readdir      = edfs_fuse_readdir;
@@ -518,6 +538,11 @@ void edfs_fuse_init(struct fuse_operations *edfs_fuse, const char *working_direc
     edfs_context = edfs_create_context(working_directory);
     if (storage_key)
         edfs_set_store_key(edfs_context, (const unsigned char *)storage_key, strlen(storage_key));
+
+#ifdef WITH_PJFS
+    edfs_set_callback(edfs_context, edfs_fuse_notify);
+#endif
+
 #ifdef WITH_SMARTCARD
     #if defined(_WIN32) || defined(__APPLE__)
         edfs_set_smartcard_callback(edfs_context, smartcard_status_changed);
