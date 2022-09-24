@@ -81,7 +81,7 @@ struct fuse {
     char running;
 };
 
-static int update_policy(struct fuse *f, CF_REGISTER_FLAGS policy);
+int fuse_populate_directory(struct fuse *f, const char *path, int recursive);
 
 static int DeleteDirectory(const wchar_t *sPath) {
     HANDLE hFind;
@@ -106,7 +106,18 @@ static int DeleteDirectory(const wchar_t *sPath) {
         if (FindNextFileW(hFind, &FindFileData)) {
             if ((!wcscmp(FindFileData.cFileName, L".")) || (!wcscmp(FindFileData.cFileName, L"..")))
                 continue;
+
             wcscat(FileName, FindFileData.cFileName);
+
+            HANDLE h;
+            HRESULT hr = CfOpenFileWithOplock(FileName, CF_OPEN_FILE_FLAG_NONE, &h);
+            DEBUG_HANDLE("CfOpenFileWithOplock", hr);
+            if (!FAILED(hr)) {
+                HRESULT hr2 = CfRevertPlaceholder(h, CF_REVERT_FLAG_NONE, NULL);
+                DEBUG_HANDLE("CfRevertPlaceholder", hr2);
+                CfCloseHandle(h);
+            }
+
             if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                 DeleteDirectory(FileName);
                 RemoveDirectoryW(FileName);
@@ -146,6 +157,7 @@ void fuse_unlock(struct fuse *f) {
     ReleaseSemaphore(f->sem, 1, NULL);
 }
 
+/*
 static void update_placeholder_flags(const wchar_t *NormalizedPath, CF_UPDATE_FLAGS flags) {
     HANDLE h;
     DEBUG_DUMP("update_placeholder_flags %S", NormalizedPath);
@@ -162,6 +174,7 @@ static void update_placeholder_flags(const wchar_t *NormalizedPath, CF_UPDATE_FL
         CfCloseHandle(h);
     }
 }
+*/
 
 static char *get_full_path(const char *path, const char *name) {
     int len_name = name ? (int)strlen(name) : 0;
@@ -631,6 +644,9 @@ void CALLBACK OnFileRename(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBA
     DEBUG_HANDLE("CfExecute", hr);
 }
 
+/* *******************************************************************************************
+// OnFetchPlacehodlers - disabled because of buggy behaviour (unaccessible files/folders)
+
 static int fuse_fill_dir(void *buf, const char *name, const struct stat *stbuf, off_t off) {
     struct fuse *f = (struct fuse *)((void**)buf)[0];
     CF_PLACEHOLDER_CREATE_INFO **placeholders = (CF_PLACEHOLDER_CREATE_INFO **)((void **)buf)[1];
@@ -649,6 +665,9 @@ static int fuse_fill_dir(void *buf, const char *name, const struct stat *stbuf, 
         return 0;
     }
 
+    if ((!name) || (!strcmp(name, ".")) || (!strcmp(name, "..")))
+        return 0;
+
     int len_name = name ? (int)strlen(name) : 0;
     int len_path = path ? (int)strlen(path) : 0;
     char *full_path = (char *)malloc(len_path + len_name + 2);
@@ -664,6 +683,7 @@ static int fuse_fill_dir(void *buf, const char *name, const struct stat *stbuf, 
             full_path[len_path + len_name + 1] = 0;
         }
     }
+    DEBUG_DUMP("    %s", full_path);
 
     if ((!stbuf) && (f->op.getattr) && (name) && (path) && (path[0])) {
         memset(&stbuf2, 0, sizeof(stbuf2));
@@ -694,7 +714,6 @@ static int fuse_fill_dir(void *buf, const char *name, const struct stat *stbuf, 
     placeholder->RelativeFileName = fromUTF8(name);
 
     // do not free wname nor placeholder->RelativeFileName here (it will be freed by OnFetchPlaceholders)
-
     placeholder->Flags = CF_PLACEHOLDER_CREATE_FLAG_NONE;
     if (stbuf) {
         placeholder->Flags = CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC;
@@ -711,15 +730,19 @@ static int fuse_fill_dir(void *buf, const char *name, const struct stat *stbuf, 
         placeholder->FsMetadata.BasicInfo.LastAccessTime.QuadPart = LARGE_TIME(stbuf->st_atime);
         placeholder->FsMetadata.BasicInfo.LastWriteTime.QuadPart = LARGE_TIME(stbuf->st_mtime);
 
-        if ((name) && (name[0] == '.'))
+        if ((name) && (name[0] == '.') && (name[1]) && (name[1] != '.'))
             placeholder->FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_HIDDEN;
         else
             placeholder->FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_NORMAL;
 
-        placeholder->FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_ARCHIVE | 0x2000 /* FILE_ATTRIBUTE_NOT_CONTENT_INDEXED */ | 0x20000 /* FILE_ATTRIBUTE_NO_SCRUB_DATA */;
+        placeholder->FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_ARCHIVE | 0x2000 | 0x20000;
+    } else {
+        DEBUG_NOTE("No file attributtes received");
     }
 
     finfo->session_offset++;
+
+    free(full_path);
 
     return 0;
 }
@@ -801,11 +824,161 @@ void CALLBACK OnFetchPlaceholders(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF
     }
     free(placeholders);
 
-    if (!callbackInfo->FileIdentityLength) {
-        update_policy(f, CF_REGISTER_FLAG_DISABLE_ON_DEMAND_POPULATION_ON_ROOT);
-    } else {
-        update_placeholder_flags(callbackInfo->NormalizedPath, CF_UPDATE_FLAG_DISABLE_ON_DEMAND_POPULATION);
+    update_placeholder_flags(callbackInfo->NormalizedPath, CF_UPDATE_FLAG_DISABLE_ON_DEMAND_POPULATION);
+}
+// ****************************************************************************************** */
+
+static int fuse_fill_dir_no_demand(void *buf, const char *name, const struct stat *stbuf, off_t off) {
+    struct fuse *f = (struct fuse *)((void**)buf)[0];
+    struct fuse_file_info* finfo = (struct fuse_file_info*)((void**)buf)[1];
+    char *path = (char *)((void**)buf)[2];
+    int recursive = (int)(uintptr_t)((void**)buf)[3];
+
+    struct stat stbuf2;
+
+    if ((!finfo) || (!f)) {
+        DEBUG_NOTE("I/O error");
+        return -EIO;
     }
+
+    if (off < finfo->offset) {
+        DEBUG_NOTE("offset error");
+        return 0;
+    }
+
+    if ((!name) || (!strcmp(name, ".")) || (!strcmp(name, "..")))
+        return 0;
+
+    int len_name = name ? (int)strlen(name) : 0;
+    int len_path = path ? (int)strlen(path) : 0;
+    char *full_path = (char *)malloc(len_path + len_name + 2);
+
+    if (full_path) {
+        memcpy(full_path, path, len_path);
+        if (path[len_path - 1] == '/') {
+            memcpy(full_path + len_path, name, len_name);
+            full_path[len_path + len_name] = 0;
+        } else {
+            full_path[len_path] = '/';
+            memcpy(full_path + len_path + 1, name, len_name);
+            full_path[len_path + len_name + 1] = 0;
+        }
+    }
+    DEBUG_DUMP("    %s", full_path);
+
+    if ((!stbuf) && (f->op.getattr) && (name) && (path) && (path[0])) {
+        memset(&stbuf2, 0, sizeof(stbuf2));
+        if ((!strcmp(name, ".")) || (!strcmp(name, ".."))) {
+            if (!f->op.getattr(path, &stbuf2))
+                stbuf = &stbuf2;
+        } else {
+            if (!f->op.getattr(full_path, &stbuf2))
+                stbuf = &stbuf2;
+        }
+    }
+
+    CF_PLACEHOLDER_CREATE_INFO placeholder;
+    memset(&placeholder, 0, sizeof(CF_PLACEHOLDER_CREATE_INFO));
+
+    wchar_t *wname = fromUTF8(full_path);
+    placeholder.FileIdentity = wname;
+    placeholder.FileIdentityLength = (DWORD)(wcslen(wname) * sizeof(wchar_t));
+    placeholder.RelativeFileName = fromUTF8(name);
+
+    int is_dir = 0;
+    // do not free wname nor placeholder->RelativeFileName here (it will be freed by OnFetchPlaceholders)
+    placeholder.Flags = CF_PLACEHOLDER_CREATE_FLAG_NONE;
+    if (stbuf) {
+        placeholder.Flags = CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC;
+
+        if (S_ISDIR(stbuf->st_mode)) {
+            placeholder.FsMetadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+            placeholder.FsMetadata.FileSize.QuadPart = 0;
+            placeholder.Flags |= CF_PLACEHOLDER_CREATE_FLAG_DISABLE_ON_DEMAND_POPULATION;
+            is_dir = 1;
+        } else {
+            placeholder.FsMetadata.FileSize.QuadPart = stbuf->st_size;
+        }
+
+        placeholder.FsMetadata.BasicInfo.CreationTime.QuadPart = LARGE_TIME(stbuf->st_ctime);
+        placeholder.FsMetadata.BasicInfo.ChangeTime.QuadPart = LARGE_TIME(stbuf->st_mtime);
+        placeholder.FsMetadata.BasicInfo.LastAccessTime.QuadPart = LARGE_TIME(stbuf->st_atime);
+        placeholder.FsMetadata.BasicInfo.LastWriteTime.QuadPart = LARGE_TIME(stbuf->st_mtime);
+
+        if ((name) && (name[0] == '.') && (name[1]) && (name[1] != '.'))
+            placeholder.FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_HIDDEN;
+        else
+            placeholder.FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_NORMAL;
+
+        placeholder.FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_ARCHIVE  | 0x2000 | 0x20000;
+    } else {
+        DEBUG_NOTE("No file attributtes received");
+    }
+
+    char *full_file_path = get_full_path(f->path_utf8, path);
+    wchar_t *full_wname = fromUTF8(full_file_path);
+    HRESULT hr = CfCreatePlaceholders(full_wname, &placeholder, 1, CF_CREATE_FLAG_NONE, NULL);
+    DEBUG_HANDLE("CfCreatePlaceholders", hr);
+    free(full_wname);
+    free(full_file_path);
+
+    finfo->session_offset++;
+
+    if ((recursive) && (is_dir)) {
+        DEBUG_DUMP("Populating %s", full_path);
+        fuse_unlock(f);
+        fuse_populate_directory(f, full_path, recursive);
+        fuse_lock(f);
+    }
+
+    free((void *)wname);
+    free((void *)placeholder.RelativeFileName);
+    free((void *)full_path);
+
+    if (FAILED(hr))
+        return -1;
+
+    return 0;
+}
+
+int fuse_populate_directory(struct fuse *f, const char *path, int recursive) {
+    int populate_err = -1;
+    if (f) {
+        struct fuse_file_info fi = { 0 };
+        int open_err = 0;
+
+        if (f->op.opendir) {
+            fuse_lock(f);
+            open_err = f->op.opendir(path, &fi);
+            fuse_unlock(f);
+            populate_err = open_err;
+        }
+
+        DEBUG_ERRNO("op.opendir", open_err);
+
+        if (!open_err) {
+            if (f->op.readdir) {
+                void* data[4];
+                data[0] = (void*)f;
+                data[1] = (void*)&fi;
+                data[2] = (void*)path;
+                data[3] = (void*)(intptr_t)recursive;
+
+                fuse_lock(f);
+                int err = f->op.readdir(path, data, fuse_fill_dir_no_demand, fi.offset, &fi);
+                fuse_unlock(f);
+
+                populate_err = err;
+            }
+
+            if ((f->op.releasedir) && (!open_err)) {
+                fuse_lock(f);
+                f->op.releasedir(path, &fi);
+                fuse_unlock(f);
+            }
+        }
+    }
+    return populate_err;
 }
 
 void CALLBACK OnValidateData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBACK_PARAMETERS *callbackParameters) {
@@ -816,35 +989,6 @@ void CALLBACK OnValidateData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALL
 void CALLBACK OnCancelFetchData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBACK_PARAMETERS *callbackParameters) {
     // to do
     DEBUG_NOTE("Cancel fetch data");
-}
-
-static int update_policy(struct fuse *f, CF_REGISTER_FLAGS policy) {
-    if ((!f) || (!f->ch))
-        return -1;
-
-    f->populate_root = 0;
-
-    CF_SYNC_REGISTRATION CfSyncRegistration = { 0 };
-    CfSyncRegistration.StructSize = sizeof(CF_SYNC_REGISTRATION);
-    CfSyncRegistration.ProviderName = L"edwork";
-    CfSyncRegistration.ProviderVersion = L"1.0";
-    CfSyncRegistration.ProviderId = (GUID){ 0x328cd0f9, 0x9f45, 0x4d22, { 0x90, 0x86, 0x73, 0x8a, 0xe5, 0x83, 0x5c, 0x20 } };
-
-    CF_SYNC_POLICIES CfSyncPolicies = { 0 };
-    CfSyncPolicies.StructSize = sizeof(CF_SYNC_POLICIES);
-    CfSyncPolicies.HardLink = CF_HARDLINK_POLICY_NONE;
-    CfSyncPolicies.Hydration.Primary = CF_HYDRATION_POLICY_PROGRESSIVE;
-    CfSyncPolicies.Hydration.Modifier = CF_HYDRATION_POLICY_MODIFIER_STREAMING_ALLOWED | CF_HYDRATION_POLICY_MODIFIER_AUTO_DEHYDRATION_ALLOWED;
-    CfSyncPolicies.InSync = CF_INSYNC_POLICY_TRACK_FILE_LAST_WRITE_TIME | CF_INSYNC_POLICY_TRACK_DIRECTORY_LAST_WRITE_TIME;
-    CfSyncPolicies.Population.Primary = CF_POPULATION_POLICY_FULL;
-    CfSyncPolicies.Population.Modifier = CF_POPULATION_POLICY_MODIFIER_NONE;
-    CfSyncPolicies.PlaceholderManagement = CF_PLACEHOLDER_MANAGEMENT_POLICY_CREATE_UNRESTRICTED | CF_PLACEHOLDER_MANAGEMENT_POLICY_CONVERT_TO_UNRESTRICTED | CF_PLACEHOLDER_MANAGEMENT_POLICY_UPDATE_UNRESTRICTED;
-
-    HRESULT hr = CfRegisterSyncRoot(f->ch->path, &CfSyncRegistration, &CfSyncPolicies, CF_REGISTER_FLAG_UPDATE | policy);
-    DEBUG_HANDLE("CfRegisterSyncRoot", hr);
-    if (FAILED(hr))
-        return -1;
-    return 0;
 }
 
 void fuse_notify_refresh(struct fuse *f, const char *path) {
@@ -859,13 +1003,7 @@ void fuse_notify_refresh(struct fuse *f, const char *path) {
             if ((!path) || (!path[0]) || (((path[0] == '/') || (path[0] == '\\')) && (!path[1]))) {
                 f->populate_root = 1;
             } else {
-                char *full_path = get_full_path(f->path_utf8, path);
-
-                wchar_t *wname = fromUTF8(full_path);
-                update_placeholder_flags(wname, CF_UPDATE_FLAG_ENABLE_ON_DEMAND_POPULATION);
-                free(wname);
-
-                free(full_path);
+                fuse_populate_directory(f, path, 0);
             }
         } else {
             int i;
@@ -923,7 +1061,7 @@ struct fuse_chan *fuse_mount(const char *dir, void* args) {
     if (!dir)
         dir = def_mnt;
 
-    struct fuse_chan* ch = (struct fuse_chan *)malloc(sizeof(struct fuse_chan));
+    struct fuse_chan *ch = (struct fuse_chan *)malloc(sizeof(struct fuse_chan));
     if (!ch)
         return NULL;
 
@@ -949,7 +1087,7 @@ struct fuse_chan *fuse_mount(const char *dir, void* args) {
 
     CreateDirectoryW(ch->path, NULL);
 
-    HRESULT hr = CfRegisterSyncRoot(ch->path, &CfSyncRegistration, &CfSyncPolicies, CF_REGISTER_FLAG_NONE);
+    HRESULT hr = CfRegisterSyncRoot(ch->path, &CfSyncRegistration, &CfSyncPolicies, CF_REGISTER_FLAG_DISABLE_ON_DEMAND_POPULATION_ON_ROOT);
     DEBUG_HANDLE("CfRegisterSyncRoot", hr);
     if (FAILED(hr)) {
         CfUnregisterSyncRoot(ch->path);
@@ -1002,7 +1140,7 @@ static void recursive_create(struct fuse *f, char *path) {
         free(full_path_w);
         if (!FAILED(hr)) {
             wchar_t *wname = fromUTF8(path);
-            HRESULT hr2 = CfConvertToPlaceholder(h, wname, wcslen(wname) * sizeof(wchar_t), is_dir ? CF_CONVERT_FLAG_ENABLE_ON_DEMAND_POPULATION : CF_CONVERT_FLAG_NONE , NULL, NULL);
+            HRESULT hr2 = CfConvertToPlaceholder(h, wname, wcslen(wname) * sizeof(wchar_t), /* is_dir ? CF_CONVERT_FLAG_ENABLE_ON_DEMAND_POPULATION : */ CF_CONVERT_FLAG_NONE , NULL, NULL);
             DEBUG_HANDLE("CfConvertToPlaceholder", hr2);
             CfCloseHandle(h);
             free(wname);
@@ -1050,7 +1188,7 @@ int fuse_loop(struct fuse *f) {
         { CF_CALLBACK_TYPE_NOTIFY_FILE_CLOSE_COMPLETION, OnFileClose },
         { CF_CALLBACK_TYPE_NOTIFY_DELETE, OnFileDelete },
         { CF_CALLBACK_TYPE_NOTIFY_RENAME, OnFileRename },
-        { CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS, OnFetchPlaceholders },
+        // { CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS, OnFetchPlaceholders },
         { CF_CALLBACK_TYPE_VALIDATE_DATA, OnValidateData },
         { CF_CALLBACK_TYPE_CANCEL_FETCH_DATA, OnCancelFetchData },
         CF_CALLBACK_REGISTRATION_END
@@ -1080,6 +1218,8 @@ int fuse_loop(struct fuse *f) {
         return -1;
     else
         f->running = 1;
+
+    fuse_populate_directory(f, "/", 1);
 
     while (f->running == 1) {
         DWORD wait_status = WaitForSingleObject(overlapped.hEvent, 100); 
@@ -1137,8 +1277,10 @@ int fuse_loop(struct fuse *f) {
             ReadDirectoryChangesW(dir_handle, change_buf, 1024, TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, NULL, &overlapped, NULL);
         }
 
-        if (f->populate_root)
-            update_policy(f, CF_REGISTER_FLAG_NONE);
+        if (f->populate_root) {
+            fuse_populate_directory(f, "/", 0);
+            f->populate_root = 0;
+        }
     }
     CloseHandle(dir_handle);
 
@@ -1179,6 +1321,7 @@ struct fuse *fuse_new(struct fuse_chan *ch, void *args, const struct fuse_operat
     }
     this_ref->ch = ch;
     this_ref->sem = CreateSemaphore(NULL, 1, 0xFFFF, NULL);
+
     return this_ref;
 }
 

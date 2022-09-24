@@ -1365,6 +1365,13 @@ int main(int argc, char *argv[]) {
 #endif
     log_info("starting edfs on port %i, mount point [%s]", port, mountpoint);
     edfs_edwork_init(edfs_context, port);
+    while (!edfs_edwork_is_initialized(edfs_context)) {
+#ifdef _WIN32
+        Sleep(100);
+#else
+        usleep(100000);
+#endif
+    }
     if ((ch = fuse_mount(mountpoint, &args)) != NULL) {
         struct fuse *se;
 
