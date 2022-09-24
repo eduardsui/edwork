@@ -414,6 +414,7 @@ void CALLBACK OnFileOpen(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBACK
 static int fuse_sync_full_sync(struct fuse *f, char *path, char *full_path, int try_create) {
     struct fuse_file_info finfo = { 0 };
     DEBUG_DUMP("Sync file %s", path);
+
     if (!f->op.write) {
         DEBUG_NOTE("op.write is not set");
         return -EACCES;
@@ -532,19 +533,6 @@ void CALLBACK OnFileClose(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_CALLBAC
 
         char *path = toUTF8_path((wchar_t *)callbackInfo->FileIdentity, callbackInfo->FileIdentityLength);
         char *full_path = toUTF8(callbackInfo->NormalizedPath);
-        if (is_modified(f, path, full_path)) {
-            if ((!(callbackParameters->CloseCompletion.Flags & CF_CALLBACK_CLOSE_COMPLETION_FLAG_DELETED)) && (f->op.write)) {
-                if (!fuse_is_read_only(f, path)) {
-                    DEBUG_DUMP("Sync %s (%s)", path, full_path);
-                    CloseHandle(h);
-                    fuse_sync_full_sync(f, path, full_path, 0);
-                    hr = CfOpenFileWithOplock(callbackInfo->NormalizedPath, CF_OPEN_FILE_FLAG_EXCLUSIVE, &h);
-                    DEBUG_HANDLE("CfOpenFileWithOplock", hr);
-                }
-            }
-        } else {
-            DEBUG_DUMP("Not modified %s (%s)", path, full_path);
-        }
 
         hr2 = CfSetInSyncState(h, CF_IN_SYNC_STATE_IN_SYNC, CF_SET_IN_SYNC_FLAG_NONE, NULL);
         DEBUG_HANDLE("CfSetInSyncState", hr2);
@@ -919,6 +907,18 @@ static int fuse_fill_dir_no_demand(void *buf, const char *name, const struct sta
     wchar_t *full_wname = fromUTF8(full_file_path);
     HRESULT hr = CfCreatePlaceholders(full_wname, &placeholder, 1, CF_CREATE_FLAG_NONE, NULL);
     DEBUG_HANDLE("CfCreatePlaceholders", hr);
+    if (hr == 0x800700b7) {
+        // Cannot create a file when that file already exists.
+        HANDLE h;
+        HRESULT hr2 = CfOpenFileWithOplock(full_wname, CF_OPEN_FILE_FLAG_NONE, &h);
+        DEBUG_HANDLE("CfOpenFileWithOplock", hr2);
+        if (!FAILED(hr2)) {
+            hr2 = CfUpdatePlaceholder(h, &placeholder.FsMetadata, placeholder.FileIdentity, placeholder.FileIdentityLength, NULL, 0, placeholder.Flags, NULL, NULL);
+            DEBUG_HANDLE("CfUpdatePlaceholder", hr2);
+            CfCloseHandle(h);
+        }
+    }
+
     free(full_wname);
     free(full_file_path);
 
@@ -991,12 +991,39 @@ void CALLBACK OnCancelFetchData(CONST CF_CALLBACK_INFO *callbackInfo, CONST CF_C
     DEBUG_NOTE("Cancel fetch data");
 }
 
+static void remove_placeholder(struct fuse *f, const char *path) {
+    if ((!path) || (!path[0]) || (!strcmp(path, "/")) || (!strcmp(path, ".")))
+        return;
+
+    char *full_path = get_full_path(f->path_utf8, path);
+
+    wchar_t *full_path_w = fromUTF8(full_path);
+    HANDLE h;
+    HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
+    DEBUG_HANDLE("CfOpenFileWithOplock", hr);
+
+    if (!FAILED(hr)) {
+        HRESULT hr2 = CfRevertPlaceholder(h, CF_REVERT_FLAG_NONE, NULL);
+        DEBUG_HANDLE("CfRevertPlaceholder", hr2);
+        CfCloseHandle(h);
+    }
+
+    // op.getattr may return error, so run both rmdir and unlink
+    rmdir(full_path);
+    _unlink(full_path);
+
+    free(full_path_w);
+    free(full_path);
+}
+
 void fuse_notify_refresh(struct fuse *f, const char *path) {
     DEBUG_DUMP("Needs refresh %s", path);
     if ((!f) || (!f->ch))
         return;
 
     struct stat st_buf = { 0 };
+
+    remove_placeholder(f, path);
 
     if ((f->op.getattr) && (!f->op.getattr(path, &st_buf))) {
         if (S_ISDIR(st_buf.st_mode)) {
@@ -1032,28 +1059,7 @@ void fuse_notify_delete(struct fuse *f, const char *path) {
     if ((!f) || (!f->ch))
         return;
 
-    if ((!path) || (!path[0]) || (!strcmp(path, "/")) || (!strcmp(path, ".")))
-        return;
-
-    char *full_path = get_full_path(f->path_utf8, path);
-
-    wchar_t *full_path_w = fromUTF8(full_path);
-    HANDLE h;
-    HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
-    DEBUG_HANDLE("CfOpenFileWithOplock", hr);
-
-    if (!FAILED(hr)) {
-        HRESULT hr2 = CfRevertPlaceholder(h, CF_REVERT_FLAG_NONE, NULL);
-        DEBUG_HANDLE("CfRevertPlaceholder", hr2);
-        CfCloseHandle(h);
-    }
-
-    // op.getattr may return error, so run both rmdir and unlink
-    rmdir(full_path);
-    _unlink(full_path);
-
-    free(full_path_w);
-    free(full_path);
+    remove_placeholder(f, path);
 }
 
 struct fuse_chan *fuse_mount(const char *dir, void* args) {
