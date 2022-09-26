@@ -191,13 +191,8 @@ static int edfs_fuse_mkdir(const char *path, mode_t mode) {
     edfs_pathtoinode(edfs_context, path, &parent, &name);
     if (!name)
         return -EEXIST;
-#ifdef _WIN32
-    // on windows ignore mkdir error
-    edfs_mkdir(edfs_context, parent, name, mode);
-    return 0;
-#else
+
     return edfs_mkdir(edfs_context, parent, name, mode);
-#endif
 }
 
 static int edfs_fuse_mknod(const char *path, mode_t mode, dev_t dev) {

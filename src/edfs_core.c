@@ -2501,6 +2501,7 @@ int makenode(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t pa
         pathhash(edfs_context, key, fullpath, new_hash);
         const char *update_data[] = {"iostamp", (const char *)new_hash, NULL, NULL};
         edfs_update_json(edfs_context, key, parent, update_data);
+        err = 0;
     }
     return err;
 }
