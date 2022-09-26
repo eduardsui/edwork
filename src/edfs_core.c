@@ -3885,9 +3885,6 @@ int make_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_ino_t 
         if (to_write > BLOCK_SIZE)
             to_write = BLOCK_SIZE;
         if ((offset) || (size < read_data)) {
-            // set to 0, to avoid potential information leak
-            memset(old_data + read_data, 0, BLOCK_SIZE - read_data);
-
             if (offset + size > BLOCK_SIZE)
                 size = BLOCK_SIZE - offset;
 
@@ -4175,8 +4172,8 @@ int edfs_write_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_
     if (filesize != *initial_filesize) {
         if (set_size)
             edfs_set_size_key(edfs_context, key, ino, filesize);
-
-        *initial_filesize = filesize;
+        else
+            *initial_filesize = filesize;
     }
 
     return bytes_written;
