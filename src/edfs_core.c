@@ -4170,13 +4170,13 @@ int edfs_write_chunk(struct edfs *edfs_context, struct edfs_key_data *key, edfs_
         buf += written;
         size -= written;
         offset = 0;
-        chunk++;
+        chunk ++;
     }
     if (filesize != *initial_filesize) {
         if (set_size)
             edfs_set_size_key(edfs_context, key, ino, filesize);
-        else
-            *initial_filesize = filesize;
+
+        *initial_filesize = filesize;
     }
 
     return bytes_written;
@@ -4191,6 +4191,7 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
         int64_t initial_filesize = get_size_json(edfs_context, fbuf->key, ino);
         int64_t filesize = initial_filesize;
         fbuf->file_size = filesize;
+
         while (size > 0) {
             if (!fbuf->hash_buffer) {
                 fbuf->hash_buffer = (struct edfs_hash_buffer *)malloc(sizeof(struct edfs_hash_buffer));
@@ -4207,10 +4208,12 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
             size -= err;
             offset += err;
         }
+        if (err > 0) {
+            offset = fbuf->offset;
+            fbuf->file_size = fbuf->offset;
 
-        if (offset > initial_filesize) {
-             edfs_set_size_key(edfs_context, fbuf->key, ino, filesize);
-             fbuf->file_size = filesize;
+            if (offset > initial_filesize)
+                 edfs_set_size_key(edfs_context, fbuf->key, ino, offset);
         }
         free(fbuf->p);
         fbuf->p = NULL;
@@ -4223,9 +4226,6 @@ int edfs_flush_chunk(struct edfs *edfs_context, edfs_ino_t ino, struct filewrite
         fbuf->read_hash_cunk = 0;
         fbuf->size = 0;
         fbuf->offset = 0;
-
-        if (err < 0)
-            return err;
 
         return err;
     }
@@ -4246,6 +4246,7 @@ int edfs_write_cache(struct edfs *edfs_context, edfs_ino_t ino, const char *buf,
         fbuf->p = (unsigned char *)realloc(fbuf->p, fbuf->size + size);
         if (!fbuf->p)
             return -ENOMEM;
+
         memcpy(fbuf->p + fbuf->size, buf, size);
         fbuf->size += size;
         fbuf->offset = off + size;
@@ -5477,11 +5478,7 @@ int edwork_process_json(struct edfs *edfs_context, struct edfs_key_data *key, co
             if ((current_type) || (current_generation)) {
                 // check all the parameters, not just modified, in case of a setattr(mtime)
                 // also, allows a 0.1s difference
-#ifdef EDFS_SKIP_GENERATION_CHECK
-                if ((current_generation >= generation) && (current_timestamp > timestamp)) {
-#else
                 if ((current_generation > generation) || ((current_generation == generation) && (current_timestamp >= timestamp))) {
-#endif
                     do_write = 0;
                     written = 0;
                     if (current_generation != generation)
@@ -6105,7 +6102,7 @@ void edfs_chain_ensure_descriptors(struct edfs *edfs_context, struct edfs_key_da
                 uint64_t inode_version = 0;
                 int64_t file_size = 0;
 
-                read_file_json(edfs_context, key, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash, NULL);
+                int type = read_file_json(edfs_context, key, inode, NULL, &file_size, NULL, NULL, NULL, NULL, 0, NULL, NULL, &inode_version, hash, NULL);
                 memcpy(&generation, ptr + sizeof(uint64_t), sizeof(uint64_t));
                 generation = ntohll(generation);
                 if (generation > inode_version)
