@@ -2265,6 +2265,7 @@ int edfs_update_json(struct edfs *edfs_context, struct edfs_key_data *key, uint6
     } while (*keys_value);
     json_object_set_number(root_object, "version", json_object_get_number(root_object, "version") + 1);
     json_object_set_number(root_object, "timestamp", microseconds());
+    json_object_set_number(root_object, "modified", time(NULL));
 #ifdef WITH_SMARTCARD
     smartcard_sign_json(edfs_context, root_object, NULL, 0);
 #endif
@@ -2293,6 +2294,7 @@ int edfs_update_json_number(struct edfs *edfs_context, struct edfs_key_data *use
         json_object_set_number(root_object, key, value);
         json_object_set_number(root_object, "version", json_object_get_number(root_object, "version") + 1);
         json_object_set_number(root_object, "timestamp", microseconds());
+        json_object_set_number(root_object, "modified", time(NULL));
         write_json2(edfs_context, used_key, used_key->working_directory, inode, root_value);
     }
     json_value_free(root_value);
@@ -2315,6 +2317,7 @@ int edfs_update_json_number_if_less(struct edfs *edfs_context, struct edfs_key_d
         json_object_set_number(root_object, key, value);
         json_object_set_number(root_object, "version", json_object_get_number(root_object, "version") + 1);
         json_object_set_number(root_object, "timestamp", microseconds());
+        json_object_set_number(root_object, "modified", time(NULL));
         write_json2(edfs_context, used_key, used_key->working_directory, inode, root_value);
     }
     json_value_free(root_value);
