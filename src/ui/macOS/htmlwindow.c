@@ -27,6 +27,8 @@ static ui_idle_event scheduled_event[UI_SCHEDULER_SIZE];
 static void *scheduled_data[UI_SCHEDULER_SIZE];
 static int schedule_count = 0;
 
+id (*msgSend)(id, SEL, ...) = (void *)objc_msgSend;
+
 enum {
     NSBorderlessWindowMask      = 0,
     NSTitledWindowMask          = 1 << 0,
@@ -73,30 +75,30 @@ id get_base_url() {
 
     CFStringRef base_str = CFStringCreateWithCString(NULL, path, kCFStringEncodingMacRoman);
 
-    id baseURL = objc_msgSend((id)objc_getClass("NSURL"), sel_getUid("URLWithString:"), base_str);
+    id baseURL = msgSend((id)objc_getClass("NSURL"), sel_getUid("URLWithString:"), base_str);
     if (base_str)
         CFRelease(base_str);
     return baseURL;
 }
 
 void *ui_window(const char *title, const char *body) {
-    id window = objc_msgSend((id)objc_getClass("NSWindow"), sel_getUid("alloc"));
-    window = objc_msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (edworkRect){0, 0, 1200, 750}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 0, false);
-    objc_msgSend(window, sel_getUid("center"));
+    id window = msgSend((id)objc_getClass("NSWindow"), sel_getUid("alloc"));
+    window = msgSend(window, sel_getUid("initWithContentRect:styleMask:backing:defer:"), (edworkRect){0, 0, 1200, 750}, (NSTitledWindowMask | NSClosableWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask), 0, false);
+    msgSend(window, sel_getUid("center"));
 
     if (title) {
         CFStringRef title_str = CFStringCreateWithCString(NULL, title, kCFStringEncodingMacRoman);
-        objc_msgSend(window, sel_getUid("setTitle:"), title_str);
+        msgSend(window, sel_getUid("setTitle:"), title_str);
         // if (title_str)
         //     CFRelease(title_str);
     }
-    objc_msgSend(window, sel_getUid("setDelegate:"), objc_msgSend(app, sel_getUid("delegate")));
+    msgSend(window, sel_getUid("setDelegate:"), msgSend(app, sel_getUid("delegate")));
     
-    id view = objc_msgSend(objc_msgSend((id)objc_getClass("WKWebView"), sel_getUid("alloc")), sel_getUid("init"));
+    id view = msgSend(msgSend((id)objc_getClass("WKWebView"), sel_getUid("alloc")), sel_getUid("init"));
 
-    objc_msgSend(view, sel_getUid("setNavigationDelegate:"), objc_msgSend(app, sel_getUid("delegate")));
+    msgSend(view, sel_getUid("setNavigationDelegate:"), msgSend(app, sel_getUid("delegate")));
     
-    objc_msgSend(view, sel_getUid("setAllowsBackForwardNavigationGestures:"), TRUE);
+    msgSend(view, sel_getUid("setAllowsBackForwardNavigationGestures:"), TRUE);
 
     if (body) {
         int len = strlen(body);
@@ -110,7 +112,7 @@ void *ui_window(const char *title, const char *body) {
             CFStringRef body_str = CFStringCreateWithCString(NULL, body_with_script, kCFStringEncodingMacRoman);
             
             id baseURL = get_base_url();
-            objc_msgSend(view, sel_getUid("loadHTMLString:baseURL:"), body_str, baseURL);
+            msgSend(view, sel_getUid("loadHTMLString:baseURL:"), body_str, baseURL);
             content_set ++;
             // if (body_str)
             //     CFRelease(body_str);
@@ -120,9 +122,9 @@ void *ui_window(const char *title, const char *body) {
             free(body_with_script);
         }
     }
-    objc_msgSend(window, sel_getUid("setContentView:"), view);
-    objc_msgSend(window, sel_getUid("becomeFirstResponder"));
-    objc_msgSend(window, sel_getUid("makeKeyAndOrderFront:"), objc_msgSend(app, sel_getUid("delegate")));
+    msgSend(window, sel_getUid("setContentView:"), view);
+    msgSend(window, sel_getUid("becomeFirstResponder"));
+    msgSend(window, sel_getUid("makeKeyAndOrderFront:"), msgSend(app, sel_getUid("delegate")));
 
     window_count ++;
 
@@ -135,7 +137,7 @@ void *ui_window(const char *title, const char *body) {
 void ui_window_set_content(void *window, const char *body) {
     CFStringRef body_str = CFStringCreateWithCString(NULL, body ? body : "", kCFStringEncodingMacRoman);
     id baseURL = get_base_url();
-    objc_msgSend(objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("mainFrame")), sel_getUid("loadHTMLString:baseURL:"), body_str, baseURL);
+    msgSend(msgSend(msgSend(window, sel_getUid("contentView")), sel_getUid("mainFrame")), sel_getUid("loadHTMLString:baseURL:"), body_str, baseURL);
     content_set ++;
     // if (baseURL)
     //     CFRelease(baseURL);
@@ -147,35 +149,35 @@ void ui_window_close(void *window) {
     if (!window)
         return;
 
-    objc_msgSend(window, sel_getUid("close"));
+    msgSend(window, sel_getUid("close"));
 }
 
 void ui_window_maximize(void *window) {
     if (!window)
         return;
 
-    objc_msgSend(window, sel_getUid("performZoom:"), NULL);
+    msgSend(window, sel_getUid("performZoom:"), NULL);
 }
 
 void ui_window_minimize(void *window) {
     if (!window)
         return;
 
-    objc_msgSend(window, sel_getUid("miniaturize:"), NULL);
+    msgSend(window, sel_getUid("miniaturize:"), NULL);
 }
 
 void ui_window_restore(void *window) {
     if (!window)
         return;
 
-    objc_msgSend(window, sel_getUid("deminiaturize:"), NULL);
+    msgSend(window, sel_getUid("deminiaturize:"), NULL);
 }
 
 void ui_window_top(void *window) {
     if (app)
-        objc_msgSend(app, sel_getUid("activateIgnoringOtherApps:"), YES);
+        msgSend(app, sel_getUid("activateIgnoringOtherApps:"), YES);
     if (window)
-        objc_msgSend(window, sel_getUid("setCollectionBehavior:"), 1 << 0);
+        msgSend(window, sel_getUid("setCollectionBehavior:"), 1 << 0);
 }
 
 BOOL AppDel_applicationDidUpdate(AppDelegate *self, SEL _cmd, id notification) {
@@ -218,7 +220,7 @@ BOOL AppDel_applicationShouldHandleReopen(AppDelegate *self, SEL _cmd, ...) {
 
 void windowWillClose(id self, SEL _sel, id notification) {
     if (ui_callbacks[UI_EVENT_WINDOW_CLOSE])
-        ui_callbacks[UI_EVENT_WINDOW_CLOSE](objc_msgSend(notification, sel_getUid("object")), ui_data[UI_EVENT_WINDOW_CLOSE]);
+        ui_callbacks[UI_EVENT_WINDOW_CLOSE](msgSend(notification, sel_getUid("object")), ui_data[UI_EVENT_WINDOW_CLOSE]);
     if (window_count)
         window_count --;
     if ((window_count <= 0) && (!gui_lock))
@@ -239,11 +241,11 @@ char *CFStringCopyUTF8String(CFStringRef aString) {
 }
 
 void WebView_decidePolicyFor(id self, SEL _cmd, id webView, id response, void (^decisionHandler)(int)) {
-    char *url = CFStringCopyUTF8String((CFStringRef)objc_msgSend(objc_msgSend(objc_msgSend(response, sel_getUid("request")), sel_getUid("URL")), sel_getUid("scheme")));
+    char *url = CFStringCopyUTF8String((CFStringRef)msgSend(msgSend(msgSend(response, sel_getUid("request")), sel_getUid("URL")), sel_getUid("scheme")));
     
     if ((url) && (!strcmp(url, "ui"))) {
         if (callback_event)
-            callback_event(objc_msgSend(webView, sel_getUid("window")));
+            callback_event(msgSend(webView, sel_getUid("window")));
         decisionHandler(0);
         ui_free_string(url);
         return;
@@ -277,7 +279,7 @@ void RunApplication() {
         return;
     }
     
-    objc_msgSend(app, sel_getUid("run"));
+    msgSend(app, sel_getUid("run"));
 }
 
 int ui_app_init(ui_trigger_event event_handler) {
@@ -285,39 +287,39 @@ int ui_app_init(ui_trigger_event event_handler) {
     if (!pool)
         return 0;
 
-    pool = objc_msgSend(pool, sel_registerName("alloc"));
+    pool = msgSend(pool, sel_registerName("alloc"));
     if (!pool)
         return 0;
 
-    pool = objc_msgSend(pool, sel_registerName("init"));
+    pool = msgSend(pool, sel_registerName("init"));
     
-    app = objc_msgSend((id)objc_getClass("NSApplication"), sel_registerName("sharedApplication"));
+    app = msgSend((id)objc_getClass("NSApplication"), sel_registerName("sharedApplication"));
 
     CreateAppDelegate();
     
-    id appDelObj = objc_msgSend((id)objc_getClass("AppDelegate"), sel_getUid("alloc"));
-    appDelObj = objc_msgSend(appDelObj, sel_getUid("init"));
+    id appDelObj = msgSend((id)objc_getClass("AppDelegate"), sel_getUid("alloc"));
+    appDelObj = msgSend(appDelObj, sel_getUid("init"));
     
-    objc_msgSend(app, sel_getUid("setDelegate:"), appDelObj);
+    msgSend(app, sel_getUid("setDelegate:"), appDelObj);
 
-    id menubar = objc_msgSend((id)objc_getClass("NSMenu"), sel_getUid("new"));
-    menubar = objc_msgSend(menubar, sel_getUid("autorelease"));
+    id menubar = msgSend((id)objc_getClass("NSMenu"), sel_getUid("new"));
+    menubar = msgSend(menubar, sel_getUid("autorelease"));
 
-    id appMenuItem = objc_msgSend((id)objc_getClass("NSMenuItem"), sel_getUid("new"));
-    appMenuItem = objc_msgSend(appMenuItem, sel_getUid("autorelease"));
+    id appMenuItem = msgSend((id)objc_getClass("NSMenuItem"), sel_getUid("new"));
+    appMenuItem = msgSend(appMenuItem, sel_getUid("autorelease"));
 
-    objc_msgSend(menubar, sel_getUid("addItem:"), appMenuItem);
+    msgSend(menubar, sel_getUid("addItem:"), appMenuItem);
 
-    objc_msgSend(app, sel_getUid("setMainMenu:"), menubar);
+    msgSend(app, sel_getUid("setMainMenu:"), menubar);
 
-    id appMenu = objc_msgSend((id)objc_getClass("NSMenu"), sel_getUid("new"));
-    appMenu = objc_msgSend(appMenu, sel_getUid("autorelease"));
+    id appMenu = msgSend((id)objc_getClass("NSMenu"), sel_getUid("new"));
+    appMenu = msgSend(appMenu, sel_getUid("autorelease"));
     
-    id quitMenuItem = objc_msgSend((id)objc_getClass("NSMenuItem"), sel_getUid("alloc"));
-    objc_msgSend(quitMenuItem, sel_getUid("initWithTitle:action:keyEquivalent:"), CFSTR("Quit"), sel_getUid("terminate:"), CFSTR("q"));
-    objc_msgSend(appMenu, sel_getUid("addItem:"), quitMenuItem);
+    id quitMenuItem = msgSend((id)objc_getClass("NSMenuItem"), sel_getUid("alloc"));
+    msgSend(quitMenuItem, sel_getUid("initWithTitle:action:keyEquivalent:"), CFSTR("Quit"), sel_getUid("terminate:"), CFSTR("q"));
+    msgSend(appMenu, sel_getUid("addItem:"), quitMenuItem);
 
-    objc_msgSend(appMenuItem, sel_getUid("setSubmenu:"), appMenu);
+    msgSend(appMenuItem, sel_getUid("setSubmenu:"), appMenu);
 
     callback_event = event_handler;
     return 1;
@@ -325,7 +327,7 @@ int ui_app_init(ui_trigger_event event_handler) {
 
 int ui_app_done() {
     if (pool) {
-        objc_msgSend(pool, sel_registerName("release"));
+        msgSend(pool, sel_registerName("release"));
         return 1;
     }
     return 0;
@@ -335,21 +337,21 @@ void ui_message(const char *title, const char *body, int level) {
     CFStringRef title_str = CFStringCreateWithCString(NULL, title, kCFStringEncodingMacRoman);
     CFStringRef body_str = CFStringCreateWithCString(NULL, body, kCFStringEncodingMacRoman);
 
-    id alert = objc_msgSend(objc_msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
+    id alert = msgSend(msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
     switch (level) {
         case 1:
-            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
+            msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
             break;
         case 2:
-            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
+            msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
             break;
         case 3:
-            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
+            msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
             break;
     }
-    objc_msgSend(alert, sel_getUid("setMessageText:"), title_str);
-    objc_msgSend(alert, sel_getUid("setInformativeText:"), body_str);
-    objc_msgSend(alert, sel_getUid("runModal"));
+    msgSend(alert, sel_getUid("setMessageText:"), title_str);
+    msgSend(alert, sel_getUid("setInformativeText:"), body_str);
+    msgSend(alert, sel_getUid("runModal"));
     if (body_str)
         CFRelease(body_str);
     if (title_str)    
@@ -360,24 +362,24 @@ int ui_question(const char *title, const char *body, int level) {
     CFStringRef title_str = CFStringCreateWithCString(NULL, title, kCFStringEncodingMacRoman);
     CFStringRef body_str = CFStringCreateWithCString(NULL, body, kCFStringEncodingMacRoman);
 
-    id alert = objc_msgSend(objc_msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
+    id alert = msgSend(msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
 
     switch (level) {
         case 1:
-            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
+            msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
             break;
         case 2:
-            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
+            msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
             break;
         case 3:
-            objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
+            msgSend(alert, sel_getUid("setAlertStyle:"), (int)2);
             break;
     }
-    objc_msgSend(alert, sel_getUid("setMessageText:"), title_str);
-    objc_msgSend(alert, sel_getUid("setInformativeText:"), body_str);
-    objc_msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("No"));
-    objc_msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("Yes"));
-    int yes_no = (int)objc_msgSend(alert, sel_getUid("runModal")) - 1000;
+    msgSend(alert, sel_getUid("setMessageText:"), title_str);
+    msgSend(alert, sel_getUid("setInformativeText:"), body_str);
+    msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("No"));
+    msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("Yes"));
+    int yes_no = (int)msgSend(alert, sel_getUid("runModal")) - 1000;
     if (body_str)
         CFRelease(body_str);
     if (title_str)    
@@ -393,19 +395,19 @@ int ui_input(const char *title, const char *body, char *val, int val_len, int ma
     CFStringRef body_str = CFStringCreateWithCString(NULL, body, kCFStringEncodingMacRoman);
     if ((val_len > 0) && (val))
         val[0] = 0;
-    id alert = objc_msgSend(objc_msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
+    id alert = msgSend(msgSend((id)objc_getClass("NSAlert"), sel_registerName("alloc")), sel_registerName("init"));
     id textfield;
     if (masked)
-        textfield = objc_msgSend(objc_msgSend((id)objc_getClass("NSSecureTextField"), sel_registerName("alloc")), sel_registerName("initWithFrame:"), (edworkRect){0, 0, 295, 22});
+        textfield = msgSend(msgSend((id)objc_getClass("NSSecureTextField"), sel_registerName("alloc")), sel_registerName("initWithFrame:"), (edworkRect){0, 0, 295, 22});
     else
-        textfield = objc_msgSend(objc_msgSend((id)objc_getClass("NSTextField"), sel_registerName("alloc")), sel_registerName("initWithFrame:"), (edworkRect){0, 0, 295, 22});
-    objc_msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
-    objc_msgSend(alert, sel_getUid("setMessageText:"), title_str);
-    objc_msgSend(alert, sel_getUid("setInformativeText:"), body_str);
-    objc_msgSend(alert, sel_getUid("setAccessoryView:"), textfield);
-    objc_msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("Yes"));
-    objc_msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("No"));
-    int yes_no = (int)objc_msgSend(alert, sel_getUid("runModal")) - 1000;
+        textfield = msgSend(msgSend((id)objc_getClass("NSTextField"), sel_registerName("alloc")), sel_registerName("initWithFrame:"), (edworkRect){0, 0, 295, 22});
+    msgSend(alert, sel_getUid("setAlertStyle:"), (int)1);
+    msgSend(alert, sel_getUid("setMessageText:"), title_str);
+    msgSend(alert, sel_getUid("setInformativeText:"), body_str);
+    msgSend(alert, sel_getUid("setAccessoryView:"), textfield);
+    msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("Yes"));
+    msgSend(alert, sel_getUid("addButtonWithTitle:"), CFSTR("No"));
+    int yes_no = (int)msgSend(alert, sel_getUid("runModal")) - 1000;
     if (body_str)
         CFRelease(body_str);
     if (title_str)    
@@ -416,7 +418,7 @@ int ui_input(const char *title, const char *body, char *val, int val_len, int ma
     else
         yes_no = !yes_no;
     if (yes_no) {
-        CFStringRef str = (CFStringRef)objc_msgSend(textfield, sel_getUid("stringValue"));
+        CFStringRef str = (CFStringRef)msgSend(textfield, sel_getUid("stringValue"));
         if (str)
             CFStringGetCString(str, val, val_len, kCFStringEncodingUTF8);
     }
@@ -425,7 +427,7 @@ int ui_input(const char *title, const char *body, char *val, int val_len, int ma
 
 void ui_app_quit() {
     if (app) {
-        objc_msgSend(app, sel_getUid("terminate:"), app);
+        msgSend(app, sel_getUid("terminate:"), app);
         app = NULL;
     }
 }
@@ -462,7 +464,7 @@ void ui_js(void *window, const char *js) {
         return;
     CFStringRef js_str = CFStringCreateWithCString(NULL, js, kCFStringEncodingMacRoman);
     
-    objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("evaluateJavaScript:completionHandler:"), js_str, NULL);
+    msgSend(msgSend(window, sel_getUid("contentView")), sel_getUid("evaluateJavaScript:completionHandler:"), js_str, NULL);
 
     if (js_str)
         CFRelease(js_str);
@@ -525,10 +527,10 @@ char *ui_call(void *window, const char *js, const char *arguments[]) {
     CFStringRef js_str = CFStringCreateWithCString(NULL, buffer, kCFStringEncodingMacRoman);                                                                                                                                                                                                       
     __block int finished = 0;
     __block char *str_data = NULL;
-    objc_msgSend(objc_msgSend(window, sel_getUid("contentView")), sel_getUid("evaluateJavaScript:completionHandler:"), js_str, ^(id value, void *error) {
+    msgSend(msgSend(window, sel_getUid("contentView")), sel_getUid("evaluateJavaScript:completionHandler:"), js_str, ^(id value, void *error) {
         // WARNING: non-standard C extension
         if ((value) && (!finished)) {
-            const char *str = (const char *)objc_msgSend(value, sel_getUid("UTF8String"));
+            const char *str = (const char *)msgSend(value, sel_getUid("UTF8String"));
             if (str) {
                 int len = strlen(str);
                 str_data = malloc(len + 1);
