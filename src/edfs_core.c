@@ -7663,6 +7663,9 @@ int edwork_thread(void *userdata) {
 
     edwork_load_nodes(edfs_context);
     time_t startup = time(NULL);
+#ifdef __clang__
+    __block
+#endif
     int broadcast_offset = 0;
 
     struct edfs_key_data *key = edfs_context->key_data;
@@ -7678,13 +7681,15 @@ int edwork_thread(void *userdata) {
 #endif
         key = (struct edfs_key_data *)key->next_key;
     }
-
+#ifdef __clang__
+    __block
+#endif
     int ping_count = 0;
 
     if (edfs_context->resync) {
         loop_schedule(&edfs_context->loop, {
             uint64_t ack = htonll(1);
-            key = edfs_context->key_data;
+            struct edfs_key_data *key = edfs_context->key_data;
             while (key) {
                 edfs_notify_io(edfs_context, key, "root", (const unsigned char *)&ack, sizeof(uint64_t), NULL, 0, 2, 0, 1, EDWORK_ROOT_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
                 key = (struct edfs_key_data *)key->next_key;
@@ -7697,7 +7702,7 @@ int edwork_thread(void *userdata) {
 
     if (edfs_context->force_rebroadcast) {
         loop_schedule(&edfs_context->loop, {
-            key = edfs_context->key_data;
+            struct edfs_key_data *key = edfs_context->key_data;
             while (key) {
                 edwork_resync(edfs_context, key, NULL, 0, 0, 0);
                 key = (struct edfs_key_data *)key->next_key;
@@ -7712,7 +7717,7 @@ int edwork_thread(void *userdata) {
         // max 1000 keys
         uint64_t key_buffer[1000];
         int key_buffer_index = 0;
-        key = edfs_context->key_data;
+        struct edfs_key_data *key = edfs_context->key_data;
         int force_broadcast_to_all = ((ping_count % 90) == 0);
         while (key) {
             key_buffer[key_buffer_index ++] = key->key_id_xxh64_be;
@@ -7733,7 +7738,7 @@ int edwork_thread(void *userdata) {
 
     loop_schedule(&edfs_context->loop, {
         uint32_t offset = htonl(0);
-        key = edfs_context->key_data;
+        struct edfs_key_data *key = edfs_context->key_data;
         while (key) {
             edfs_notify_io(edfs_context, key, "list", (const unsigned char *)&offset, sizeof(uint32_t), NULL, 0, 0, 0, 0, EDWORK_LIST_WORK_LEVEL, 0, NULL, 0, NULL, NULL);
             key = (struct edfs_key_data *)key->next_key;
@@ -7762,7 +7767,7 @@ int edwork_thread(void *userdata) {
 
     loop_schedule(&edfs_context->loop, {
         int count = 0;
-        key = edfs_context->key_data;
+        struct edfs_key_data *key = edfs_context->key_data;
         while (key) {
             count += edwork_rebroadcast(edwork, key, EDWORK_REBROADCAST, broadcast_offset);
             key = (struct edfs_key_data *)key->next_key;
@@ -7785,7 +7790,7 @@ int edwork_thread(void *userdata) {
 #ifndef EDFS_NO_JS
     if (edfs_context->app_mode) {
         loop_schedule(&edfs_context->loop, {
-            key = edfs_context->key_data;
+            struct edfs_key_data *key = edfs_context->key_data;
             while (key) {
                 edfs_key_data_js_loop(key);
                 key = (struct edfs_key_data *)key->next_key;
@@ -7804,7 +7809,7 @@ int edwork_thread(void *userdata) {
     });
 
     loop_schedule(&edfs_context->loop, {
-        key = edfs_context->key_data;
+        struct edfs_key_data *key = edfs_context->key_data;
         while (key) {
             edfs_try_new_block(edfs_context, key);
             key = (struct edfs_key_data *)key->next_key;
