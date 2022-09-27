@@ -3284,6 +3284,16 @@ int broadcast_edfs_read_file(struct edfs *edfs_context, struct edfs_key_data *ke
     return -EIO;
 }
 
+int64_t get_size_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
+    int64_t size;
+
+    int type = read_file_json(edfs_context, key, inode, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL);
+    if (!type)
+        return 0;
+
+    return size;
+}
+
 int read_chunk(struct edfs *edfs_context, struct edfs_key_data *key, const char *path, int64_t chunk, char *buf, size_t size, edfs_ino_t ino, int64_t offset, struct filewritebuf *filebuf) {
     if ((chunk == filebuf->last_read_chunk) && (offset < filebuf->read_buffer_size) && (filebuf->read_buffer) && (filebuf->expires > microseconds())) {
         int read_size = filebuf->read_buffer_size - offset;
@@ -3299,6 +3309,12 @@ int read_chunk(struct edfs *edfs_context, struct edfs_key_data *key, const char 
         int max_size = BLOCK_SIZE - offset;
         if (size > max_size)
             size = max_size;
+    }
+
+    if (offset + size > filebuf->file_size) {
+        int64_t file_size = get_size_json(edfs_context, key, ino);
+        if ((file_size > 0) && (file_size != filebuf->file_size))
+            filebuf->file_size = file_size;
     }
 
     if (offset + size > filebuf->file_size)
@@ -3719,16 +3735,6 @@ int edfs_set_size(struct edfs *edfs_context, uint64_t inode, int64_t new_size) {
     return 1;
 }
 
-
-int64_t get_size_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
-    int64_t size;
-
-    int type = read_file_json(edfs_context, key, inode, NULL, &size, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL);
-    if (!type)
-        return 0;
-
-    return size;
-}
 
 uint64_t get_version_plus_one_json(struct edfs *edfs_context, struct edfs_key_data *key, uint64_t inode) {
     uint64_t version = 0;
