@@ -7912,8 +7912,10 @@ int edfs_inodetopath_key(struct edfs *edfs_context, struct edfs_key_data *key, e
             snprintf(buf, buf_size, "/%s%s", namebuf, buf2);
             free(buf2);
             inode = parent;
-        } else
-            break;
+        } else {
+            // cannot parse parent directory
+            return 0;
+        }
     }
     return 1;
 }

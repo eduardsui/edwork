@@ -79,6 +79,9 @@ struct fuse {
     unsigned int fetch_op_count;
     DWORD populate_root;
     char running;
+
+    char **refresh_paths;
+    int len_refresh_paths;
 };
 
 int fuse_populate_directory(struct fuse *f, const char *path, int recursive);
@@ -916,6 +919,22 @@ static int fuse_fill_dir_no_demand(void *buf, const char *name, const struct sta
             hr2 = CfUpdatePlaceholder(h, &placeholder.FsMetadata, placeholder.FileIdentity, placeholder.FileIdentityLength, NULL, 0, placeholder.Flags, NULL, NULL);
             DEBUG_HANDLE("CfUpdatePlaceholder", hr2);
             CfCloseHandle(h);
+
+            if (hr2 == 0x80070178) {
+                // The file is not a cloud file.
+                hr2 = CfOpenFileWithOplock(full_wname, CF_OPEN_FILE_FLAG_NONE, &h);
+                if (!FAILED(hr2)) {
+                    hr2 = CfConvertToPlaceholder(h, placeholder.FileIdentity, placeholder.FileIdentityLength * sizeof(wchar_t), CF_CONVERT_FLAG_NONE , NULL, NULL);
+                    DEBUG_HANDLE("CfConvertToPlaceholder", hr2);
+
+                    if (!FAILED(hr2)) {
+                        hr2 = CfUpdatePlaceholder(h, &placeholder.FsMetadata, placeholder.FileIdentity, placeholder.FileIdentityLength, NULL, 0, placeholder.Flags, NULL, NULL);
+                        DEBUG_HANDLE("CfUpdatePlaceholder", hr2);
+                    }
+
+                    CfCloseHandle(h);
+                }
+            }
         }
     }
 
@@ -942,6 +961,7 @@ static int fuse_fill_dir_no_demand(void *buf, const char *name, const struct sta
 }
 
 int fuse_populate_directory(struct fuse *f, const char *path, int recursive) {
+    DEBUG_DUMP("Populating %s", path);
     int populate_err = -1;
     if (f) {
         struct fuse_file_info fi = { 0 };
@@ -1000,20 +1020,99 @@ static void remove_placeholder(struct fuse *f, const char *path) {
     wchar_t *full_path_w = fromUTF8(full_path);
     HANDLE h;
     HRESULT hr = CfOpenFileWithOplock(full_path_w, CF_OPEN_FILE_FLAG_NONE, &h);
-    DEBUG_HANDLE("CfOpenFileWithOplock", hr);
+    // 0x80070002 = The system cannot find the file specified.
+    if (hr != 0x80070002) {
 
-    if (!FAILED(hr)) {
-        HRESULT hr2 = CfRevertPlaceholder(h, CF_REVERT_FLAG_NONE, NULL);
-        DEBUG_HANDLE("CfRevertPlaceholder", hr2);
-        CfCloseHandle(h);
+        DEBUG_HANDLE("CfOpenFileWithOplock", hr);
+
+        if (!FAILED(hr)) {
+            HRESULT hr2 = CfRevertPlaceholder(h, CF_REVERT_FLAG_NONE, NULL);
+            DEBUG_HANDLE("CfRevertPlaceholder", hr2);
+            CfCloseHandle(h);
+
+            // op.getattr may return error, so run both rmdir and unlink
+            rmdir(full_path);
+            _unlink(full_path);
+
+            free(full_path_w);
+            free(full_path);
+        }
     }
+}
 
-    // op.getattr may return error, so run both rmdir and unlink
-    rmdir(full_path);
-    _unlink(full_path);
+static int fuse_update_path(struct fuse *f, const char *path) {
+    if ((!f->op.getattr) || (!path))
+        return 0;
 
-    free(full_path_w);
+    const char *name = NULL;
+    if (path) {
+        int len = strlen(path);
+        int i;
+        for (i = len - 1; i >= 0; i --) {
+            if ((path[i] == '/') || (path[i] == '\\')) {
+                name = path + i + 1;
+                break;
+            }
+        }
+    }
+    if (!name)
+        return 0;
+
+    int updated = 0;
+    char *full_path = get_full_path(f->path_utf8, path);
+    struct stat stbuf = { 0 };
+    if (!f->op.getattr(path, &stbuf)) {
+        CF_PLACEHOLDER_CREATE_INFO placeholder;
+        memset(&placeholder, 0, sizeof(CF_PLACEHOLDER_CREATE_INFO));
+
+        wchar_t *wname = fromUTF8(path);
+        placeholder.FileIdentity = wname;
+        placeholder.FileIdentityLength = (DWORD)(wcslen(wname) * sizeof(wchar_t));
+        placeholder.RelativeFileName = fromUTF8(name);
+
+        placeholder.Flags = CF_PLACEHOLDER_CREATE_FLAG_NONE;
+        placeholder.Flags = CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC;
+
+        if (S_ISDIR(stbuf.st_mode)) {
+            placeholder.FsMetadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+            placeholder.FsMetadata.FileSize.QuadPart = 0;
+            placeholder.Flags |= CF_PLACEHOLDER_CREATE_FLAG_DISABLE_ON_DEMAND_POPULATION;
+        } else {
+            placeholder.FsMetadata.FileSize.QuadPart = stbuf.st_size;
+        }
+
+        placeholder.FsMetadata.BasicInfo.CreationTime.QuadPart = LARGE_TIME(stbuf.st_ctime);
+        placeholder.FsMetadata.BasicInfo.ChangeTime.QuadPart = LARGE_TIME(stbuf.st_mtime);
+        placeholder.FsMetadata.BasicInfo.LastAccessTime.QuadPart = LARGE_TIME(stbuf.st_atime);
+        placeholder.FsMetadata.BasicInfo.LastWriteTime.QuadPart = LARGE_TIME(stbuf.st_mtime);
+
+        if ((name) && (name[0] == '.') && (name[1]) && (name[1] != '.'))
+            placeholder.FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_HIDDEN;
+        else
+            placeholder.FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_NORMAL;
+
+        placeholder.FsMetadata.BasicInfo.FileAttributes |= FILE_ATTRIBUTE_ARCHIVE  | 0x2000 | 0x20000;
+
+        HANDLE h;
+
+        wchar_t *full_wname = fromUTF8(full_path);
+        HRESULT hr2 = CfOpenFileWithOplock(full_wname, CF_OPEN_FILE_FLAG_NONE, &h);
+        DEBUG_HANDLE("CfOpenFileWithOplock", hr2);
+        if (!FAILED(hr2)) {
+            hr2 = CfUpdatePlaceholder(h, &placeholder.FsMetadata, placeholder.FileIdentity, placeholder.FileIdentityLength, NULL, 0, placeholder.Flags, NULL, NULL);
+            DEBUG_HANDLE("CfUpdatePlaceholder", hr2);
+            CfCloseHandle(h);
+
+            if (!FAILED(hr2))
+                updated = 1;
+        }
+
+        free((void *)placeholder.RelativeFileName);
+        free(full_wname);
+        free(wname);
+    }
     free(full_path);
+    return updated;
 }
 
 void fuse_notify_refresh(struct fuse *f, const char *path) {
@@ -1021,9 +1120,40 @@ void fuse_notify_refresh(struct fuse *f, const char *path) {
     if ((!f) || (!f->ch))
         return;
 
-    struct stat st_buf = { 0 };
+    if ((!path) || (!path[0])) {
+        f->populate_root = 1;
+        return;
+    }
 
-    remove_placeholder(f, path);
+    int i;
+
+    fuse_lock(f);
+    for (i = 0; i < f->len_refresh_paths; i ++) {
+        // already in list
+        if (!strcmp(f->refresh_paths[i], path)) {
+            fuse_unlock(f);
+            return;
+        }
+    }
+
+    char **paths = (char **)realloc(f->refresh_paths, sizeof(char **) * (f->len_refresh_paths + 1));
+    if (!paths) {
+        DEBUG_NOTE("Error reallocating");
+        fuse_unlock(f);
+        return;
+    }
+
+    f->refresh_paths = paths;
+    f->refresh_paths[f->len_refresh_paths ++ ] = strdup(path ? path : "");
+    fuse_unlock(f);
+}
+
+void fuse_notify_refresh_sync(struct fuse *f, const char *path) {
+    DEBUG_DUMP("Needs refresh %s", path);
+    if ((!f) || (!f->ch))
+        return;
+
+    struct stat st_buf = { 0 };
 
     if ((f->op.getattr) && (!f->op.getattr(path, &st_buf))) {
         if (S_ISDIR(st_buf.st_mode)) {
@@ -1032,6 +1162,10 @@ void fuse_notify_refresh(struct fuse *f, const char *path) {
             } else {
                 fuse_populate_directory(f, path, 0);
             }
+        } else
+        if (fuse_update_path(f, path)) {
+            DEBUG_DUMP("Fast refreshed %s", path);
+            return;
         } else {
             int i;
             int len = strlen(path);
@@ -1041,6 +1175,7 @@ void fuse_notify_refresh(struct fuse *f, const char *path) {
                         char *path2 = strdup(path);
                         if (path2) {
                             path2[i] = 0;
+                            DEBUG_DUMP("Recursive refresh %s (%s)", path2, path);
                             fuse_notify_refresh(f, path2);
                             free(path2);
                         }
@@ -1283,6 +1418,26 @@ int fuse_loop(struct fuse *f) {
             ReadDirectoryChangesW(dir_handle, change_buf, 1024, TRUE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, NULL, &overlapped, NULL);
         }
 
+        if (f->refresh_paths) {
+            fuse_lock(f);
+            char **refresh_paths = f->refresh_paths;
+            int len_refresh_paths = f->len_refresh_paths;
+
+            f->refresh_paths = NULL;
+            f->len_refresh_paths = 0;
+
+            fuse_unlock(f);
+
+            int i;
+            for (i = 0; i < len_refresh_paths; i ++) {
+                char *refresh_path = refresh_paths[i];
+                fuse_notify_refresh_sync(f, refresh_path);
+                free(refresh_path);
+            }
+
+            free(refresh_paths);
+        }
+
         if (f->populate_root) {
             fuse_populate_directory(f, "/", 0);
             f->populate_root = 0;
@@ -1381,6 +1536,14 @@ void fuse_destroy(struct fuse *f) {
         free(f->path_utf8);
 
         CloseHandle(f->sem);
+
+        int i;
+        if (f->refresh_paths) {
+            for (i = 0; i < f->len_refresh_paths; i ++)
+                free(f->refresh_paths[i]);
+
+            free(f->refresh_paths);
+        }
         free(f);
     }
 }
