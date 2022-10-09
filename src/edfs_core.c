@@ -7019,6 +7019,8 @@ one_loop:
                     log_warn("mediated current block");
                     key->chain_errors = 0;
                     key->block_timestamp = time(NULL);
+                    if (edfs_context->notify_event)
+                        edfs_context->notify_event(edfs_context, key, EDFS_EVENT_CHAINTOP, topblock->index);
                 } else {
                     log_warn("cannot mediate received block (block verify failed)");
                     // fork? resync chain
@@ -7092,6 +7094,8 @@ one_loop:
             usleep(1000);
             edfs_broadcast_top(edfs_context, key, NULL, 0);
             key->block_timestamp = time(NULL);
+            if (edfs_context->notify_event)
+                edfs_context->notify_event(edfs_context, key, EDFS_EVENT_CHAINTOP, topblock->index);
         } else {
             log_error("block verify error");
             key->chain_errors ++;

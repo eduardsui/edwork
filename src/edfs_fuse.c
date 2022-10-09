@@ -485,16 +485,20 @@ void edfs_fuse_notify(struct edfs *edfs_context, struct edfs_key_data *key_data,
     if (key_data != edfs_get_primary_key(edfs_context))
         return;
 
+    if (event_id == EDFS_EVENT_CHAINTOP) {
+        fuse_notify_refresh_tree(fuse_session);
+        return;
+    }
+
     char path[8192];
 
     if (edfs_inodetopath_key(edfs_context, key_data, ino, path, sizeof(path))) {
         switch (event_id) {
             case EDFS_EVENT_DESCRIPTOR:
-                fuse_notify_refresh(fuse_session, path);                
+                fuse_notify_refresh(fuse_session, path);
                 break;
             case EDFS_EVENT_DELETE:
                 fuse_notify_delete(fuse_session, path);
-                break;
         }
     }
 }

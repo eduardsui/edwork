@@ -1197,6 +1197,14 @@ void fuse_notify_delete(struct fuse *f, const char *path) {
     remove_placeholder(f, path);
 }
 
+void fuse_notify_refresh_tree(struct fuse *f) {
+    DEBUG_NOTE("Refresh tree");
+    if ((!f) || (!f->ch))
+        return;
+
+    f->populate_root = 2;
+}
+
 struct fuse_chan *fuse_mount(const char *dir, void* args) {
     const char *def_mnt = "defuse";
     if (!dir)
@@ -1439,7 +1447,7 @@ int fuse_loop(struct fuse *f) {
         }
 
         if (f->populate_root) {
-            fuse_populate_directory(f, "/", 0);
+            fuse_populate_directory(f, "/", (f->populate_root == 2));
             f->populate_root = 0;
         }
     }

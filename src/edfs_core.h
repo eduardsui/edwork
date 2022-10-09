@@ -108,7 +108,8 @@
 enum edfs_descriptor_event {
     EDFS_EVENT_NONE = 0,
     EDFS_EVENT_DESCRIPTOR = 1,
-    EDFS_EVENT_DELETE = 2
+    EDFS_EVENT_DELETE = 2,
+    EDFS_EVENT_CHAINTOP = 3
 };
 
 #define EDFS_SET_ATTR_MODE	(1 << 0)

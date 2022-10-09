@@ -184,6 +184,7 @@ void fuse_destroy(struct fuse *f);
 // defuse specific
 void fuse_notify_delete(struct fuse *f, const char *path);
 void fuse_notify_refresh(struct fuse *f, const char *path);
+void fuse_notify_refresh_tree(struct fuse *f);
 
 #ifdef __cplusplus
 }
